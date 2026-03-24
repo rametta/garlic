@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import "./App.css";
 
 interface RemoteEntry {
   name: string;
@@ -36,90 +35,87 @@ function formatDate(iso: string | null): string | null {
   });
 }
 
+function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="rounded border border-black/10 bg-black/6 px-1.5 py-0.5 text-[0.875em] font-normal dark:border-white/12 dark:bg-white/8">
+      {children}
+    </kbd>
+  );
+}
+
+function MetaRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[8.5rem_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
+      <dt className="m-0 font-semibold text-[#555] dark:text-[#aaa]">{label}</dt>
+      <dd className="m-0 min-w-0 wrap-break-word text-[#222] dark:text-[#e8e8e8]">
+        {children}
+      </dd>
+    </div>
+  );
+}
+
 function RepoMetadataDetails({ repo }: { repo: RepoMetadata }) {
   const lastCommit = formatDate(repo.headDate);
   return (
-    <dl className="repo-meta">
-      <div className="repo-meta-row">
-        <dt>Path</dt>
-        <dd>{repo.path}</dd>
-      </div>
+    <dl className="m-0 flex flex-col gap-2.5">
+      <MetaRow label="Path">{repo.path}</MetaRow>
       {repo.gitRoot && repo.gitRoot !== repo.path ? (
-        <div className="repo-meta-row">
-          <dt>Git root</dt>
-          <dd>{repo.gitRoot}</dd>
-        </div>
+        <MetaRow label="Git root">{repo.gitRoot}</MetaRow>
       ) : null}
-      <div className="repo-meta-row">
-        <dt>Branch</dt>
-        <dd>
-          {repo.detached
-            ? `Detached at ${repo.headShort ?? "—"}`
-            : (repo.branch ?? "—")}
-        </dd>
-      </div>
+      <MetaRow label="Branch">
+        {repo.detached
+          ? `Detached at ${repo.headShort ?? "—"}`
+          : (repo.branch ?? "—")}
+      </MetaRow>
       {repo.headShort ? (
-        <div className="repo-meta-row">
-          <dt>HEAD</dt>
-          <dd>
-            <code className="repo-hash">{repo.headShort}</code>
-            {repo.headSubject ? (
-              <span className="repo-subject"> {repo.headSubject}</span>
-            ) : null}
-          </dd>
-        </div>
+        <MetaRow label="HEAD">
+          <code className="rounded bg-black/6 px-1.5 py-0.5 font-mono text-[0.85em] dark:bg-white/10">
+            {repo.headShort}
+          </code>
+          {repo.headSubject ? (
+            <span className="font-medium"> {repo.headSubject}</span>
+          ) : null}
+        </MetaRow>
       ) : null}
       {repo.headAuthor ? (
-        <div className="repo-meta-row">
-          <dt>Last commit author</dt>
-          <dd>{repo.headAuthor}</dd>
-        </div>
+        <MetaRow label="Last commit author">{repo.headAuthor}</MetaRow>
       ) : null}
       {lastCommit ? (
-        <div className="repo-meta-row">
-          <dt>Last commit</dt>
-          <dd>{lastCommit}</dd>
-        </div>
+        <MetaRow label="Last commit">{lastCommit}</MetaRow>
       ) : null}
       {repo.workingTreeClean !== null ? (
-        <div className="repo-meta-row">
-          <dt>Working tree</dt>
-          <dd>
-            {repo.workingTreeClean ? (
-              <span className="repo-clean">Clean</span>
-            ) : (
-              <span className="repo-dirty">Has local changes</span>
-            )}
-          </dd>
-        </div>
+        <MetaRow label="Working tree">
+          {repo.workingTreeClean ? (
+            <span className="font-medium text-[#0a6b2d] dark:text-[#7dcea0]">
+              Clean
+            </span>
+          ) : (
+            <span className="font-medium text-[#8a4b00] dark:text-[#f0c27a]">
+              Has local changes
+            </span>
+          )}
+        </MetaRow>
       ) : null}
       {repo.ahead !== null && repo.behind !== null ? (
-        <div className="repo-meta-row">
-          <dt>Upstream</dt>
-          <dd>
-            {repo.ahead} ahead, {repo.behind} behind
-          </dd>
-        </div>
+        <MetaRow label="Upstream">
+          {repo.ahead} ahead, {repo.behind} behind
+        </MetaRow>
       ) : null}
       {repo.remotes.length > 0 ? (
-        <div className="repo-meta-row repo-meta-row--block">
-          <dt>Remotes</dt>
-          <dd>
-            <ul className="repo-remote-list">
-              {repo.remotes.map((r) => (
-                <li key={r.name}>
-                  <span className="repo-remote-name">{r.name}</span>
-                  <span className="repo-remote-url">{r.fetchUrl}</span>
-                </li>
-              ))}
-            </ul>
-          </dd>
-        </div>
+        <MetaRow label="Remotes">
+          <ul className="mb-0 ml-0 list-disc space-y-1.5 pl-[1.1rem]">
+            {repo.remotes.map((r) => (
+              <li key={r.name}>
+                <span className="mr-1.5 font-semibold">{r.name}</span>
+                <span className="font-mono text-[0.8125rem] text-[#444] dark:text-[#b0b0b0]">
+                  {r.fetchUrl}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </MetaRow>
       ) : (
-        <div className="repo-meta-row">
-          <dt>Remotes</dt>
-          <dd>None configured</dd>
-        </div>
+        <MetaRow label="Remotes">None configured</MetaRow>
       )}
     </dl>
   );
@@ -160,43 +156,52 @@ function App() {
   }, []);
 
   return (
-    <main className="main">
-      <header className="main-header">
-        <h1 className="title">Git GUI</h1>
-        <p className="subtitle">
-          Use <kbd>File</kbd> → <kbd>Open Repository…</kbd> to choose a local
+    <main className="box-border flex min-h-screen flex-col items-center bg-[#f0f0f0] px-6 pb-12 pt-8 text-[#0f0f0f] antialiased [font-synthesis:none] dark:bg-[#1a1a1a] dark:text-[#e8e8e8]">
+      <header className="mb-10 max-w-lg text-center">
+        <h1 className="mb-2 text-2xl font-semibold tracking-tight">Git GUI</h1>
+        <p className="m-0 text-[0.9375rem] text-[#444] dark:text-[#b0b0b0]">
+          Use <Kbd>File</Kbd> → <Kbd>Open Repository…</Kbd> to choose a local
           folder.
         </p>
       </header>
 
       <section
-        className="repo-panel"
+        className="w-full max-w-xl rounded-[10px] bg-white p-5 px-6 text-left shadow-[0_1px_3px_rgba(0,0,0,0.08)] dark:bg-[#252525] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
         aria-live="polite"
         aria-busy={loading}
       >
         {loading ? (
-          <p className="repo-status">Loading repository…</p>
+          <p className="m-0 text-center text-[0.9375rem] text-[#444] dark:text-[#b0b0b0]">
+            Loading repository…
+          </p>
         ) : loadError ? (
-          <p className="repo-error" role="alert">
+          <p
+            className="m-0 text-center text-[0.9375rem] text-[#a30] dark:text-[#f88]"
+            role="alert"
+          >
             {loadError}
           </p>
         ) : repo ? (
           <>
-            <div className="repo-panel-heading">
-              <p className="repo-label">Current repository</p>
-              <p className="repo-name">{repo.name}</p>
+            <div className="mb-5 text-center">
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-[#666] dark:text-[#999]">
+                Current repository
+              </p>
+              <p className="m-0 wrap-break-word text-xl font-semibold tracking-tight">
+                {repo.name}
+              </p>
             </div>
 
             {repo.error ? (
               <>
-                <p className="repo-warn" role="status">
+                <p
+                  className="mb-0 rounded-lg bg-[rgba(180,120,0,0.12)] px-4 py-3 text-[0.9375rem] text-[#5c4a00] dark:bg-[rgba(220,180,60,0.15)] dark:text-[#e8d48a]"
+                  role="status"
+                >
                   {repo.error}
                 </p>
-                <dl className="repo-meta">
-                  <div className="repo-meta-row">
-                    <dt>Path</dt>
-                    <dd>{repo.path}</dd>
-                  </div>
+                <dl className="mt-4 m-0 flex flex-col gap-2.5">
+                  <MetaRow label="Path">{repo.path}</MetaRow>
                 </dl>
               </>
             ) : (
@@ -204,7 +209,9 @@ function App() {
             )}
           </>
         ) : (
-          <p className="repo-empty">No repository open</p>
+          <p className="m-0 text-center text-[0.9375rem] text-[#666] dark:text-[#999]">
+            No repository open
+          </p>
         )}
       </section>
     </main>
