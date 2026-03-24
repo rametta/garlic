@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App, { emptyAppBootstrap, resolveDaisyTheme, type AppBootstrap } from "./App";
+import App, { emptyAppBootstrap, type AppBootstrap } from "./App";
 import "./index.css";
 
 async function bootstrap() {
@@ -9,13 +9,12 @@ async function bootstrap() {
   try {
     data = await invoke<AppBootstrap>("restore_app_bootstrap");
   } catch {
-    // Plain Vite or missing Tauri backend — open empty shell.
+    console.warn("Could not load 'restore_app_bootstrap'")
   }
 
-  const resolvedTheme = resolveDaisyTheme(data.theme);
-  document.documentElement.setAttribute("data-theme", resolvedTheme);
+  document.documentElement.setAttribute("data-theme", data.theme ?? 'light');
 
-  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <App startup={data.repo} />
     </React.StrictMode>,

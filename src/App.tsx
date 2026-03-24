@@ -3,24 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
-export const DAISY_THEMES = [
-  "light",
-  "dark",
-  "cupcake",
-  "bumblebee",
-  "corporate",
-  "synthwave",
-  "retro",
-  "cyberpunk",
-  "valentine",
-  "garden",
-  "forest",
-  "dracula",
-  "night",
-  "nord",
-  "sunset",
-] as const;
-
 interface RemoteEntry {
   name: string;
   fetchUrl: string;
@@ -70,14 +52,6 @@ export const emptyRestoreLastRepo: RestoreLastRepo = {
   listsError: null,
 };
 
-export const DEFAULT_THEME = "light";
-
-export function resolveDaisyTheme(saved: string | null | undefined): string {
-  if (saved && DAISY_THEMES.includes(saved as (typeof DAISY_THEMES)[number])) {
-    return saved;
-  }
-  return DEFAULT_THEME;
-}
 
 /** Payload from `restore_app_bootstrap` (Rust settings + repo snapshot). */
 export interface AppBootstrap {
