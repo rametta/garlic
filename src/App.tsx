@@ -3,6 +3,26 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
+const THEME_STORAGE_KEY = "git-gui-theme";
+
+const DAISY_THEMES = [
+  "light",
+  "dark",
+  "cupcake",
+  "bumblebee",
+  "corporate",
+  "synthwave",
+  "retro",
+  "cyberpunk",
+  "valentine",
+  "garden",
+  "forest",
+  "dracula",
+  "night",
+  "nord",
+  "sunset",
+] as const;
+
 interface RemoteEntry {
   name: string;
   fetchUrl: string;
@@ -44,18 +64,14 @@ function formatDate(iso: string | null): string | null {
 }
 
 function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="rounded border border-black/10 bg-black/6 px-1.5 py-0.5 text-[0.875em] font-normal dark:border-white/12 dark:bg-white/8">
-      {children}
-    </kbd>
-  );
+  return <kbd className="kbd kbd-sm">{children}</kbd>;
 }
 
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[8.5rem_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
-      <dt className="m-0 font-semibold text-[#555] dark:text-[#aaa]">{label}</dt>
-      <dd className="m-0 min-w-0 wrap-break-word text-[#222] dark:text-[#e8e8e8]">{children}</dd>
+      <dt className="m-0 font-semibold text-base-content/70">{label}</dt>
+      <dd className="m-0 min-w-0 wrap-break-word text-base-content">{children}</dd>
     </div>
   );
 }
@@ -73,7 +89,7 @@ function RepoMetadataDetails({ repo }: { repo: RepoMetadata }) {
       </MetaRow>
       {repo.headShort ? (
         <MetaRow label="HEAD">
-          <code className="rounded bg-black/6 px-1.5 py-0.5 font-mono text-[0.85em] dark:bg-white/10">
+          <code className="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[0.85em]">
             {repo.headShort}
           </code>
           {repo.headSubject ? <span className="font-medium"> {repo.headSubject}</span> : null}
@@ -84,11 +100,9 @@ function RepoMetadataDetails({ repo }: { repo: RepoMetadata }) {
       {repo.workingTreeClean !== null ? (
         <MetaRow label="Working tree">
           {repo.workingTreeClean ? (
-            <span className="font-medium text-[#0a6b2d] dark:text-[#7dcea0]">Clean</span>
+            <span className="font-medium text-success">Clean</span>
           ) : (
-            <span className="font-medium text-[#8a4b00] dark:text-[#f0c27a]">
-              Has local changes
-            </span>
+            <span className="font-medium text-warning">Has local changes</span>
           )}
         </MetaRow>
       ) : null}
@@ -103,7 +117,7 @@ function RepoMetadataDetails({ repo }: { repo: RepoMetadata }) {
             {repo.remotes.map((r) => (
               <li key={r.name}>
                 <span className="mr-1.5 font-semibold">{r.name}</span>
-                <span className="font-mono text-[0.8125rem] text-[#444] dark:text-[#b0b0b0]">
+                <span className="font-mono text-[0.8125rem] text-base-content/80">
                   {r.fetchUrl}
                 </span>
               </li>
@@ -129,22 +143,28 @@ function BranchPanel({
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-h-0 flex-col rounded-lg border border-black/8 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-[#2a2a2a] dark:shadow-none">
-      <h2 className="m-0 shrink-0 border-b border-black/8 px-3 py-2 text-xs font-semibold tracking-[0.06em] text-[#555] uppercase dark:border-white/10 dark:text-[#aaa]">
-        {title}
-      </h2>
-      <div className="max-h-[40vh] min-h-16 overflow-y-auto p-2">
-        {empty ? (
-          <p className="m-0 py-2 text-center text-xs text-[#888] dark:text-[#777]">{emptyHint}</p>
-        ) : (
-          children
-        )}
+    <div className="card border-base-300 bg-base-100 shadow-sm">
+      <div className="card-body min-h-0 gap-0 p-0">
+        <h2 className="m-0 card-title shrink-0 border-b border-base-300 px-3 py-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+          {title}
+        </h2>
+        <div className="max-h-[40vh] min-h-16 overflow-y-auto p-2">
+          {empty ? (
+            <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
+          ) : (
+            children
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
 function App() {
+  const [theme, setTheme] = useState<string>(() => {
+    if (typeof window === "undefined") return "light";
+    return localStorage.getItem(THEME_STORAGE_KEY) ?? "light";
+  });
   const [repo, setRepo] = useState<RepoMetadata | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -153,6 +173,11 @@ function App() {
   const [commits, setCommits] = useState<CommitEntry[]>([]);
   const [branchBusy, setBranchBusy] = useState<string | null>(null);
   const [listsError, setListsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
 
   const refreshLists = useCallback(async (repoPath: string) => {
     setListsError(null);
@@ -268,12 +293,29 @@ function App() {
   const currentBranchName = repo?.detached ? null : (repo?.branch ?? null);
 
   return (
-    <main className="box-border flex min-h-screen flex-col bg-[#f0f0f0] px-4 pt-6 pb-8 text-[#0f0f0f] antialiased [font-synthesis:none] dark:bg-[#1a1a1a] dark:text-[#e8e8e8]">
-      <header className="mb-6 max-w-4xl">
-        <h1 className="mb-1 text-2xl font-semibold tracking-tight">Git GUI</h1>
-        <p className="m-0 text-[0.9375rem] text-[#444] dark:text-[#b0b0b0]">
-          Use <Kbd>File</Kbd> → <Kbd>Open Repository…</Kbd> to choose a local folder.
-        </p>
+    <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
+      <header className="mb-6 flex max-w-4xl flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="mb-1 text-2xl font-semibold tracking-tight">Git GUI</h1>
+          <p className="m-0 text-[0.9375rem] text-base-content/80">
+            Use <Kbd>File</Kbd> → <Kbd>Open Repository…</Kbd> to choose a local folder.
+          </p>
+        </div>
+        <div className="flex w-full max-w-xs shrink-0 flex-col gap-1">
+          <span className="text-xs opacity-70">Theme</span>
+          <select
+            className="select-bordered select w-full select-sm"
+            value={theme}
+            onChange={(e) => setTheme(e.target.value)}
+            aria-label="Theme"
+          >
+            {DAISY_THEMES.map((t) => (
+              <option key={t} value={t}>
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </option>
+            ))}
+          </select>
+        </div>
       </header>
 
       <div
@@ -288,27 +330,21 @@ function App() {
             emptyHint="No local branches"
           >
             {canShowBranches ? (
-              <ul className="m-0 list-none space-y-1 p-0">
+              <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
                 {localBranches.map((b) => {
                   const isCurrent = currentBranchName === b;
                   const busy = branchBusy === `local:${b}`;
                   return (
-                    <li key={b}>
+                    <li key={b} className={isCurrent ? "menu-active" : ""}>
                       <button
                         type="button"
                         disabled={busy || isCurrent}
                         onClick={() => void onCheckoutLocal(b)}
-                        className={`w-full rounded-md px-2.5 py-1.5 text-left text-sm transition-colors disabled:cursor-default ${
-                          isCurrent
-                            ? "cursor-default bg-black/10 font-semibold dark:bg-white/15"
-                            : "bg-black/4 hover:bg-black/10 dark:bg-white/8 dark:hover:bg-white/14"
-                        } ${busy ? "opacity-60" : ""}`}
+                        className={`h-auto min-h-0 justify-start py-2 text-left whitespace-normal ${busy ? "opacity-60" : ""}`}
                       >
                         {busy ? "Switching…" : b}
                         {isCurrent && !busy ? (
-                          <span className="ml-1.5 text-xs font-normal text-[#666] dark:text-[#999]">
-                            (current)
-                          </span>
+                          <span className="ml-1.5 text-xs font-normal opacity-70">(current)</span>
                         ) : null}
                       </button>
                     </li>
@@ -324,7 +360,7 @@ function App() {
             emptyHint="No remote-tracking branches"
           >
             {canShowBranches ? (
-              <ul className="m-0 list-none space-y-1 p-0">
+              <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
                 {remoteBranches.map((r) => {
                   const busy = branchBusy === `remote:${r}`;
                   return (
@@ -333,7 +369,7 @@ function App() {
                         type="button"
                         disabled={busy}
                         onClick={() => void onCreateFromRemote(r)}
-                        className={`w-full rounded-md bg-black/4 px-2.5 py-1.5 text-left font-mono text-[0.8125rem] transition-colors hover:bg-black/10 disabled:opacity-60 dark:bg-white/8 dark:hover:bg-white/14`}
+                        className={`h-auto min-h-0 justify-start py-2 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
                       >
                         {busy ? "Creating…" : r}
                       </button>
@@ -346,104 +382,100 @@ function App() {
         </aside>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <section className="rounded-[10px] bg-white p-5 px-6 shadow-[0_1px_3px_rgba(0,0,0,0.08)] dark:bg-[#252525] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]">
-            {loading ? (
-              <p className="m-0 text-center text-[0.9375rem] text-[#444] dark:text-[#b0b0b0]">
-                Loading repository…
-              </p>
-            ) : loadError ? (
-              <p
-                className="m-0 text-center text-[0.9375rem] text-[#a30] dark:text-[#f88]"
-                role="alert"
-              >
-                {loadError}
-              </p>
-            ) : repo ? (
-              <>
-                <div className="mb-4 text-center">
-                  <p className="mb-1.5 text-xs font-semibold tracking-[0.06em] text-[#666] uppercase dark:text-[#999]">
-                    Current repository
-                  </p>
-                  <p className="m-0 text-xl font-semibold tracking-tight wrap-break-word">
-                    {repo.name}
+          <section className="card border-base-300 bg-base-100 shadow-md">
+            <div className="card-body px-6 py-5">
+              {loading ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-4">
+                  <span className="loading loading-md loading-spinner text-primary" />
+                  <p className="m-0 text-center text-[0.9375rem] text-base-content/80">
+                    Loading repository…
                   </p>
                 </div>
-
-                {repo.error ? (
-                  <>
-                    <p
-                      className="mb-0 rounded-lg bg-[rgba(180,120,0,0.12)] px-4 py-3 text-[0.9375rem] text-[#5c4a00] dark:bg-[rgba(220,180,60,0.15)] dark:text-[#e8d48a]"
-                      role="status"
-                    >
-                      {repo.error}
+              ) : loadError ? (
+                <div role="alert" className="alert text-sm alert-error">
+                  <span>{loadError}</span>
+                </div>
+              ) : repo ? (
+                <>
+                  <div className="mb-4 text-center">
+                    <p className="mb-1.5 text-xs font-semibold tracking-wide uppercase opacity-70">
+                      Current repository
                     </p>
-                    <dl className="m-0 mt-4 flex flex-col gap-2.5">
-                      <MetaRow label="Path">{repo.path}</MetaRow>
-                    </dl>
-                  </>
-                ) : (
-                  <>
-                    {listsError ? (
-                      <p
-                        className="mb-3 rounded-lg bg-[rgba(160,60,0,0.1)] px-3 py-2 text-sm text-[#8a3000] dark:bg-[rgba(220,100,40,0.15)] dark:text-[#f0a070]"
-                        role="alert"
-                      >
-                        {listsError}
-                      </p>
-                    ) : null}
+                    <p className="m-0 text-xl font-semibold tracking-tight wrap-break-word">
+                      {repo.name}
+                    </p>
+                  </div>
 
-                    <div className="mb-6">
-                      <h2 className="m-0 mb-3 border-b border-black/10 pb-2 text-sm font-semibold tracking-[0.06em] text-[#555] uppercase dark:border-white/12 dark:text-[#aaa]">
-                        Commits on current branch
-                      </h2>
-                      {commits.length === 0 ? (
-                        <p className="m-0 text-center text-sm text-[#666] dark:text-[#999]">
-                          No commits to show
-                        </p>
-                      ) : (
-                        <ol className="m-0 max-h-[min(50vh,28rem)] list-none space-y-2 overflow-y-auto p-0">
-                          {commits.map((c) => (
-                            <li
-                              key={c.hash}
-                              className="rounded-lg border border-black/6 bg-black/2 px-3 py-2 dark:border-white/8 dark:bg-white/4"
-                            >
-                              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                                <code className="shrink-0 font-mono text-[0.75rem] text-[#444] dark:text-[#b8b8b8]">
-                                  {c.shortHash}
-                                </code>
-                                <span className="min-w-0 flex-1 font-medium text-[#111] dark:text-[#eee]">
-                                  {c.subject}
-                                </span>
-                              </div>
-                              <p className="mt-1 mb-0 text-xs text-[#666] dark:text-[#999]">
-                                {c.author}
-                                {formatDate(c.date) ? (
-                                  <span className="text-[#888] dark:text-[#777]">
-                                    {" "}
-                                    · {formatDate(c.date)}
+                  {repo.error ? (
+                    <>
+                      <div role="status" className="alert text-sm alert-warning">
+                        <span>{repo.error}</span>
+                      </div>
+                      <dl className="m-0 mt-4 flex flex-col gap-2.5">
+                        <MetaRow label="Path">{repo.path}</MetaRow>
+                      </dl>
+                    </>
+                  ) : (
+                    <>
+                      {listsError ? (
+                        <div role="alert" className="mb-3 alert text-sm alert-error">
+                          <span>{listsError}</span>
+                        </div>
+                      ) : null}
+
+                      <div className="mb-6">
+                        <h2 className="m-0 mb-3 border-b border-base-300 pb-2 text-sm font-semibold tracking-wide uppercase opacity-70">
+                          Commits on current branch
+                        </h2>
+                        {commits.length === 0 ? (
+                          <p className="m-0 text-center text-sm text-base-content/60">
+                            No commits to show
+                          </p>
+                        ) : (
+                          <ol className="m-0 max-h-[min(50vh,28rem)] list-none space-y-2 overflow-y-auto p-0">
+                            {commits.map((c) => (
+                              <li
+                                key={c.hash}
+                                className="rounded-box border border-base-300 bg-base-200 px-3 py-2"
+                              >
+                                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                                  <code className="shrink-0 font-mono text-[0.75rem] text-base-content/80">
+                                    {c.shortHash}
+                                  </code>
+                                  <span className="min-w-0 flex-1 font-medium text-base-content">
+                                    {c.subject}
                                   </span>
-                                ) : null}
-                              </p>
-                            </li>
-                          ))}
-                        </ol>
-                      )}
-                    </div>
+                                </div>
+                                <p className="mt-1 mb-0 text-xs text-base-content/70">
+                                  {c.author}
+                                  {formatDate(c.date) ? (
+                                    <span className="text-base-content/50">
+                                      {" "}
+                                      · {formatDate(c.date)}
+                                    </span>
+                                  ) : null}
+                                </p>
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </div>
 
-                    <div>
-                      <h2 className="m-0 mb-3 border-b border-black/10 pb-2 text-sm font-semibold tracking-[0.06em] text-[#555] uppercase dark:border-white/12 dark:text-[#aaa]">
-                        Details
-                      </h2>
-                      <RepoMetadataDetails repo={repo} />
-                    </div>
-                  </>
-                )}
-              </>
-            ) : (
-              <p className="m-0 text-center text-[0.9375rem] text-[#666] dark:text-[#999]">
-                No repository open
-              </p>
-            )}
+                      <div>
+                        <h2 className="m-0 mb-3 border-b border-base-300 pb-2 text-sm font-semibold tracking-wide uppercase opacity-70">
+                          Details
+                        </h2>
+                        <RepoMetadataDetails repo={repo} />
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : (
+                <p className="m-0 text-center text-[0.9375rem] text-base-content/60">
+                  No repository open
+                </p>
+              )}
+            </div>
           </section>
         </div>
       </div>
