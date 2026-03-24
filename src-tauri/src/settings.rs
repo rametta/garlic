@@ -78,7 +78,7 @@ fn clear_last_repo_path(app: &AppHandle) -> Result<(), String> {
 pub struct RestoreLastRepo {
     pub load_error: Option<String>,
     pub metadata: Option<git::RepoMetadata>,
-    pub local_branches: Vec<String>,
+    pub local_branches: Vec<git::LocalBranchEntry>,
     pub remote_branches: Vec<String>,
     pub commits: Vec<git::CommitEntry>,
     pub lists_error: Option<String>,

@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -33,11 +33,20 @@ interface CommitEntry {
   date: string;
 }
 
+/** Local branch row from `list_local_branches` / bootstrap. */
+export interface LocalBranchEntry {
+  name: string;
+  /** Commits on this branch not on upstream; null if no upstream. */
+  ahead: number | null;
+  /** Commits on upstream not on this branch; null if no upstream. */
+  behind: number | null;
+}
+
 /** Repo snapshot from `restore_app_bootstrap` (`repo` field). */
 export interface RestoreLastRepo {
   loadError: string | null;
   metadata: RepoMetadata | null;
-  localBranches: string[];
+  localBranches: LocalBranchEntry[];
   remoteBranches: string[];
   commits: CommitEntry[];
   listsError: string | null;
@@ -52,7 +61,6 @@ export const emptyRestoreLastRepo: RestoreLastRepo = {
   listsError: null,
 };
 
-
 /** Payload from `restore_app_bootstrap` (Rust settings + repo snapshot). */
 export interface AppBootstrap {
   repo: RestoreLastRepo;
@@ -63,6 +71,11 @@ export const emptyAppBootstrap: AppBootstrap = {
   repo: emptyRestoreLastRepo,
   theme: null,
 };
+
+function localBranchUpstreamLabel(ahead: number | null, behind: number | null): string | null {
+  if (ahead === null || behind === null) return null;
+  return `↑${ahead} ↓${behind}`;
+}
 
 function formatDate(iso: string | null): string | null {
   if (!iso) return null;
@@ -142,19 +155,25 @@ function BranchPanel({
   title,
   empty,
   emptyHint,
+  headerRight,
   children,
 }: {
   title: string;
   empty: boolean;
   emptyHint: string;
+  /** Optional control (e.g. action button) aligned with the panel title. */
+  headerRight?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="card border-base-300 bg-base-100 shadow-sm">
       <div className="card-body min-h-0 gap-0 p-0">
-        <h2 className="m-0 card-title shrink-0 border-b border-base-300 px-3 py-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-          {title}
-        </h2>
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-3 py-2">
+          <h2 className="m-0 card-title min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-70">
+            {title}
+          </h2>
+          {headerRight ? <div className="shrink-0">{headerRight}</div> : null}
+        </div>
         <div className="max-h-[40vh] min-h-16 overflow-y-auto p-2">
           {empty ? (
             <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
@@ -171,17 +190,23 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
   const [repo, setRepo] = useState<RepoMetadata | null>(() => startup.metadata ?? null);
   const [loadError, setLoadError] = useState<string | null>(() => startup.loadError ?? null);
   const [loading, setLoading] = useState(false);
-  const [localBranches, setLocalBranches] = useState<string[]>(() => startup.localBranches);
+  const [localBranches, setLocalBranches] = useState<LocalBranchEntry[]>(
+    () => startup.localBranches,
+  );
   const [remoteBranches, setRemoteBranches] = useState<string[]>(() => startup.remoteBranches);
   const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
   const [branchBusy, setBranchBusy] = useState<string | null>(null);
   const [listsError, setListsError] = useState<string | null>(() => startup.listsError ?? null);
+  const createBranchDialogRef = useRef<HTMLDialogElement>(null);
+  const newBranchInputRef = useRef<HTMLInputElement>(null);
+  const [newBranchName, setNewBranchName] = useState("");
+  const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
 
   const refreshLists = useCallback(async (repoPath: string) => {
     setListsError(null);
     try {
       const [locals, remotes, log] = await Promise.all([
-        invoke<string[]>("list_local_branches", { path: repoPath }),
+        invoke<LocalBranchEntry[]>("list_local_branches", { path: repoPath }),
         invoke<string[]>("list_remote_branches", { path: repoPath }),
         invoke<CommitEntry[]>("list_branch_commits", { path: repoPath }),
       ]);
@@ -283,6 +308,40 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
     }
   }
 
+  function openCreateBranchDialog() {
+    setNewBranchName("");
+    setCreateBranchFieldError(null);
+    setLoadError(null);
+    createBranchDialogRef.current?.showModal();
+    requestAnimationFrame(() => {
+      newBranchInputRef.current?.focus();
+    });
+  }
+
+  async function submitCreateBranch() {
+    const trimmed = newBranchName.trim();
+    if (!repo?.path || repo.error) return;
+    if (!trimmed) {
+      setCreateBranchFieldError("Enter a branch name.");
+      return;
+    }
+    setCreateBranchFieldError(null);
+    setBranchBusy("create");
+    setLoadError(null);
+    try {
+      await invoke("create_local_branch", {
+        path: repo.path,
+        branch: trimmed,
+      });
+      createBranchDialogRef.current?.close();
+      await refreshAfterMutation();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }
+
   async function onCreateFromRemote(remoteRef: string) {
     if (!repo?.path || repo.error) return;
     setBranchBusy(`remote:${remoteRef}`);
@@ -311,28 +370,130 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
         aria-busy={loading}
       >
         <aside className="col-span-12 flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3 lg:max-h-[calc(100vh-3rem)]">
+          <dialog
+            ref={createBranchDialogRef}
+            className="modal"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                e.currentTarget.close();
+              }
+            }}
+            onClose={() => {
+              setNewBranchName("");
+              setCreateBranchFieldError(null);
+            }}
+          >
+            <div
+              className="modal-box"
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              <h3 className="m-0 text-lg font-bold">New local branch</h3>
+              <p className="mt-1 mb-0 text-sm text-base-content/70">
+                Creates a branch from the current commit and switches to it.
+              </p>
+              <label className="form-control mt-4 w-full">
+                <span className="label-text mb-1">Branch name</span>
+                <input
+                  ref={newBranchInputRef}
+                  type="text"
+                  className="input-bordered input w-full font-mono text-sm"
+                  value={newBranchName}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={branchBusy === "create"}
+                  onChange={(e) => {
+                    setNewBranchName(e.target.value);
+                    if (createBranchFieldError) setCreateBranchFieldError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void submitCreateBranch();
+                    }
+                  }}
+                />
+                {createBranchFieldError ? (
+                  <span className="label-text-alt text-error">{createBranchFieldError}</span>
+                ) : null}
+              </label>
+              <div className="modal-action">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={branchBusy === "create"}
+                  onClick={() => createBranchDialogRef.current?.close()}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={branchBusy === "create"}
+                  onClick={() => void submitCreateBranch()}
+                >
+                  {branchBusy === "create" ? (
+                    <span className="loading loading-sm loading-spinner" />
+                  ) : (
+                    "Create"
+                  )}
+                </button>
+              </div>
+            </div>
+          </dialog>
+
           <BranchPanel
             title="Local branches"
             empty={canShowBranches && localBranches.length === 0}
             emptyHint="No local branches"
+            headerRight={
+              canShowBranches ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  disabled={Boolean(branchBusy)}
+                  onClick={() => {
+                    openCreateBranchDialog();
+                  }}
+                >
+                  New branch
+                </button>
+              ) : null
+            }
           >
             {canShowBranches ? (
               <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
                 {localBranches.map((b) => {
-                  const isCurrent = currentBranchName === b;
-                  const busy = branchBusy === `local:${b}`;
+                  const isCurrent = currentBranchName === b.name;
+                  const busy = branchBusy === `local:${b.name}`;
+                  const upstreamLabel = localBranchUpstreamLabel(b.ahead, b.behind);
                   return (
-                    <li key={b} className={isCurrent ? "menu-active" : ""}>
+                    <li key={b.name} className={isCurrent ? "menu-active" : ""}>
                       <button
                         type="button"
                         disabled={busy || isCurrent}
-                        onClick={() => void onCheckoutLocal(b)}
-                        className={`h-auto min-h-0 justify-start py-2 text-left whitespace-normal ${busy ? "opacity-60" : ""}`}
+                        onClick={() => void onCheckoutLocal(b.name)}
+                        className={`flex h-auto min-h-0 flex-col items-stretch justify-start gap-0.5 py-2 text-left whitespace-normal ${busy ? "opacity-60" : ""}`}
                       >
-                        {busy ? "Switching…" : b}
-                        {isCurrent && !busy ? (
-                          <span className="ml-1.5 text-xs font-normal opacity-70">(current)</span>
-                        ) : null}
+                        <span className="flex w-full min-w-0 items-baseline justify-between gap-2">
+                          <span className="min-w-0 wrap-break-word">
+                            {busy ? "Switching…" : b.name}
+                            {isCurrent && !busy ? (
+                              <span className="ml-1.5 text-xs font-normal opacity-70">
+                                (current)
+                              </span>
+                            ) : null}
+                          </span>
+                          {upstreamLabel && !busy ? (
+                            <span
+                              className="shrink-0 font-mono text-[0.65rem] leading-none tracking-tight text-base-content/60"
+                              title="Commits ahead / behind configured upstream"
+                            >
+                              {upstreamLabel}
+                            </span>
+                          ) : null}
+                        </span>
                       </button>
                     </li>
                   );

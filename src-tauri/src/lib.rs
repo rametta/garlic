@@ -32,6 +32,7 @@ pub fn run() {
             git::list_remote_branches,
             git::list_branch_commits,
             git::checkout_local_branch,
+            git::create_local_branch,
             git::create_branch_from_remote,
             settings::restore_app_bootstrap,
             settings::set_last_repo_path,

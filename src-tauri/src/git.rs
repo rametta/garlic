@@ -20,6 +20,16 @@ pub struct CommitEntry {
     pub date: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalBranchEntry {
+    pub name: String,
+    /// Commits on this branch not on its upstream (`None` if no upstream is configured).
+    pub ahead: Option<u32>,
+    /// Commits on upstream not on this branch (`None` if no upstream is configured).
+    pub behind: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoMetadata {
@@ -210,9 +220,18 @@ fn ensure_git_repo(workdir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Local branch names (short ref, e.g. `main`).
+fn branch_upstream_counts(workdir: &Path, branch: &str) -> Option<(u32, u32)> {
+    let range = format!("{branch}...{branch}@{{upstream}}");
+    let out = git_output_allow_fail(workdir, &["rev-list", "--left-right", "--count", &range])?;
+    let mut it = out.split_whitespace();
+    let left = it.next()?.parse().ok()?;
+    let right = it.next()?.parse().ok()?;
+    Some((left, right))
+}
+
+/// Local branches with ahead/behind counts vs configured upstream (if any).
 #[tauri::command]
-pub fn list_local_branches(path: String) -> Result<Vec<String>, String> {
+pub fn list_local_branches(path: String) -> Result<Vec<LocalBranchEntry>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let out = git_output(
@@ -225,7 +244,20 @@ pub fn list_local_branches(path: String) -> Result<Vec<String>, String> {
         .filter(|s| !s.is_empty())
         .collect();
     branches.sort();
-    Ok(branches)
+
+    let mut entries = Vec::with_capacity(branches.len());
+    for name in branches {
+        let (ahead, behind) = match branch_upstream_counts(&path_buf, &name) {
+            Some((a, b)) => (Some(a), Some(b)),
+            None => (None, None),
+        };
+        entries.push(LocalBranchEntry {
+            name,
+            ahead,
+            behind,
+        });
+    }
+    Ok(entries)
 }
 
 /// Remote-tracking branches as `remote/branch` (e.g. `origin/main`), excluding `*/HEAD`.
@@ -295,6 +327,19 @@ pub fn checkout_local_branch(path: String, branch: String) -> Result<(), String>
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     git_output(&path_buf, &["switch", &branch])?;
+    Ok(())
+}
+
+/// Create a new local branch at the current `HEAD` and switch to it.
+#[tauri::command]
+pub fn create_local_branch(path: String, branch: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let name = branch.trim();
+    if name.is_empty() {
+        return Err("Branch name cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["switch", "-c", name])?;
     Ok(())
 }
 

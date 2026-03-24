@@ -9,10 +9,10 @@ async function bootstrap() {
   try {
     data = await invoke<AppBootstrap>("restore_app_bootstrap");
   } catch {
-    console.warn("Could not load 'restore_app_bootstrap'")
+    console.warn("Could not load 'restore_app_bootstrap'");
   }
 
-  document.documentElement.setAttribute("data-theme", data.theme ?? 'light');
+  document.documentElement.setAttribute("data-theme", data.theme ?? "light");
 
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>

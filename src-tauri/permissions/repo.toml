@@ -8,6 +8,7 @@ commands.allow = [
   "list_remote_branches",
   "list_branch_commits",
   "checkout_local_branch",
+  "create_local_branch",
   "create_branch_from_remote",
   "restore_app_bootstrap",
   "set_last_repo_path",
