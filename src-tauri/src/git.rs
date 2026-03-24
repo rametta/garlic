@@ -9,6 +9,16 @@ pub struct RemoteEntry {
     pub fetch_url: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub author: String,
+    pub date: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoMetadata {
@@ -187,4 +197,132 @@ pub fn get_repo_metadata(path: String) -> Result<RepoMetadata, String> {
         error: None,
         ..base
     })
+}
+
+fn ensure_git_repo(workdir: &Path) -> Result<(), String> {
+    if !workdir.exists() {
+        return Err("That path does not exist.".to_string());
+    }
+    if !workdir.is_dir() {
+        return Err("The selected path is not a folder.".to_string());
+    }
+    if git_output(workdir, &["rev-parse", "--is-inside-work-tree"]).is_err() {
+        return Err("Not a Git repository.".to_string());
+    }
+    Ok(())
+}
+
+/// Local branch names (short ref, e.g. `main`).
+#[tauri::command]
+pub fn list_local_branches(path: String) -> Result<Vec<String>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let out = git_output(
+        &path_buf,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/",
+        ],
+    )?;
+    let mut branches: Vec<String> = out
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    branches.sort();
+    Ok(branches)
+}
+
+/// Remote-tracking branches as `remote/branch` (e.g. `origin/main`), excluding `*/HEAD`.
+#[tauri::command]
+pub fn list_remote_branches(path: String) -> Result<Vec<String>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let out = git_output(
+        &path_buf,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/",
+        ],
+    )?;
+    let mut branches: Vec<String> = out
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .filter(|s| !s.ends_with("/HEAD"))
+        .collect();
+    branches.sort();
+    Ok(branches)
+}
+
+/// Commits reachable from `HEAD` (current branch or detached), newest first.
+#[tauri::command]
+pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let out = git_output(
+        &path_buf,
+        &[
+            "log",
+            "HEAD",
+            "-n",
+            "100",
+            // %x1f (unit separator): subject last so it can contain delimiters
+            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s",
+        ],
+    )?;
+    let mut commits = Vec::new();
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(5, '\x1f');
+        let hash = parts.next().map(String::from);
+        let short_hash = parts.next().map(String::from);
+        let author = parts.next().map(String::from);
+        let date = parts.next().map(String::from);
+        let subject = parts.next().map(String::from);
+        if let (Some(h), Some(sh), Some(auth), Some(dt), Some(sub)) =
+            (hash, short_hash, author, date, subject)
+        {
+            commits.push(CommitEntry {
+                hash: h,
+                short_hash: sh,
+                subject: sub,
+                author: auth,
+                date: dt,
+            });
+        }
+    }
+    Ok(commits)
+}
+
+#[tauri::command]
+pub fn checkout_local_branch(path: String, branch: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    git_output(&path_buf, &["switch", &branch])?;
+    Ok(())
+}
+
+/// Create a local branch from `remote_ref` (e.g. `origin/feature/foo`) and switch to it.
+#[tauri::command]
+pub fn create_branch_from_remote(path: String, remote_ref: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let Some(slash) = remote_ref.find('/') else {
+        return Err("Invalid remote branch ref.".to_string());
+    };
+    let local_name = remote_ref[slash + 1..].trim();
+    if local_name.is_empty() {
+        return Err("Invalid remote branch ref.".to_string());
+    }
+    git_output(
+        &path_buf,
+        &["switch", "-c", local_name, remote_ref.as_str()],
+    )?;
+    Ok(())
 }

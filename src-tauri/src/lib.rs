@@ -8,7 +8,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![git::get_repo_metadata])
+        .invoke_handler(tauri::generate_handler![
+            git::get_repo_metadata,
+            git::list_local_branches,
+            git::list_remote_branches,
+            git::list_branch_commits,
+            git::checkout_local_branch,
+            git::create_branch_from_remote,
+        ])
         .setup(|app| {
             let open_repo = MenuItem::with_id(
                 app,

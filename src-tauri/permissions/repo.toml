@@ -1,4 +1,11 @@
 [[permission]]
 identifier = "allow-get-repo-metadata"
-description = "Allows reading Git metadata for the repository view."
-commands.allow = ["get_repo_metadata"]
+description = "Allows reading Git metadata, branch lists, commit log, and checkout."
+commands.allow = [
+  "get_repo_metadata",
+  "list_local_branches",
+  "list_remote_branches",
+  "list_branch_commits",
+  "checkout_local_branch",
+  "create_branch_from_remote",
+]
