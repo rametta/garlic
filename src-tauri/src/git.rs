@@ -120,10 +120,12 @@ fn parse_remotes(text: &str) -> Vec<RemoteEntry> {
 pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, String> {
     let path_buf = PathBuf::from(&path);
     if !path_buf.exists() {
+        crate::active_repo::set_path(&app, None);
         crate::window_title::set_main_window_title(&app, crate::window_title::DEFAULT_WINDOW_TITLE);
         return Err("That path does not exist.".to_string());
     }
     if !path_buf.is_dir() {
+        crate::active_repo::set_path(&app, None);
         crate::window_title::set_main_window_title(&app, crate::window_title::DEFAULT_WINDOW_TITLE);
         return Err("The selected path is not a folder.".to_string());
     }
@@ -152,6 +154,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
             error: Some("Not a Git repository (no .git metadata found).".to_string()),
             ..base
         };
+        crate::active_repo::set_path(&app, Some(path.clone()));
         crate::window_title::set_main_window_title(&app, &meta.name);
         return Ok(meta);
     }
@@ -203,8 +206,77 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         error: None,
         ..base
     };
+    crate::active_repo::set_path(&app, Some(path.clone()));
     crate::window_title::set_main_window_title(&app, &meta.name);
     Ok(meta)
+}
+
+fn format_head_date_display(iso: &str) -> String {
+    use chrono::DateTime;
+    let trimmed = iso.trim();
+    if trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    match DateTime::parse_from_rfc3339(trimmed) {
+        Ok(dt) => dt.format("%b %d, %Y, %I:%M %p %:z").to_string(),
+        Err(_) => trimmed.to_string(),
+    }
+}
+
+pub(crate) fn format_repo_metadata_plain_text(m: &RepoMetadata) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(ref err) = m.error {
+        lines.push(format!("Error: {err}"));
+        lines.push(String::new());
+    }
+    lines.push(format!("Path: {}", m.path));
+    if let Some(ref gr) = m.git_root {
+        if gr != &m.path {
+            lines.push(format!("Git root: {gr}"));
+        }
+    }
+    let branch_line = if m.detached {
+        format!(
+            "Branch: Detached at {}",
+            m.head_short.as_deref().unwrap_or("—")
+        )
+    } else {
+        format!("Branch: {}", m.branch.as_deref().unwrap_or("—"))
+    };
+    lines.push(branch_line);
+    if let Some(ref hs) = m.head_short {
+        let head_part = match &m.head_subject {
+            Some(sub) => format!("{hs} {sub}"),
+            None => hs.clone(),
+        };
+        lines.push(format!("HEAD: {head_part}"));
+    }
+    if let Some(ref ha) = m.head_author {
+        lines.push(format!("Last commit author: {ha}"));
+    }
+    if let Some(ref hd) = m.head_date {
+        if !hd.is_empty() {
+            lines.push(format!("Last commit: {}", format_head_date_display(hd)));
+        }
+    }
+    if let Some(wtc) = m.working_tree_clean {
+        lines.push(format!(
+            "Working tree: {}",
+            if wtc { "Clean" } else { "Has local changes" }
+        ));
+    }
+    if let (Some(a), Some(b)) = (m.ahead, m.behind) {
+        lines.push(format!("Upstream: {a} ahead, {b} behind"));
+    }
+    if !m.remotes.is_empty() {
+        lines.push("Remotes:".to_string());
+        for r in &m.remotes {
+            lines.push(format!("  • {}: {}", r.name, r.fetch_url));
+        }
+    } else {
+        lines.push("Remotes: None configured".to_string());
+    }
+    lines.join("\n")
 }
 
 /// Ahead/behind vs `@{upstream}` using two-dot ranges (same idea as `git status -sb`).

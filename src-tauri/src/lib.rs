@@ -1,3 +1,4 @@
+mod active_repo;
 mod git;
 mod settings;
 mod window_title;
@@ -6,6 +7,7 @@ use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, Submenu};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::Wry;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 #[derive(Clone)]
 struct ThemeMenuState {
@@ -44,6 +46,8 @@ pub fn run() {
             settings::set_theme,
         ])
         .setup(|app| {
+            app.manage(active_repo::ActiveRepoPath::default());
+
             let open_repo = MenuItem::with_id(
                 app,
                 "open_repo",
@@ -52,6 +56,9 @@ pub fn run() {
                 Some("CmdOrCtrl+O"),
             )?;
             let file_menu = Submenu::with_items(app, "File", true, &[&open_repo])?;
+
+            let repo_metadata = MenuItem::with_id(app, "repo_metadata", "Repo Metadata", true, None::<&str>)?;
+            let repo_menu = Submenu::with_items(app, "Repository", true, &[&repo_metadata])?;
 
             let current = settings::persisted_theme(&app.handle());
             let mut checks = Vec::new();
@@ -74,13 +81,48 @@ pub fn run() {
             }
             app.manage(ThemeMenuState { checks });
 
-            let menu = Menu::with_items(app, &[&file_menu, &theme_submenu])?;
+            let menu = Menu::with_items(app, &[&file_menu, &repo_menu, &theme_submenu])?;
             menu.set_as_app_menu()?;
             Ok(())
         })
         .on_menu_event(|app, event| {
             if menu_id_is(&event, "open_repo") {
                 let _ = app.emit("open-repo-request", ());
+                return;
+            }
+            if menu_id_is(&event, "repo_metadata") {
+                let handle = app.clone();
+                let path_opt = handle
+                    .try_state::<active_repo::ActiveRepoPath>()
+                    .and_then(|state| state.0.lock().ok().map(|g| (*g).clone()).flatten());
+                let Some(path) = path_opt else {
+                    handle
+                        .dialog()
+                        .message("No repository is open.")
+                        .title("Repo Metadata")
+                        .kind(MessageDialogKind::Info)
+                        .show(|_| {});
+                    return;
+                };
+                match git::get_repo_metadata(handle.clone(), path.clone()) {
+                    Ok(meta) => {
+                        let text = git::format_repo_metadata_plain_text(&meta);
+                        handle
+                            .dialog()
+                            .message(text)
+                            .title("Repo Metadata")
+                            .kind(MessageDialogKind::Info)
+                            .show(|_| {});
+                    }
+                    Err(e) => {
+                        handle
+                            .dialog()
+                            .message(e)
+                            .title("Repo Metadata")
+                            .kind(MessageDialogKind::Error)
+                            .show(|_| {});
+                    }
+                }
                 return;
             }
             let id = event.id().as_ref();

@@ -91,61 +91,6 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function RepoMetadataDetails({ repo }: { repo: RepoMetadata }) {
-  const lastCommit = formatDate(repo.headDate);
-  return (
-    <dl className="m-0 flex flex-col gap-2.5">
-      <MetaRow label="Path">{repo.path}</MetaRow>
-      {repo.gitRoot && repo.gitRoot !== repo.path ? (
-        <MetaRow label="Git root">{repo.gitRoot}</MetaRow>
-      ) : null}
-      <MetaRow label="Branch">
-        {repo.detached ? `Detached at ${repo.headShort ?? "—"}` : (repo.branch ?? "—")}
-      </MetaRow>
-      {repo.headShort ? (
-        <MetaRow label="HEAD">
-          <code className="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[0.85em]">
-            {repo.headShort}
-          </code>
-          {repo.headSubject ? <span className="font-medium"> {repo.headSubject}</span> : null}
-        </MetaRow>
-      ) : null}
-      {repo.headAuthor ? <MetaRow label="Last commit author">{repo.headAuthor}</MetaRow> : null}
-      {lastCommit ? <MetaRow label="Last commit">{lastCommit}</MetaRow> : null}
-      {repo.workingTreeClean !== null ? (
-        <MetaRow label="Working tree">
-          {repo.workingTreeClean ? (
-            <span className="font-medium text-success">Clean</span>
-          ) : (
-            <span className="font-medium text-warning">Has local changes</span>
-          )}
-        </MetaRow>
-      ) : null}
-      {repo.ahead !== null && repo.behind !== null ? (
-        <MetaRow label="Upstream">
-          {repo.ahead} ahead, {repo.behind} behind
-        </MetaRow>
-      ) : null}
-      {repo.remotes.length > 0 ? (
-        <MetaRow label="Remotes">
-          <ul className="mb-0 ml-0 list-disc space-y-1.5 pl-[1.1rem]">
-            {repo.remotes.map((r) => (
-              <li key={r.name}>
-                <span className="mr-1.5 font-semibold">{r.name}</span>
-                <span className="font-mono text-[0.8125rem] text-base-content/80">
-                  {r.fetchUrl}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </MetaRow>
-      ) : (
-        <MetaRow label="Remotes">None configured</MetaRow>
-      )}
-    </dl>
-  );
-}
-
 function BranchPanel({
   title,
   empty,
@@ -202,7 +147,6 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const [newBranchName, setNewBranchName] = useState("");
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
-
   const refreshLists = useCallback(async (repoPath: string) => {
     setListsError(null);
     try {
@@ -687,13 +631,6 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
                           </ol>
                         )}
                       </div>
-
-                      <div>
-                        <h2 className="m-0 mb-3 border-b border-base-300 pb-2 text-sm font-semibold tracking-wide uppercase opacity-70">
-                          Details
-                        </h2>
-                        <RepoMetadataDetails repo={repo} />
-                      </div>
                     </>
                   )}
                 </>
@@ -780,7 +717,7 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
                 <label className="form-control w-full">
                   <span className="label-text mb-1 text-xs font-medium">Commit message</span>
                   <textarea
-                    className="textarea-bordered textarea min-h-[4.5rem] w-full resize-y font-sans text-sm textarea-sm"
+                    className="textarea-bordered textarea min-h-18 w-full resize-y font-sans text-sm textarea-sm"
                     placeholder="Describe your changes…"
                     value={commitMessage}
                     disabled={!canShowBranches || stageCommitBusy}
@@ -808,11 +745,7 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
                     title="Push the current branch to origin (commits must be committed first)"
                     onClick={() => void onPushToOrigin()}
                   >
-                    {pushBusy ? (
-                      <span className="loading loading-xs loading-spinner" />
-                    ) : (
-                      "Push"
-                    )}
+                    {pushBusy ? <span className="loading loading-xs loading-spinner" /> : "Push"}
                   </button>
                   <button
                     type="button"
