@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::AppHandle;
@@ -28,6 +29,14 @@ pub struct LocalBranchEntry {
     pub ahead: Option<u32>,
     /// Commits on upstream not on this branch (`None` if no upstream is configured).
     pub behind: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingTreeFile {
+    pub path: String,
+    pub staged: bool,
+    pub unstaged: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -359,5 +368,104 @@ pub fn create_branch_from_remote(path: String, remote_ref: String) -> Result<(),
         &path_buf,
         &["switch", "-c", local_name, remote_ref.as_str()],
     )?;
+    Ok(())
+}
+
+fn non_empty_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn staged_paths(workdir: &Path) -> Result<Vec<String>, String> {
+    let out = git_output(workdir, &["diff", "--cached", "--name-only"])?;
+    Ok(non_empty_lines(&out))
+}
+
+fn unstaged_paths(workdir: &Path) -> Result<Vec<String>, String> {
+    let out = git_output(workdir, &["diff", "--name-only"])?;
+    Ok(non_empty_lines(&out))
+}
+
+fn untracked_paths(workdir: &Path) -> Result<Vec<String>, String> {
+    let out = git_output(
+        workdir,
+        &["ls-files", "--others", "--exclude-standard"],
+    )?;
+    Ok(non_empty_lines(&out))
+}
+
+/// Combined working tree file list for the UI (staged / unstaged flags per path).
+#[tauri::command]
+pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let staged = staged_paths(&path_buf)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let unstaged = unstaged_paths(&path_buf)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let untracked = untracked_paths(&path_buf)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let mut paths: HashSet<String> = HashSet::new();
+    paths.extend(staged.iter().cloned());
+    paths.extend(unstaged.iter().cloned());
+    paths.extend(untracked.iter().cloned());
+    let mut paths: Vec<String> = paths.into_iter().collect();
+    paths.sort();
+    Ok(paths
+        .into_iter()
+        .map(|p| WorkingTreeFile {
+            path: p.clone(),
+            staged: staged.contains(&p),
+            unstaged: unstaged.contains(&p) || untracked.contains(&p),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn stage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args: Vec<String> = vec!["add".into(), "--".into()];
+    args.extend(paths);
+    git_output(
+        &path_buf,
+        &args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args: Vec<String> = vec!["restore".into(), "--staged".into(), "--".into()];
+    args.extend(paths);
+    git_output(
+        &path_buf,
+        &args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn commit_staged(path: String, message: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let msg = message.trim();
+    if msg.is_empty() {
+        return Err("Commit message cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["commit", "-m", msg])?;
     Ok(())
 }

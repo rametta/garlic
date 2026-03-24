@@ -42,6 +42,13 @@ export interface LocalBranchEntry {
   behind: number | null;
 }
 
+/** One path in the working tree from `list_working_tree_files` / bootstrap. */
+export interface WorkingTreeFile {
+  path: string;
+  staged: boolean;
+  unstaged: boolean;
+}
+
 /** Repo snapshot from `restore_app_bootstrap` (`repo` field). */
 export interface RestoreLastRepo {
   loadError: string | null;
@@ -49,6 +56,7 @@ export interface RestoreLastRepo {
   localBranches: LocalBranchEntry[];
   remoteBranches: string[];
   commits: CommitEntry[];
+  workingTreeFiles: WorkingTreeFile[];
   listsError: string | null;
 }
 
@@ -58,6 +66,7 @@ export const emptyRestoreLastRepo: RestoreLastRepo = {
   localBranches: [],
   remoteBranches: [],
   commits: [],
+  workingTreeFiles: [],
   listsError: null,
 };
 
@@ -195,8 +204,13 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
   );
   const [remoteBranches, setRemoteBranches] = useState<string[]>(() => startup.remoteBranches);
   const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
+  const [workingTreeFiles, setWorkingTreeFiles] = useState<WorkingTreeFile[]>(
+    () => startup.workingTreeFiles,
+  );
   const [branchBusy, setBranchBusy] = useState<string | null>(null);
   const [listsError, setListsError] = useState<string | null>(() => startup.listsError ?? null);
+  const [commitMessage, setCommitMessage] = useState("");
+  const [stageCommitBusy, setStageCommitBusy] = useState(false);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const [newBranchName, setNewBranchName] = useState("");
@@ -205,14 +219,16 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
   const refreshLists = useCallback(async (repoPath: string) => {
     setListsError(null);
     try {
-      const [locals, remotes, log] = await Promise.all([
+      const [locals, remotes, log, worktree] = await Promise.all([
         invoke<LocalBranchEntry[]>("list_local_branches", { path: repoPath }),
         invoke<string[]>("list_remote_branches", { path: repoPath }),
         invoke<CommitEntry[]>("list_branch_commits", { path: repoPath }),
+        invoke<WorkingTreeFile[]>("list_working_tree_files", { path: repoPath }),
       ]);
       setLocalBranches(locals);
       setRemoteBranches(remotes);
       setCommits(log);
+      setWorkingTreeFiles(worktree);
     } catch (e) {
       setListsError(e instanceof Error ? e.message : String(e));
     }
@@ -234,12 +250,14 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
           setLocalBranches([]);
           setRemoteBranches([]);
           setCommits([]);
+          setWorkingTreeFiles([]);
         }
       } catch (e) {
         setRepo(null);
         setLocalBranches([]);
         setRemoteBranches([]);
         setCommits([]);
+        setWorkingTreeFiles([]);
         setLoadError(e instanceof Error ? e.message : String(e));
         void invoke("reset_main_window_title").catch(() => {});
       } finally {
@@ -359,8 +377,62 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
     }
   }
 
+  async function onStagePaths(paths: string[]) {
+    if (!repo?.path || repo.error || paths.length === 0) return;
+    setStageCommitBusy(true);
+    setLoadError(null);
+    try {
+      await invoke("stage_paths", { path: repo.path, paths });
+      await refreshAfterMutation();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStageCommitBusy(false);
+    }
+  }
+
+  async function onUnstagePaths(paths: string[]) {
+    if (!repo?.path || repo.error || paths.length === 0) return;
+    setStageCommitBusy(true);
+    setLoadError(null);
+    try {
+      await invoke("unstage_paths", { path: repo.path, paths });
+      await refreshAfterMutation();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStageCommitBusy(false);
+    }
+  }
+
+  async function onCommit() {
+    if (!repo?.path || repo.error) return;
+    const msg = commitMessage.trim();
+    if (!msg) return;
+    setStageCommitBusy(true);
+    setLoadError(null);
+    try {
+      await invoke("commit_staged", { path: repo.path, message: msg });
+      setCommitMessage("");
+      await refreshAfterMutation();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStageCommitBusy(false);
+    }
+  }
+
   const canShowBranches = Boolean(repo && !repo.error && !loading);
   const currentBranchName = repo?.detached ? null : (repo?.branch ?? null);
+
+  const hasStagedFiles = workingTreeFiles.some((f) => f.staged);
+  const unstagedPaths = workingTreeFiles.filter((f) => f.unstaged).map((f) => f.path);
+  const stagedPaths = workingTreeFiles.filter((f) => f.staged).map((f) => f.path);
+  const canCommit =
+    Boolean(repo?.path && !repo.error && !loading) &&
+    hasStagedFiles &&
+    commitMessage.trim().length > 0 &&
+    !stageCommitBusy;
 
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
@@ -529,7 +601,7 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
           </BranchPanel>
         </aside>
 
-        <div className="col-span-12 flex min-w-0 flex-col gap-4 lg:col-span-9">
+        <div className="col-span-12 flex min-w-0 flex-col gap-4 lg:col-span-6">
           <section className="card border-base-300 bg-base-100 shadow-md">
             <div className="card-body px-6 py-5">
               {loading ? (
@@ -617,6 +689,125 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
             </div>
           </section>
         </div>
+
+        <aside className="col-span-12 flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3 lg:max-h-[calc(100vh-3rem)]">
+          <div className="card border-base-300 bg-base-100 shadow-sm">
+            <div className="card-body min-h-0 gap-0 p-0">
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-3 py-2">
+                <h2 className="m-0 card-title min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-70">
+                  Stage & commit
+                </h2>
+                {canShowBranches && unstagedPaths.length > 0 ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    disabled={stageCommitBusy}
+                    onClick={() => void onStagePaths(unstagedPaths)}
+                  >
+                    Stage all
+                  </button>
+                ) : null}
+              </div>
+              <div className="flex max-h-[min(42vh,22rem)] min-h-16 flex-col gap-2 overflow-y-auto p-2">
+                {!canShowBranches ? (
+                  <p className="m-0 py-2 text-center text-xs text-base-content/50">
+                    Open a repository to manage changes
+                  </p>
+                ) : workingTreeFiles.length === 0 ? (
+                  <p className="m-0 py-2 text-center text-xs text-base-content/50">
+                    No pending changes
+                  </p>
+                ) : (
+                  <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+                    {workingTreeFiles.map((f) => (
+                      <li
+                        key={f.path}
+                        className="rounded-md border border-base-300 bg-base-200/80 px-2 py-1.5"
+                      >
+                        <div className="flex min-w-0 flex-col gap-1">
+                          <code className="block font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
+                            {f.path}
+                          </code>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {f.staged ? (
+                              <span className="badge badge-xs badge-success">Staged</span>
+                            ) : null}
+                            {f.unstaged ? (
+                              <span className="badge badge-outline badge-xs badge-warning">
+                                Unstaged
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {f.unstaged ? (
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-primary"
+                                disabled={stageCommitBusy}
+                                onClick={() => void onStagePaths([f.path])}
+                              >
+                                Stage
+                              </button>
+                            ) : null}
+                            {f.staged ? (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-xs"
+                                disabled={stageCommitBusy}
+                                onClick={() => void onUnstagePaths([f.path])}
+                              >
+                                Unstage
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="border-t border-base-300 p-3">
+                <label className="form-control w-full">
+                  <span className="label-text mb-1 text-xs font-medium">Commit message</span>
+                  <textarea
+                    className="textarea-bordered textarea min-h-[4.5rem] w-full resize-y font-sans text-sm textarea-sm"
+                    placeholder="Describe your changes…"
+                    value={commitMessage}
+                    disabled={!canShowBranches || stageCommitBusy}
+                    onChange={(e) => {
+                      setCommitMessage(e.target.value);
+                    }}
+                    rows={3}
+                  />
+                </label>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {stagedPaths.length > 0 ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      disabled={stageCommitBusy}
+                      onClick={() => void onUnstagePaths(stagedPaths)}
+                    >
+                      Unstage all
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn ml-auto btn-sm btn-primary"
+                    disabled={!canCommit}
+                    onClick={() => void onCommit()}
+                  >
+                    {stageCommitBusy ? (
+                      <span className="loading loading-xs loading-spinner" />
+                    ) : (
+                      "Commit"
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
       </div>
     </main>
   );

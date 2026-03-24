@@ -81,6 +81,7 @@ pub struct RestoreLastRepo {
     pub local_branches: Vec<git::LocalBranchEntry>,
     pub remote_branches: Vec<String>,
     pub commits: Vec<git::CommitEntry>,
+    pub working_tree_files: Vec<git::WorkingTreeFile>,
     pub lists_error: Option<String>,
 }
 
@@ -92,6 +93,7 @@ impl RestoreLastRepo {
             local_branches: Vec::new(),
             remote_branches: Vec::new(),
             commits: Vec::new(),
+            working_tree_files: Vec::new(),
             lists_error: None,
         }
     }
@@ -118,13 +120,15 @@ fn restore_repo_snapshot(
             let locals = git::list_local_branches(path.clone());
             let remotes = git::list_remote_branches(path.clone());
             let commits = git::list_branch_commits(path.clone());
+            let working_tree = git::list_working_tree_files(path.clone());
 
             let lists_error = locals
                 .as_ref()
                 .err()
                 .cloned()
                 .or(remotes.as_ref().err().cloned())
-                .or(commits.as_ref().err().cloned());
+                .or(commits.as_ref().err().cloned())
+                .or(working_tree.as_ref().err().cloned());
 
             Ok(RestoreLastRepo {
                 load_error: None,
@@ -132,6 +136,7 @@ fn restore_repo_snapshot(
                 local_branches: locals.unwrap_or_default(),
                 remote_branches: remotes.unwrap_or_default(),
                 commits: commits.unwrap_or_default(),
+                working_tree_files: working_tree.unwrap_or_default(),
                 lists_error,
             })
         }

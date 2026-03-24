@@ -1,6 +1,6 @@
 [[permission]]
 identifier = "allow-get-repo-metadata"
-description = "Allows reading Git metadata, branch lists, commit log, and checkout."
+description = "Allows reading Git metadata, branch lists, commit log, working tree, staging, commit, and checkout."
 commands.allow = [
   "reset_main_window_title",
   "get_repo_metadata",
@@ -10,6 +10,10 @@ commands.allow = [
   "checkout_local_branch",
   "create_local_branch",
   "create_branch_from_remote",
+  "list_working_tree_files",
+  "stage_paths",
+  "unstage_paths",
+  "commit_staged",
   "restore_app_bootstrap",
   "set_last_repo_path",
   "set_theme",
