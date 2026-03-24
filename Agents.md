@@ -12,6 +12,7 @@ Desktop **Git client** with a simple UI: open or clone repos, manage branches an
 |--------|--------|
 | Desktop shell | **Tauri 2** (`src-tauri/`, Rust) |
 | Frontend | **React** + **TypeScript** (`src/`) |
+| Styling | **Tailwind CSS v4** with the **Vite plugin** (`@tailwindcss/vite`): `@import "tailwindcss"` in `src/index.css`, utilities in components — see [Tailwind + Vite](https://tailwindcss.com/docs/installation/using-vite) |
 | Bundler | **Vite** |
 | Package manager | **Bun** (user preference; scripts in `package.json` work with `bun run …`) |
 
@@ -41,6 +42,7 @@ Git operations should run where it fits the design: typically **Tauri commands**
 
 ## Repo layout (typical Tauri + Vite)
 
+- `src/index.css` — Tailwind entry (`@import "tailwindcss"`), imported from `src/main.tsx`.
 - `src/` — React UI, TypeScript.
 - `src-tauri/` — Rust, Tauri config, **invoke handlers** for Git.
 - `package.json` — frontend scripts; `tauri` CLI for dev/build.
