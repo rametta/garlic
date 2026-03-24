@@ -36,6 +36,8 @@ interface CommitEntry {
 /** Local branch row from `list_local_branches` / bootstrap. */
 export interface LocalBranchEntry {
   name: string;
+  /** Remote-tracking upstream ref (e.g. origin/main); null if not configured. */
+  upstreamName: string | null;
   /** Commits on this branch not on upstream; null if no upstream. */
   ahead: number | null;
   /** Commits on upstream not on this branch; null if no upstream. */
@@ -60,30 +62,14 @@ export interface RestoreLastRepo {
   listsError: string | null;
 }
 
-export const emptyRestoreLastRepo: RestoreLastRepo = {
-  loadError: null,
-  metadata: null,
-  localBranches: [],
-  remoteBranches: [],
-  commits: [],
-  workingTreeFiles: [],
-  listsError: null,
-};
-
-/** Payload from `restore_app_bootstrap` (Rust settings + repo snapshot). */
-export interface AppBootstrap {
-  repo: RestoreLastRepo;
-  theme: string | null;
-}
-
-export const emptyAppBootstrap: AppBootstrap = {
-  repo: emptyRestoreLastRepo,
-  theme: null,
-};
-
-function localBranchUpstreamLabel(ahead: number | null, behind: number | null): string | null {
+function localBranchUpstreamLabel(
+  ahead: number | null,
+  behind: number | null,
+  upstreamName: string | null,
+): string | null {
   if (ahead === null || behind === null) return null;
-  return `↑${ahead} ↓${behind}`;
+  const vs = upstreamName ? ` · ${upstreamName}` : "";
+  return `↑${ahead} ↓${behind}${vs}`;
 }
 
 function formatDate(iso: string | null): string | null {
@@ -211,6 +197,7 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
   const [listsError, setListsError] = useState<string | null>(() => startup.listsError ?? null);
   const [commitMessage, setCommitMessage] = useState("");
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const [newBranchName, setNewBranchName] = useState("");
@@ -422,6 +409,20 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
     }
   }
 
+  async function onPushToOrigin() {
+    if (!repo?.path || repo.error) return;
+    setPushBusy(true);
+    setLoadError(null);
+    try {
+      await invoke("push_to_origin", { path: repo.path });
+      await refreshAfterMutation();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
   const canShowBranches = Boolean(repo && !repo.error && !loading);
   const currentBranchName = repo?.detached ? null : (repo?.branch ?? null);
 
@@ -433,6 +434,11 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
     hasStagedFiles &&
     commitMessage.trim().length > 0 &&
     !stageCommitBusy;
+  const canPush =
+    Boolean(repo?.path && !repo.error && !loading) &&
+    !repo.detached &&
+    !stageCommitBusy &&
+    !pushBusy;
 
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
@@ -539,7 +545,11 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
                 {localBranches.map((b) => {
                   const isCurrent = currentBranchName === b.name;
                   const busy = branchBusy === `local:${b.name}`;
-                  const upstreamLabel = localBranchUpstreamLabel(b.ahead, b.behind);
+                  const upstreamLabel = localBranchUpstreamLabel(
+                    b.ahead,
+                    b.behind,
+                    b.upstreamName ?? null,
+                  );
                   return (
                     <li key={b.name} className={isCurrent ? "menu-active" : ""}>
                       <button
@@ -559,8 +569,14 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
                           </span>
                           {upstreamLabel && !busy ? (
                             <span
-                              className="shrink-0 font-mono text-[0.65rem] leading-none tracking-tight text-base-content/60"
-                              title="Commits ahead / behind configured upstream"
+                              className={`shrink-0 font-mono text-[0.65rem] leading-none tracking-tight ${
+                                isCurrent ? "text-inherit opacity-90" : "text-base-content/60"
+                              }`}
+                              title={
+                                b.upstreamName
+                                  ? `Ahead of ${b.upstreamName}: ${b.ahead ?? 0}; behind: ${b.behind ?? 0}`
+                                  : "Commits ahead / behind configured upstream"
+                              }
                             >
                               {upstreamLabel}
                             </span>
@@ -718,45 +734,39 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
                     No pending changes
                   </p>
                 ) : (
-                  <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
                     {workingTreeFiles.map((f) => (
                       <li
                         key={f.path}
-                        className="rounded-md border border-base-300 bg-base-200/80 px-2 py-1.5"
+                        className="rounded-md border border-base-300 bg-base-200/80 px-2 py-1"
                       >
-                        <div className="flex min-w-0 flex-col gap-1">
-                          <code className="block font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
+                        <div className="flex min-h-7 items-center gap-2">
+                          <code className="min-w-0 flex-1 font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
                             {f.path}
                           </code>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {f.staged ? (
-                              <span className="badge badge-xs badge-success">Staged</span>
-                            ) : null}
-                            {f.unstaged ? (
-                              <span className="badge badge-outline badge-xs badge-warning">
-                                Unstaged
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="flex flex-wrap gap-1 pt-0.5">
+                          <div className="flex shrink-0 items-center gap-0.5">
                             {f.unstaged ? (
                               <button
                                 type="button"
-                                className="btn btn-xs btn-primary"
+                                className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-xs btn-primary"
                                 disabled={stageCommitBusy}
+                                aria-label={`Stage ${f.path}`}
+                                title="Stage"
                                 onClick={() => void onStagePaths([f.path])}
                               >
-                                Stage
+                                +
                               </button>
                             ) : null}
                             {f.staged ? (
                               <button
                                 type="button"
-                                className="btn btn-ghost btn-xs"
+                                className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-ghost btn-xs"
                                 disabled={stageCommitBusy}
+                                aria-label={`Unstage ${f.path}`}
+                                title="Unstage"
                                 onClick={() => void onUnstagePaths([f.path])}
                               >
-                                Unstage
+                                −
                               </button>
                             ) : null}
                           </div>
@@ -791,6 +801,19 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
                       Unstage all
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={!canPush}
+                    title="Push the current branch to origin (commits must be committed first)"
+                    onClick={() => void onPushToOrigin()}
+                  >
+                    {pushBusy ? (
+                      <span className="loading loading-xs loading-spinner" />
+                    ) : (
+                      "Push"
+                    )}
+                  </button>
                   <button
                     type="button"
                     className="btn ml-auto btn-sm btn-primary"

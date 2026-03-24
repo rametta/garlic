@@ -38,6 +38,7 @@ pub fn run() {
             git::stage_paths,
             git::unstage_paths,
             git::commit_staged,
+            git::push_to_origin,
             settings::restore_app_bootstrap,
             settings::set_last_repo_path,
             settings::set_theme,

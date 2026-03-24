@@ -25,6 +25,8 @@ pub struct CommitEntry {
 #[serde(rename_all = "camelCase")]
 pub struct LocalBranchEntry {
     pub name: String,
+    /// Remote-tracking ref for this branch's upstream (e.g. `origin/main`), if configured.
+    pub upstream_name: Option<String>,
     /// Commits on this branch not on its upstream (`None` if no upstream is configured).
     pub ahead: Option<u32>,
     /// Commits on upstream not on this branch (`None` if no upstream is configured).
@@ -182,18 +184,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
     let status = git_output_allow_fail(&path_buf, &["status", "--porcelain"]);
     let working_tree_clean = status.as_ref().map(|s| s.is_empty());
 
-    let ab = git_output_allow_fail(
-        &path_buf,
-        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-    );
-    let (ahead, behind) = ab
-        .as_ref()
-        .and_then(|s| {
-            let mut it = s.split_whitespace();
-            let a = it.next()?.parse().ok()?;
-            let b = it.next()?.parse().ok()?;
-            Some((a, b))
-        })
+    let (ahead, behind) = head_upstream_ahead_behind(&path_buf)
         .map(|(a, b)| (Some(a), Some(b)))
         .unwrap_or((None, None));
 
@@ -216,6 +207,41 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
     Ok(meta)
 }
 
+/// Ahead/behind vs `@{upstream}` using two-dot ranges (same idea as `git status -sb`).
+fn head_upstream_ahead_behind(workdir: &Path) -> Option<(u32, u32)> {
+    git_output_allow_fail(workdir, &["rev-parse", "--verify", "@{upstream}"])?;
+    let ahead_s = git_output_allow_fail(workdir, &["rev-list", "--count", "@{upstream}..HEAD"])?;
+    let behind_s = git_output_allow_fail(workdir, &["rev-list", "--count", "HEAD..@{upstream}"])?;
+    let ahead = ahead_s.trim().parse().ok()?;
+    let behind = behind_s.trim().parse().ok()?;
+    Some((ahead, behind))
+}
+
+fn branch_upstream_abbrev(workdir: &Path, branch: &str) -> Option<String> {
+    let s = git_output_allow_fail(
+        workdir,
+        &["rev-parse", "--abbrev-ref", &format!("{branch}@{{upstream}}")],
+    )?;
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    Some(s.to_string())
+}
+
+/// Ahead/behind for a local branch vs its configured upstream (two-dot ranges).
+fn branch_upstream_ahead_behind(workdir: &Path, branch: &str) -> Option<(u32, u32)> {
+    let up = format!("{branch}@{{upstream}}");
+    git_output_allow_fail(workdir, &["rev-parse", "--verify", &up])?;
+    let ahead_range = format!("{branch}@{{upstream}}..{branch}");
+    let behind_range = format!("{branch}..{branch}@{{upstream}}");
+    let ahead_s = git_output_allow_fail(workdir, &["rev-list", "--count", &ahead_range])?;
+    let behind_s = git_output_allow_fail(workdir, &["rev-list", "--count", &behind_range])?;
+    let ahead = ahead_s.trim().parse().ok()?;
+    let behind = behind_s.trim().parse().ok()?;
+    Some((ahead, behind))
+}
+
 fn ensure_git_repo(workdir: &Path) -> Result<(), String> {
     if !workdir.exists() {
         return Err("That path does not exist.".to_string());
@@ -227,15 +253,6 @@ fn ensure_git_repo(workdir: &Path) -> Result<(), String> {
         return Err("Not a Git repository.".to_string());
     }
     Ok(())
-}
-
-fn branch_upstream_counts(workdir: &Path, branch: &str) -> Option<(u32, u32)> {
-    let range = format!("{branch}...{branch}@{{upstream}}");
-    let out = git_output_allow_fail(workdir, &["rev-list", "--left-right", "--count", &range])?;
-    let mut it = out.split_whitespace();
-    let left = it.next()?.parse().ok()?;
-    let right = it.next()?.parse().ok()?;
-    Some((left, right))
 }
 
 /// Local branches with ahead/behind counts vs configured upstream (if any).
@@ -256,12 +273,14 @@ pub fn list_local_branches(path: String) -> Result<Vec<LocalBranchEntry>, String
 
     let mut entries = Vec::with_capacity(branches.len());
     for name in branches {
-        let (ahead, behind) = match branch_upstream_counts(&path_buf, &name) {
+        let upstream_name = branch_upstream_abbrev(&path_buf, &name);
+        let (ahead, behind) = match branch_upstream_ahead_behind(&path_buf, &name) {
             Some((a, b)) => (Some(a), Some(b)),
             None => (None, None),
         };
         entries.push(LocalBranchEntry {
             name,
+            upstream_name,
             ahead,
             behind,
         });
@@ -467,5 +486,21 @@ pub fn commit_staged(path: String, message: String) -> Result<(), String> {
         return Err("Commit message cannot be empty.".to_string());
     }
     git_output(&path_buf, &["commit", "-m", msg])?;
+    Ok(())
+}
+
+/// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).
+#[tauri::command]
+pub fn push_to_origin(path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if head_ref.trim() == "HEAD" {
+        return Err("Cannot push while in detached HEAD. Check out a branch first.".to_string());
+    }
+    git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
+        "No remote named \"origin\" configured. Add it under Remotes or use git remote add.".to_string()
+    })?;
+    git_output(&path_buf, &["push", "-u", "origin", "HEAD"])?;
     Ok(())
 }

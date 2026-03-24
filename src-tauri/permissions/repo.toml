@@ -14,6 +14,7 @@ commands.allow = [
   "stage_paths",
   "unstage_paths",
   "commit_staged",
+  "push_to_origin",
   "restore_app_bootstrap",
   "set_last_repo_path",
   "set_theme",
