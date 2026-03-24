@@ -1,6 +1,9 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["eslint", "typescript", "unicorn", "oxc", "react"],
+  "options": {
+    "typeAware": true
+  },
   "env": {
     "builtin": true,
     "browser": true
@@ -9,6 +12,29 @@
     "react": {
       "version": "19.1.0"
     }
+  },
+  "rules": {
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/no-unsafe-argument": "warn",
+    "typescript/no-unsafe-assignment": "warn",
+    "typescript/no-unsafe-call": "warn",
+    "typescript/no-unsafe-member-access": "warn",
+    "typescript/no-unsafe-return": "warn",
+    "typescript/no-unnecessary-type-assertion": "warn",
+    "typescript/no-unnecessary-type-parameters": "warn",
+    "typescript/no-confusing-void-expression": "warn",
+    "typescript/no-deprecated": "warn",
+    "typescript/no-meaningless-void-operator": "warn",
+    "typescript/no-misused-spread": "warn",
+    "typescript/no-redundant-type-constituents": "warn",
+    "typescript/prefer-promise-reject-errors": "warn",
+    "typescript/only-throw-error": "warn",
+    "typescript/no-base-to-string": "warn",
+    "typescript/restrict-template-expressions": "warn",
+    "typescript/restrict-plus-operands": "warn",
+    "typescript/use-unknown-in-catch-callback-variable": "warn"
   },
   "ignorePatterns": [
     "**/node_modules/**",

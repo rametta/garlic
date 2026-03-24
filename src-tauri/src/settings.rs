@@ -1,8 +1,42 @@
 use crate::git;
+use crate::window_title;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use tauri::AppHandle;
 use tauri::Manager;
+
+/// DaisyUI theme names — keep in sync with `DAISY_THEMES` in `src/App.tsx`.
+pub const DAISY_THEMES: &[&str] = &[
+    "light",
+    "dark",
+    "cupcake",
+    "bumblebee",
+    "corporate",
+    "synthwave",
+    "retro",
+    "cyberpunk",
+    "valentine",
+    "garden",
+    "forest",
+    "dracula",
+    "night",
+    "nord",
+    "sunset",
+];
+
+fn resolve_persisted_theme(theme: &Option<String>) -> String {
+    const DEFAULT: &str = "light";
+    match theme {
+        Some(t) if DAISY_THEMES.contains(&t.as_str()) => t.clone(),
+        _ => DEFAULT.to_string(),
+    }
+}
+
+/// Current theme for native menus (matches `resolveDaisyTheme` in the frontend).
+pub fn persisted_theme(app: &AppHandle) -> String {
+    let s = load_settings(app).unwrap_or_default();
+    resolve_persisted_theme(&s.theme)
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct AppSettings {
@@ -63,12 +97,15 @@ impl RestoreLastRepo {
     }
 }
 
-fn restore_repo_snapshot(app: &AppHandle, settings: &AppSettings) -> Result<RestoreLastRepo, String> {
+fn restore_repo_snapshot(
+    app: &AppHandle,
+    settings: &AppSettings,
+) -> Result<RestoreLastRepo, String> {
     let Some(path) = settings.last_repo_path.clone() else {
         return Ok(RestoreLastRepo::empty());
     };
 
-    match git::get_repo_metadata(path.clone()) {
+    match git::get_repo_metadata(app.clone(), path.clone()) {
         Ok(meta) => {
             if meta.error.is_some() {
                 clear_last_repo_path(app)?;
@@ -121,6 +158,9 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
     let settings = load_settings(&app)?;
     let theme = settings.theme.clone();
     let repo = restore_repo_snapshot(&app, &settings)?;
+    if repo.metadata.is_none() {
+        window_title::set_main_window_title(&app, window_title::DEFAULT_WINDOW_TITLE);
+    }
     Ok(AppBootstrap { repo, theme })
 }
 

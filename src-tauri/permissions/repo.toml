@@ -2,6 +2,7 @@
 identifier = "allow-get-repo-metadata"
 description = "Allows reading Git metadata, branch lists, commit log, and checkout."
 commands.allow = [
+  "reset_main_window_title",
   "get_repo_metadata",
   "list_local_branches",
   "list_remote_branches",

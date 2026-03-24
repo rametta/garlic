@@ -1,8 +1,24 @@
 mod git;
 mod settings;
+mod window_title;
 
-use tauri::menu::{Menu, MenuEvent, MenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, Submenu};
 use tauri::Emitter;
+use tauri::Manager;
+use tauri::Wry;
+
+#[derive(Clone)]
+struct ThemeMenuState {
+    checks: Vec<CheckMenuItem<Wry>>,
+}
+
+fn format_theme_label(name: &str) -> String {
+    let mut c = name.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().chain(c).collect(),
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,6 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            window_title::reset_main_window_title,
             git::get_repo_metadata,
             git::list_local_branches,
             git::list_remote_branches,
@@ -29,14 +46,52 @@ pub fn run() {
                 Some("CmdOrCtrl+O"),
             )?;
             let file_menu = Submenu::with_items(app, "File", true, &[&open_repo])?;
-            let menu = Menu::with_items(app, &[&file_menu])?;
+
+            let current = settings::persisted_theme(&app.handle());
+            let mut checks = Vec::new();
+            for name in settings::DAISY_THEMES {
+                let id = format!("theme_{name}");
+                let checked = *name == current.as_str();
+                let item = CheckMenuItem::with_id(
+                    app,
+                    &id,
+                    format_theme_label(name),
+                    true,
+                    checked,
+                    None::<&str>,
+                )?;
+                checks.push(item);
+            }
+            let theme_submenu = Submenu::new(app, "Theme", true)?;
+            for item in &checks {
+                theme_submenu.append(item)?;
+            }
+            app.manage(ThemeMenuState { checks });
+
+            let menu = Menu::with_items(app, &[&file_menu, &theme_submenu])?;
             menu.set_as_app_menu()?;
             Ok(())
         })
         .on_menu_event(|app, event| {
             if menu_id_is(&event, "open_repo") {
                 let _ = app.emit("open-repo-request", ());
+                return;
             }
+            let id = event.id().as_ref();
+            let Some(theme) = id.strip_prefix("theme_") else {
+                return;
+            };
+            if settings::set_theme(app.clone(), theme.to_string()).is_err() {
+                return;
+            }
+            if let Some(state) = app.try_state::<ThemeMenuState>() {
+                for (i, name) in settings::DAISY_THEMES.iter().enumerate() {
+                    if let Some(check) = state.checks.get(i) {
+                        let _ = check.set_checked(*name == theme);
+                    }
+                }
+            }
+            let _ = app.emit("theme-changed", serde_json::json!({ "theme": theme }));
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

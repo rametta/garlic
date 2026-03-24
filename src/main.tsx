@@ -17,7 +17,7 @@ async function bootstrap() {
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <App startup={data.repo} initialTheme={resolvedTheme} />
+      <App startup={data.repo} />
     </React.StrictMode>,
   );
 }

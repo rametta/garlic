@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tauri::AppHandle;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,12 +96,14 @@ fn parse_remotes(text: &str) -> Vec<RemoteEntry> {
 
 /// Inspect a local folder with `git` and return metadata for the UI.
 #[tauri::command]
-pub fn get_repo_metadata(path: String) -> Result<RepoMetadata, String> {
+pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, String> {
     let path_buf = PathBuf::from(&path);
     if !path_buf.exists() {
+        crate::window_title::set_main_window_title(&app, crate::window_title::DEFAULT_WINDOW_TITLE);
         return Err("That path does not exist.".to_string());
     }
     if !path_buf.is_dir() {
+        crate::window_title::set_main_window_title(&app, crate::window_title::DEFAULT_WINDOW_TITLE);
         return Err("The selected path is not a folder.".to_string());
     }
 
@@ -124,10 +127,12 @@ pub fn get_repo_metadata(path: String) -> Result<RepoMetadata, String> {
     };
 
     if git_output(&path_buf, &["rev-parse", "--is-inside-work-tree"]).is_err() {
-        return Ok(RepoMetadata {
+        let meta = RepoMetadata {
             error: Some("Not a Git repository (no .git metadata found).".to_string()),
             ..base
-        });
+        };
+        crate::window_title::set_main_window_title(&app, &meta.name);
+        return Ok(meta);
     }
 
     let git_root = git_output(&path_buf, &["rev-parse", "--show-toplevel"]).ok();
@@ -135,23 +140,11 @@ pub fn get_repo_metadata(path: String) -> Result<RepoMetadata, String> {
     let abbrev = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"]).ok();
     let detached = abbrev.as_deref() == Some("HEAD");
 
-    let branch = if detached {
-        None
-    } else {
-        abbrev.clone()
-    };
+    let branch = if detached { None } else { abbrev.clone() };
 
     let head_short = git_output(&path_buf, &["rev-parse", "--short", "HEAD"]).ok();
 
-    let log_line = git_output(
-        &path_buf,
-        &[
-            "log",
-            "-1",
-            "--format=%s|%an|%aI",
-        ],
-    )
-    .ok();
+    let log_line = git_output(&path_buf, &["log", "-1", "--format=%s|%an|%aI"]).ok();
 
     let (head_subject, head_author, head_date) = log_line
         .as_ref()
@@ -170,7 +163,10 @@ pub fn get_repo_metadata(path: String) -> Result<RepoMetadata, String> {
     let status = git_output_allow_fail(&path_buf, &["status", "--porcelain"]);
     let working_tree_clean = status.as_ref().map(|s| s.is_empty());
 
-    let ab = git_output_allow_fail(&path_buf, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
+    let ab = git_output_allow_fail(
+        &path_buf,
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    );
     let (ahead, behind) = ab
         .as_ref()
         .and_then(|s| {
@@ -182,7 +178,7 @@ pub fn get_repo_metadata(path: String) -> Result<RepoMetadata, String> {
         .map(|(a, b)| (Some(a), Some(b)))
         .unwrap_or((None, None));
 
-    Ok(RepoMetadata {
+    let meta = RepoMetadata {
         git_root,
         branch,
         head_short,
@@ -196,7 +192,9 @@ pub fn get_repo_metadata(path: String) -> Result<RepoMetadata, String> {
         behind,
         error: None,
         ..base
-    })
+    };
+    crate::window_title::set_main_window_title(&app, &meta.name);
+    Ok(meta)
 }
 
 fn ensure_git_repo(workdir: &Path) -> Result<(), String> {
@@ -219,11 +217,7 @@ pub fn list_local_branches(path: String) -> Result<Vec<String>, String> {
     ensure_git_repo(&path_buf)?;
     let out = git_output(
         &path_buf,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "refs/heads/",
-        ],
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
     )?;
     let mut branches: Vec<String> = out
         .lines()
@@ -241,11 +235,7 @@ pub fn list_remote_branches(path: String) -> Result<Vec<String>, String> {
     ensure_git_repo(&path_buf)?;
     let out = git_output(
         &path_buf,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "refs/remotes/",
-        ],
+        &["for-each-ref", "--format=%(refname:short)", "refs/remotes/"],
     )?;
     let mut branches: Vec<String> = out
         .lines()

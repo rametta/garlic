@@ -100,10 +100,6 @@ function formatDate(iso: string | null): string | null {
   });
 }
 
-function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="kbd kbd-sm">{children}</kbd>;
-}
-
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[8.5rem_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
@@ -197,14 +193,7 @@ function BranchPanel({
   );
 }
 
-export default function App({
-  startup,
-  initialTheme,
-}: {
-  startup: RestoreLastRepo;
-  initialTheme: string;
-}) {
-  const [theme, setTheme] = useState<string>(initialTheme);
+export default function App({ startup }: { startup: RestoreLastRepo }) {
   const [repo, setRepo] = useState<RepoMetadata | null>(() => startup.metadata ?? null);
   const [loadError, setLoadError] = useState<string | null>(() => startup.loadError ?? null);
   const [loading, setLoading] = useState(false);
@@ -253,6 +242,7 @@ export default function App({
         setRemoteBranches([]);
         setCommits([]);
         setLoadError(e instanceof Error ? e.message : String(e));
+        void invoke("reset_main_window_title").catch(() => {});
       } finally {
         setLoading(false);
       }
@@ -276,18 +266,29 @@ export default function App({
   }, [repo, refreshLists]);
 
   useEffect(() => {
-    const promise = listen("open-repo-request", async () => {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: "Open repository",
-      });
-      if (selected === null || Array.isArray(selected)) return;
-      await loadRepo(selected);
-    });
+    const promise = Promise.all([
+      listen("open-repo-request", () => {
+        void (async () => {
+          const selected = await open({
+            directory: true,
+            multiple: false,
+            title: "Open repository",
+          });
+          if (selected === null || Array.isArray(selected)) return;
+          await loadRepo(selected);
+        })();
+      }),
+      listen<{ theme: string }>("theme-changed", (e) => {
+        document.documentElement.setAttribute("data-theme", e.payload.theme);
+      }),
+    ]);
 
     return () => {
-      void promise.then((unlisten) => unlisten());
+      void promise.then((listeners) => {
+        for (const u of listeners) {
+          u();
+        }
+      });
     };
   }, [loadRepo]);
 
@@ -330,35 +331,6 @@ export default function App({
 
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
-      <header className="mb-6 grid max-w-4xl grid-cols-12 gap-3 lg:items-start">
-        <div className="col-span-12 lg:col-span-8">
-          <h1 className="mb-1 text-2xl font-semibold tracking-tight">Git GUI</h1>
-          <p className="m-0 text-[0.9375rem] text-base-content/80">
-            Use <Kbd>File</Kbd> → <Kbd>Open Repository…</Kbd> to choose a local folder.
-          </p>
-        </div>
-        <div className="col-span-12 flex w-full max-w-xs shrink-0 flex-col gap-1 lg:col-span-4 lg:justify-self-end">
-          <span className="text-xs opacity-70">Theme</span>
-          <select
-            className="select-bordered select w-full select-sm"
-            value={theme}
-            onChange={(e) => {
-              const next = e.target.value;
-              document.documentElement.setAttribute("data-theme", next);
-              setTheme(next);
-              void invoke("set_theme", { theme: next });
-            }}
-            aria-label="Theme"
-          >
-            {DAISY_THEMES.map((t) => (
-              <option key={t} value={t}>
-                {t.charAt(0).toUpperCase() + t.slice(1)}
-              </option>
-            ))}
-          </select>
-        </div>
-      </header>
-
       <div
         className="grid flex-1 grid-cols-12 gap-4 lg:items-start"
         aria-live="polite"
@@ -438,15 +410,6 @@ export default function App({
                 </div>
               ) : repo ? (
                 <>
-                  <div className="mb-4 text-center">
-                    <p className="mb-1.5 text-xs font-semibold tracking-wide uppercase opacity-70">
-                      Current repository
-                    </p>
-                    <p className="m-0 text-xl font-semibold tracking-tight wrap-break-word">
-                      {repo.name}
-                    </p>
-                  </div>
-
                   {repo.error ? (
                     <>
                       <div role="status" className="alert text-sm alert-warning">
