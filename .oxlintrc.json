@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "react"],
+  "env": {
+    "builtin": true,
+    "browser": true
+  },
+  "settings": {
+    "react": {
+      "version": "19.1.0"
+    }
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/src-tauri/target/**",
+    "**/src-tauri/gen/**"
+  ]
+}

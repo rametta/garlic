@@ -1,13 +1,16 @@
 {
   "name": "git-gui-app",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "lint": "oxlint .",
+    "fmt": "oxfmt --write .",
+    "fmt:check": "oxfmt --check ."
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -22,6 +25,8 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "oxfmt": "^0.42.0",
+    "oxlint": "^1.57.0",
     "tailwindcss": "^4.2.2",
     "typescript": "~5.8.3",
     "vite": "^7.0.4"

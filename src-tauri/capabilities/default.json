@@ -3,10 +3,5 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "dialog:default",
-    "opener:default",
-    "allow-get-repo-metadata"
-  ]
+  "permissions": ["core:default", "dialog:default", "opener:default", "allow-get-repo-metadata"]
 }
