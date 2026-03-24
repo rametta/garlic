@@ -330,14 +330,14 @@ export default function App({
 
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
-      <header className="mb-6 flex max-w-4xl flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
+      <header className="mb-6 grid max-w-4xl grid-cols-12 gap-3 lg:items-start">
+        <div className="col-span-12 lg:col-span-8">
           <h1 className="mb-1 text-2xl font-semibold tracking-tight">Git GUI</h1>
           <p className="m-0 text-[0.9375rem] text-base-content/80">
             Use <Kbd>File</Kbd> → <Kbd>Open Repository…</Kbd> to choose a local folder.
           </p>
         </div>
-        <div className="flex w-full max-w-xs shrink-0 flex-col gap-1">
+        <div className="col-span-12 flex w-full max-w-xs shrink-0 flex-col gap-1 lg:col-span-4 lg:justify-self-end">
           <span className="text-xs opacity-70">Theme</span>
           <select
             className="select-bordered select w-full select-sm"
@@ -360,11 +360,11 @@ export default function App({
       </header>
 
       <div
-        className="grid flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(200px,280px)_minmax(0,1fr)] lg:items-start"
+        className="grid flex-1 grid-cols-12 gap-4 lg:items-start"
         aria-live="polite"
         aria-busy={loading}
       >
-        <aside className="flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)]">
+        <aside className="col-span-12 flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3 lg:max-h-[calc(100vh-3rem)]">
           <BranchPanel
             title="Local branches"
             empty={canShowBranches && localBranches.length === 0}
@@ -422,7 +422,7 @@ export default function App({
           </BranchPanel>
         </aside>
 
-        <div className="flex min-w-0 flex-col gap-4">
+        <div className="col-span-12 flex min-w-0 flex-col gap-4 lg:col-span-9">
           <section className="card border-base-300 bg-base-100 shadow-md">
             <div className="card-body px-6 py-5">
               {loading ? (

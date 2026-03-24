@@ -1,5 +1,4 @@
 @import "tailwindcss";
-/* Default plugin only emits light + dark; include all themes so [data-theme=…] works. */
 @plugin "daisyui" {
   themes: all;
 }
