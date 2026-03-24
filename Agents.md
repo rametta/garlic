@@ -21,6 +21,12 @@ Desktop **Git client** with a simple UI: open or clone repos, manage branches an
 
 Git operations should run where it fits the design: typically **Tauri commands** invoking `git` (CLI) or a Rust Git library, with results returned to the UI. Keep the React side focused on state, views, and calling the backend.
 
+**Persisted app data** (last opened repo, theme, future settings) belongs in the **Rust layer**: write under the app config (e.g. `settings.json` via `AppHandle::path().app_config_dir()`), expose **`invoke` commands** (`restore_app_bootstrap`, `set_last_repo_path`, `set_theme`, …), and **bootstrap the UI** in `main.tsx` (await `invoke` before `createRoot`, set `document.documentElement.dataset.theme` for DaisyUI before paint) so the shell does not need a `useEffect` to “hydrate” from the backend.
+
+### React / `useEffect`
+
+Treat **`useEffect` as a last resort**. Prefer: **event handlers** and **data from props** (including values resolved before `createRoot` in `main.tsx`), **`useMemo` / `useCallback`** for derived state, and **Tauri events** with `listen` only when you truly need a subscription to a side channel (e.g. menu → `open-repo-request`). Avoid “load data on mount” effects when the same data can come from a Tauri command awaited at startup or from user actions.
+
 ## Core features (must support)
 
 1. **Clone** — clone a remote URL into a chosen local path; surface progress/errors clearly.
@@ -50,4 +56,4 @@ Git operations should run where it fits the design: typically **Tauri commands**
 - `src-tauri/` — Rust, Tauri config, **invoke handlers** for Git.
 - `package.json` — frontend scripts; `tauri` CLI for dev/build.
 
-When adding behavior, extend **Tauri commands** + **typed TS wrappers** (`@tauri-apps/api` `invoke`) so the UI stays thin.
+When adding behavior, extend **Tauri commands** + **typed TS wrappers** (`@tauri-apps/api` `invoke`) so the UI stays thin. Register new commands in `src-tauri/src/lib.rs` and allow them in `src-tauri/capabilities/default.json` when required.

@@ -3,9 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
-const THEME_STORAGE_KEY = "git-gui-theme";
-
-const DAISY_THEMES = [
+export const DAISY_THEMES = [
   "light",
   "dark",
   "cupcake",
@@ -52,6 +50,45 @@ interface CommitEntry {
   author: string;
   date: string;
 }
+
+/** Repo snapshot from `restore_app_bootstrap` (`repo` field). */
+export interface RestoreLastRepo {
+  loadError: string | null;
+  metadata: RepoMetadata | null;
+  localBranches: string[];
+  remoteBranches: string[];
+  commits: CommitEntry[];
+  listsError: string | null;
+}
+
+export const emptyRestoreLastRepo: RestoreLastRepo = {
+  loadError: null,
+  metadata: null,
+  localBranches: [],
+  remoteBranches: [],
+  commits: [],
+  listsError: null,
+};
+
+export const DEFAULT_THEME = "light";
+
+export function resolveDaisyTheme(saved: string | null | undefined): string {
+  if (saved && DAISY_THEMES.includes(saved as (typeof DAISY_THEMES)[number])) {
+    return saved;
+  }
+  return DEFAULT_THEME;
+}
+
+/** Payload from `restore_app_bootstrap` (Rust settings + repo snapshot). */
+export interface AppBootstrap {
+  repo: RestoreLastRepo;
+  theme: string | null;
+}
+
+export const emptyAppBootstrap: AppBootstrap = {
+  repo: emptyRestoreLastRepo,
+  theme: null,
+};
 
 function formatDate(iso: string | null): string | null {
   if (!iso) return null;
@@ -160,24 +197,22 @@ function BranchPanel({
   );
 }
 
-function App() {
-  const [theme, setTheme] = useState<string>(() => {
-    if (typeof window === "undefined") return "light";
-    return localStorage.getItem(THEME_STORAGE_KEY) ?? "light";
-  });
-  const [repo, setRepo] = useState<RepoMetadata | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+export default function App({
+  startup,
+  initialTheme,
+}: {
+  startup: RestoreLastRepo;
+  initialTheme: string;
+}) {
+  const [theme, setTheme] = useState<string>(initialTheme);
+  const [repo, setRepo] = useState<RepoMetadata | null>(() => startup.metadata ?? null);
+  const [loadError, setLoadError] = useState<string | null>(() => startup.loadError ?? null);
   const [loading, setLoading] = useState(false);
-  const [localBranches, setLocalBranches] = useState<string[]>([]);
-  const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
-  const [commits, setCommits] = useState<CommitEntry[]>([]);
+  const [localBranches, setLocalBranches] = useState<string[]>(() => startup.localBranches);
+  const [remoteBranches, setRemoteBranches] = useState<string[]>(() => startup.remoteBranches);
+  const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
   const [branchBusy, setBranchBusy] = useState<string | null>(null);
-  const [listsError, setListsError] = useState<string | null>(null);
-
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem(THEME_STORAGE_KEY, theme);
-  }, [theme]);
+  const [listsError, setListsError] = useState<string | null>(() => startup.listsError ?? null);
 
   const refreshLists = useCallback(async (repoPath: string) => {
     setListsError(null);
@@ -205,6 +240,7 @@ function App() {
         });
         setRepo(meta);
         if (!meta.error) {
+          await invoke("set_last_repo_path", { path: selected });
           await refreshLists(selected);
         } else {
           setLocalBranches([]);
@@ -306,7 +342,12 @@ function App() {
           <select
             className="select-bordered select w-full select-sm"
             value={theme}
-            onChange={(e) => setTheme(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              document.documentElement.setAttribute("data-theme", next);
+              setTheme(next);
+              void invoke("set_theme", { theme: next });
+            }}
             aria-label="Theme"
           >
             {DAISY_THEMES.map((t) => (
@@ -482,5 +523,3 @@ function App() {
     </main>
   );
 }
-
-export default App;

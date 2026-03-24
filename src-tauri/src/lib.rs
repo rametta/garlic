@@ -1,4 +1,5 @@
 mod git;
+mod settings;
 
 use tauri::menu::{Menu, MenuEvent, MenuItem, Submenu};
 use tauri::Emitter;
@@ -15,6 +16,9 @@ pub fn run() {
             git::list_branch_commits,
             git::checkout_local_branch,
             git::create_branch_from_remote,
+            settings::restore_app_bootstrap,
+            settings::set_last_repo_path,
+            settings::set_theme,
         ])
         .setup(|app| {
             let open_repo = MenuItem::with_id(
