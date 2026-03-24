@@ -1,3 +1,5 @@
+mod git;
+
 use tauri::menu::{Menu, MenuEvent, MenuItem, Submenu};
 use tauri::Emitter;
 
@@ -6,6 +8,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![git::get_repo_metadata])
         .setup(|app| {
             let open_repo = MenuItem::with_id(
                 app,

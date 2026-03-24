@@ -1,7 +1,5 @@
-# Tauri + React + Typescript
+# Git GUI App
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Desktop **Git client** with a simple UI: open or clone repos, manage branches and remotes, **rebase**, stage and commit, push, and **see branch history in a tree-shaped graph** (commits and merges), not just a flat list.
 
-## Recommended IDE Setup
-
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+Stack: **Tauri 2** (Rust), **React**, **TypeScript**, **Vite**. Package scripts work with **Bun** (`bun run …`). For the full product brief, features, and repo layout, see [`AGENTS.md`](./AGENTS.md).

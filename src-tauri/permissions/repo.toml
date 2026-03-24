@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-get-repo-metadata"
+description = "Allows reading Git metadata for the repository view."
+commands.allow = ["get_repo_metadata"]
