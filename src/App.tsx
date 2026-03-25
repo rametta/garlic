@@ -84,6 +84,42 @@ function formatDate(iso: string | null): string | null {
   });
 }
 
+/** Short relative label for dense commit rows (e.g. `2h ago`, `3d ago`). */
+function formatRelativeShort(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const t = d.getTime();
+  if (Number.isNaN(t)) return null;
+  const diffSec = Math.round((Date.now() - t) / 1000);
+  if (diffSec < 0) {
+    return formatDate(iso);
+  }
+  if (diffSec < 45) {
+    return "now";
+  }
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) {
+    return `${diffMin}m ago`;
+  }
+  const diffH = Math.round(diffMin / 60);
+  if (diffH < 24) {
+    return `${diffH}h ago`;
+  }
+  const diffD = Math.round(diffH / 24);
+  if (diffD < 7) {
+    return `${diffD}d ago`;
+  }
+  const diffW = Math.round(diffD / 7);
+  if (diffW < 8) {
+    return `${diffW}w ago`;
+  }
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined,
+  });
+}
+
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[8.5rem_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
@@ -942,51 +978,87 @@ export default function App({
                           )}
                         </div>
                       ) : (
-                        <div className="mb-6">
-                          <h2 className="m-0 mb-3 border-b border-base-300 pb-2 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
-                            {commitsSectionTitle}
+                        <div className="mb-4 min-w-0">
+                          <h2 className="m-0 mb-1.5 border-b border-base-300 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                            Commits
                           </h2>
                           {commits.length === 0 ? (
-                            <p className="m-0 text-center text-sm text-base-content/60">
+                            <p className="m-0 text-center text-xs text-base-content/60">
                               No commits to show
                             </p>
                           ) : (
-                            <ol className="m-0 list-none space-y-2 p-0">
-                              {commits.map((c) => {
-                                const isBrowsing = commitBrowseHash === c.hash;
-                                return (
-                                  <li key={c.hash}>
-                                    <button
-                                      type="button"
-                                      className={`w-full rounded-box border px-3 py-2 text-left transition-colors ${
-                                        isBrowsing
-                                          ? "border-primary bg-base-200 ring-1 ring-primary/40"
-                                          : "border-base-300 bg-base-200 hover:bg-base-300/40"
-                                      }`}
-                                      onClick={() => void selectCommit(c.hash)}
+                            <>
+                              <div className="mb-0.5 grid grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,3.5rem)] items-center gap-x-1.5 border-b border-base-300/80 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                <span className="truncate">Branch / tag</span>
+                                <span className="text-center">Graph</span>
+                                <span className="min-w-0 truncate">Commit message</span>
+                                <span className="text-right" />
+                              </div>
+                              <ol className="m-0 list-none p-0">
+                                {commits.map((c, idx) => {
+                                  const isBrowsing = commitBrowseHash === c.hash;
+                                  const branchCell =
+                                    idx === 0 ? (
+                                      <span
+                                        className="flex min-w-0 items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content"
+                                        title={commitsSectionTitle}
+                                      >
+                                        <span className="shrink-0 text-primary" aria-hidden>
+                                          ✓
+                                        </span>
+                                        <span className="min-w-0 truncate font-medium">
+                                          {commitsSectionTitle}
+                                        </span>
+                                      </span>
+                                    ) : (
+                                      <span />
+                                    );
+                                  const rel = formatRelativeShort(c.date);
+                                  const fullTitle = [
+                                    `${c.shortHash} — ${c.subject}`,
+                                    c.author,
+                                    formatDate(c.date) ?? undefined,
+                                  ]
+                                    .filter(Boolean)
+                                    .join("\n");
+                                  return (
+                                    <li
+                                      key={c.hash}
+                                      className="border-b border-base-300/40 last:border-b-0"
                                     >
-                                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                                        <code className="shrink-0 font-mono text-[0.75rem] text-base-content/80">
-                                          {c.shortHash}
-                                        </code>
-                                        <span className="min-w-0 flex-1 font-medium text-base-content">
+                                      <button
+                                        type="button"
+                                        title={fullTitle}
+                                        className={`grid w-full grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,3.5rem)] items-center gap-x-1.5 px-1 py-0.5 text-left text-[0.6875rem] leading-tight transition-colors ${
+                                          isBrowsing
+                                            ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
+                                            : "hover:bg-base-300/40"
+                                        }`}
+                                        onClick={() => void selectCommit(c.hash)}
+                                      >
+                                        <div className="min-w-0">{branchCell}</div>
+                                        <div
+                                          className="relative flex min-h-4.5 w-3.5 shrink-0 flex-col items-center justify-start pt-0.5"
+                                          aria-hidden
+                                        >
+                                          <span className="absolute top-0 bottom-0 left-1/2 w-px -translate-x-1/2 bg-primary/35" />
+                                          <span className="relative z-1 mt-px h-1.5 w-1.5 shrink-0 rounded-full border-base-100 bg-primary ring-1 ring-base-100" />
+                                        </div>
+                                        <span className="min-w-0 truncate text-base-content/90">
                                           {c.subject}
                                         </span>
-                                      </div>
-                                      <p className="mt-1 mb-0 text-xs text-base-content/70">
-                                        {c.author}
-                                        {formatDate(c.date) ? (
-                                          <span className="text-base-content/50">
-                                            {" "}
-                                            · {formatDate(c.date)}
-                                          </span>
-                                        ) : null}
-                                      </p>
-                                    </button>
-                                  </li>
-                                );
-                              })}
-                            </ol>
+                                        <span
+                                          className="shrink-0 text-right text-[0.6rem] text-base-content/45 tabular-nums"
+                                          title={formatDate(c.date) ?? undefined}
+                                        >
+                                          {rel ?? "—"}
+                                        </span>
+                                      </button>
+                                    </li>
+                                  );
+                                })}
+                              </ol>
+                            </>
                           )}
                         </div>
                       )}
