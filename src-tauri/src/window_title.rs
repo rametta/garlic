@@ -4,7 +4,7 @@ use crate::active_repo;
 use tauri::AppHandle;
 use tauri::Manager;
 
-pub const DEFAULT_WINDOW_TITLE: &str = "Git GUI";
+pub const DEFAULT_WINDOW_TITLE: &str = "Garlic";
 
 pub fn set_main_window_title(app: &AppHandle, title: &str) {
     let Some(w) = app.get_webview_window("main") else {

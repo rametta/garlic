@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "git-gui-app",
+  "productName": "Garlic",
   "version": "0.1.0",
-  "identifier": "com.ghost.git",
+  "identifier": "com.garlic.app",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Git GUI",
+        "title": "Garlic",
         "width": 1024,
         "height": 680
       }

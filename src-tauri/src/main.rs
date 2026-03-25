@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    git_gui_app_lib::run()
+    garlic_lib::run()
 }

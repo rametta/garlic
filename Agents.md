@@ -1,4 +1,4 @@
-# Git GUI App — agent context
+# Garlic — agent context
 
 Use this file to align quickly on **what this repo is** and **what to build**. It is the product + stack brief for AI and humans.
 

@@ -1,4 +1,4 @@
-# Git GUI App
+# Garlic
 
 Desktop **Git client** with a simple UI: open or clone repos, manage branches and remotes, **rebase**, stage and commit, push, and **see branch history in a tree-shaped graph** (commits and merges), not just a flat list.
 
