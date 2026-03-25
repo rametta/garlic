@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -227,6 +227,242 @@ function BranchPanel({
       </div>
     </div>
   );
+}
+
+/**
+ * Path segments → nested folders (supports `a` + `a/b` as in Git).
+ * UI: DaisyUI [collapsible submenu](https://daisyui.com/components/menu/#collapsible-submenu) (`li` → `details` → `summary` + `ul`).
+ */
+type BranchTrieNode = {
+  branchHere: LocalBranchEntry | null;
+  children: Map<string, BranchTrieNode>;
+};
+
+function emptyBranchTrieNode(): BranchTrieNode {
+  return { branchHere: null, children: new Map() };
+}
+
+function insertLocalBranchIntoTrie(root: BranchTrieNode, branch: LocalBranchEntry) {
+  const parts = branch.name.split("/").filter((p) => p.length > 0);
+  if (parts.length === 0) return;
+  let node = root;
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i];
+    if (!node.children.has(seg)) {
+      node.children.set(seg, emptyBranchTrieNode());
+    }
+    node = node.children.get(seg)!;
+    if (i === parts.length - 1) {
+      node.branchHere = branch;
+    }
+  }
+}
+
+function buildLocalBranchTrie(branches: LocalBranchEntry[]): BranchTrieNode {
+  const root = emptyBranchTrieNode();
+  for (const b of branches) {
+    insertLocalBranchIntoTrie(root, b);
+  }
+  return root;
+}
+
+type RemoteTrieNode = {
+  refHere: string | null;
+  children: Map<string, RemoteTrieNode>;
+};
+
+function emptyRemoteTrieNode(): RemoteTrieNode {
+  return { refHere: null, children: new Map() };
+}
+
+function insertRemoteRefIntoTrie(root: RemoteTrieNode, fullRef: string) {
+  const parts = fullRef.split("/").filter((p) => p.length > 0);
+  if (parts.length === 0) return;
+  let node = root;
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i];
+    if (!node.children.has(seg)) {
+      node.children.set(seg, emptyRemoteTrieNode());
+    }
+    node = node.children.get(seg)!;
+    if (i === parts.length - 1) {
+      node.refHere = fullRef;
+    }
+  }
+}
+
+function buildRemoteBranchTrie(refs: string[]): RemoteTrieNode {
+  const root = emptyRemoteTrieNode();
+  for (const r of refs) {
+    insertRemoteRefIntoTrie(root, r);
+  }
+  return root;
+}
+
+function LocalBranchRow({
+  branch,
+  currentBranchName,
+  branchBusy,
+  onCheckoutLocal,
+}: {
+  branch: LocalBranchEntry;
+  currentBranchName: string | null;
+  branchBusy: string | null;
+  onCheckoutLocal: (name: string) => void;
+}) {
+  const isCurrent = currentBranchName === branch.name;
+  const busy = branchBusy === `local:${branch.name}`;
+  const upstreamLabel = localBranchUpstreamLabel(
+    branch.ahead,
+    branch.behind,
+    branch.upstreamName ?? null,
+  );
+  return (
+    <li className={isCurrent ? "menu-active" : ""}>
+      <button
+        type="button"
+        disabled={busy || isCurrent}
+        onClick={() => {
+          onCheckoutLocal(branch.name);
+        }}
+        className={`flex h-auto min-h-0 flex-col items-stretch justify-start gap-0.5 py-2 text-left whitespace-normal ${busy ? "opacity-60" : ""}`}
+      >
+        <span className="flex w-full min-w-0 items-baseline justify-between gap-2">
+          <span className="min-w-0 wrap-break-word">
+            {busy ? "Switching…" : branch.name}
+            {isCurrent && !busy ? (
+              <span className="ml-1.5 text-xs font-normal opacity-70">(current)</span>
+            ) : null}
+          </span>
+          {upstreamLabel && !busy ? (
+            <span
+              className={`shrink-0 font-mono text-[0.65rem] leading-none tracking-tight ${
+                isCurrent ? "text-inherit opacity-90" : "text-base-content/60"
+              }`}
+              title={
+                branch.upstreamName
+                  ? `Ahead of ${branch.upstreamName}: ${branch.ahead ?? 0}; behind: ${branch.behind ?? 0}`
+                  : "Commits ahead / behind configured upstream"
+              }
+            >
+              {upstreamLabel}
+            </span>
+          ) : null}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function renderLocalBranchTrieChildren(
+  node: BranchTrieNode,
+  currentBranchName: string | null,
+  branchBusy: string | null,
+  onCheckoutLocal: (name: string) => void,
+): ReactNode {
+  const sorted = [...node.children.entries()].sort((a, b) =>
+    a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
+  );
+  return sorted.map(([segment, child]) => {
+    const leafOnly = child.children.size === 0 && child.branchHere !== null;
+    if (leafOnly) {
+      const b = child.branchHere!;
+      return (
+        <LocalBranchRow
+          key={b.name}
+          branch={b}
+          currentBranchName={currentBranchName}
+          branchBusy={branchBusy}
+          onCheckoutLocal={onCheckoutLocal}
+        />
+      );
+    }
+    return (
+      <li key={segment}>
+        <details open>
+          <summary className="font-mono text-[0.8125rem]">{segment}</summary>
+          <ul>
+            {child.branchHere ? (
+              <LocalBranchRow
+                branch={child.branchHere}
+                currentBranchName={currentBranchName}
+                branchBusy={branchBusy}
+                onCheckoutLocal={onCheckoutLocal}
+              />
+            ) : null}
+            {renderLocalBranchTrieChildren(child, currentBranchName, branchBusy, onCheckoutLocal)}
+          </ul>
+        </details>
+      </li>
+    );
+  });
+}
+
+function RemoteBranchRow({
+  fullRef,
+  branchBusy,
+  onCreateFromRemote,
+}: {
+  fullRef: string;
+  branchBusy: string | null;
+  onCreateFromRemote: (remoteRef: string) => void;
+}) {
+  const busy = branchBusy === `remote:${fullRef}`;
+  return (
+    <li>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          onCreateFromRemote(fullRef);
+        }}
+        className={`h-auto min-h-0 justify-start py-2 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
+      >
+        {busy ? "Creating…" : fullRef}
+      </button>
+    </li>
+  );
+}
+
+function renderRemoteBranchTrieChildren(
+  node: RemoteTrieNode,
+  branchBusy: string | null,
+  onCreateFromRemote: (remoteRef: string) => void,
+): ReactNode {
+  const sorted = [...node.children.entries()].sort((a, b) =>
+    a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
+  );
+  return sorted.map(([segment, child]) => {
+    const leafOnly = child.children.size === 0 && child.refHere !== null;
+    if (leafOnly) {
+      const r = child.refHere!;
+      return (
+        <RemoteBranchRow
+          key={r}
+          fullRef={r}
+          branchBusy={branchBusy}
+          onCreateFromRemote={onCreateFromRemote}
+        />
+      );
+    }
+    return (
+      <li key={segment}>
+        <details open>
+          <summary className="font-mono text-[0.8125rem]">{segment}</summary>
+          <ul>
+            {child.refHere ? (
+              <RemoteBranchRow
+                fullRef={child.refHere}
+                branchBusy={branchBusy}
+                onCreateFromRemote={onCreateFromRemote}
+              />
+            ) : null}
+            {renderRemoteBranchTrieChildren(child, branchBusy, onCreateFromRemote)}
+          </ul>
+        </details>
+      </li>
+    );
+  });
 }
 
 export default function App({
@@ -729,6 +965,12 @@ export default function App({
   const showExpandedDiff =
     Boolean(selectedDiffPath || commitDiffPath) && !listsError && Boolean(repo && !repo.error);
 
+  const localBranchTrieRoot = useMemo(() => buildLocalBranchTrie(localBranches), [localBranches]);
+  const remoteBranchTrieRoot = useMemo(
+    () => buildRemoteBranchTrie(remoteBranches),
+    [remoteBranches],
+  );
+
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
       <div
@@ -838,50 +1080,14 @@ export default function App({
           >
             {canShowBranches ? (
               <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                {localBranches.map((b) => {
-                  const isCurrent = currentBranchName === b.name;
-                  const busy = branchBusy === `local:${b.name}`;
-                  const upstreamLabel = localBranchUpstreamLabel(
-                    b.ahead,
-                    b.behind,
-                    b.upstreamName ?? null,
-                  );
-                  return (
-                    <li key={b.name} className={isCurrent ? "menu-active" : ""}>
-                      <button
-                        type="button"
-                        disabled={busy || isCurrent}
-                        onClick={() => void onCheckoutLocal(b.name)}
-                        className={`flex h-auto min-h-0 flex-col items-stretch justify-start gap-0.5 py-2 text-left whitespace-normal ${busy ? "opacity-60" : ""}`}
-                      >
-                        <span className="flex w-full min-w-0 items-baseline justify-between gap-2">
-                          <span className="min-w-0 wrap-break-word">
-                            {busy ? "Switching…" : b.name}
-                            {isCurrent && !busy ? (
-                              <span className="ml-1.5 text-xs font-normal opacity-70">
-                                (current)
-                              </span>
-                            ) : null}
-                          </span>
-                          {upstreamLabel && !busy ? (
-                            <span
-                              className={`shrink-0 font-mono text-[0.65rem] leading-none tracking-tight ${
-                                isCurrent ? "text-inherit opacity-90" : "text-base-content/60"
-                              }`}
-                              title={
-                                b.upstreamName
-                                  ? `Ahead of ${b.upstreamName}: ${b.ahead ?? 0}; behind: ${b.behind ?? 0}`
-                                  : "Commits ahead / behind configured upstream"
-                              }
-                            >
-                              {upstreamLabel}
-                            </span>
-                          ) : null}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
+                {renderLocalBranchTrieChildren(
+                  localBranchTrieRoot,
+                  currentBranchName,
+                  branchBusy,
+                  (name) => {
+                    void onCheckoutLocal(name);
+                  },
+                )}
               </ul>
             ) : null}
           </BranchPanel>
@@ -893,20 +1099,8 @@ export default function App({
           >
             {canShowBranches ? (
               <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                {remoteBranches.map((r) => {
-                  const busy = branchBusy === `remote:${r}`;
-                  return (
-                    <li key={r}>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void onCreateFromRemote(r)}
-                        className={`h-auto min-h-0 justify-start py-2 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
-                      >
-                        {busy ? "Creating…" : r}
-                      </button>
-                    </li>
-                  );
+                {renderRemoteBranchTrieChildren(remoteBranchTrieRoot, branchBusy, (remoteRef) => {
+                  void onCreateFromRemote(remoteRef);
                 })}
               </ul>
             ) : null}
