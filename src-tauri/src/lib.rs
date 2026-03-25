@@ -82,6 +82,7 @@ pub fn run() {
             git::list_graph_commits,
             git::checkout_local_branch,
             git::create_local_branch,
+            git::create_branch_at_commit,
             git::create_branch_from_remote,
             git::delete_local_branch,
             git::rebase_current_branch_onto,

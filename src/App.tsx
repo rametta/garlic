@@ -909,6 +909,8 @@ export default function App({
   const focusRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [newBranchName, setNewBranchName] = useState("");
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
+  /** When set, the create-branch dialog starts the branch at this commit instead of HEAD. */
+  const [createBranchStartCommit, setCreateBranchStartCommit] = useState<string | null>(null);
   /** Case-insensitive substring filter for local + remote branch lists in the sidebar. */
   const [branchListFilter, setBranchListFilter] = useState("");
   /** Right-click context menu on a local or remote branch row (`clientX` / `clientY` for positioning). */
@@ -1569,6 +1571,19 @@ export default function App({
   }
 
   function openCreateBranchDialog() {
+    setCreateBranchStartCommit(null);
+    setNewBranchName("");
+    setCreateBranchFieldError(null);
+    setOperationError(null);
+    createBranchDialogRef.current?.showModal();
+    requestAnimationFrame(() => {
+      newBranchInputRef.current?.focus();
+    });
+  }
+
+  function openCreateBranchFromCommitDialog(commitHash: string) {
+    setGraphCommitContextMenu(null);
+    setCreateBranchStartCommit(commitHash);
     setNewBranchName("");
     setCreateBranchFieldError(null);
     setOperationError(null);
@@ -1594,10 +1609,18 @@ export default function App({
     setBranchBusy("create");
     setOperationError(null);
     try {
-      await invoke("create_local_branch", {
-        path: repo.path,
-        branch: trimmed,
-      });
+      if (createBranchStartCommit) {
+        await invoke("create_branch_at_commit", {
+          path: repo.path,
+          branch: trimmed,
+          commit: createBranchStartCommit,
+        });
+      } else {
+        await invoke("create_local_branch", {
+          path: repo.path,
+          branch: trimmed,
+        });
+      }
       createBranchDialogRef.current?.close();
       await refreshAfterMutation();
     } catch (e) {
@@ -1790,6 +1813,11 @@ export default function App({
   const canSubmitNewBranch =
     newBranchTrimmed.length > 0 && !newBranchNameInvalid && branchBusy !== "create";
 
+  const createBranchStartEntry = useMemo(() => {
+    if (!createBranchStartCommit) return null;
+    return commits.find((c) => c.hash === createBranchStartCommit) ?? null;
+  }, [commits, createBranchStartCommit]);
+
   const showExpandedDiff =
     Boolean(selectedDiffPath || commitDiffPath) && !listsError && Boolean(repo && !repo.error);
 
@@ -1846,6 +1874,7 @@ export default function App({
             onClose={() => {
               setNewBranchName("");
               setCreateBranchFieldError(null);
+              setCreateBranchStartCommit(null);
             }}
           >
             <div
@@ -1856,8 +1885,20 @@ export default function App({
             >
               <h3 className="m-0 text-lg font-bold">New local branch</h3>
               <p className="mt-1 mb-0 text-sm text-base-content/70">
-                Creates a branch from the current commit and switches to it.
+                {createBranchStartCommit
+                  ? "Creates a branch starting at the chosen commit and switches to it."
+                  : "Creates a branch from the current commit and switches to it."}
               </p>
+              {createBranchStartCommit ? (
+                <p className="mt-2 mb-0 text-xs text-base-content/70">
+                  <span className="font-mono text-base-content/80">
+                    {createBranchStartEntry?.shortHash ?? createBranchStartCommit.slice(0, 7)}
+                  </span>
+                  {createBranchStartEntry?.subject ? (
+                    <span className="block truncate pt-0.5">{createBranchStartEntry.subject}</span>
+                  ) : null}
+                </p>
+              ) : null}
               <label className="form-control mt-4 w-full">
                 <span className="label-text mb-1">Branch name</span>
                 <input
@@ -2951,6 +2992,19 @@ export default function App({
                         }}
                       >
                         Browse commit
+                      </button>
+                    </li>
+                    <li role="none">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="rounded"
+                        disabled={Boolean(branchBusy)}
+                        onClick={() => {
+                          openCreateBranchFromCommitDialog(m.hash);
+                        }}
+                      >
+                        Create branch from here…
                       </button>
                     </li>
                     <li role="none">

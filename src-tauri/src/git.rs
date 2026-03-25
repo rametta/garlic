@@ -713,6 +713,25 @@ pub fn create_local_branch(path: String, branch: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Create a new local branch at `commit` and switch to it (`git switch -c <branch> <start-point>`).
+#[tauri::command]
+pub fn create_branch_at_commit(path: String, branch: String, commit: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let name = branch.trim();
+    if name.is_empty() {
+        return Err("Branch name cannot be empty.".to_string());
+    }
+    let commit = commit.trim();
+    if commit.is_empty() {
+        return Err("Commit cannot be empty.".to_string());
+    }
+    let verify_spec = format!("{commit}^{{commit}}");
+    git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+    git_output(&path_buf, &["switch", "-c", name, commit])?;
+    Ok(())
+}
+
 /// Create a local branch from `remote_ref` (e.g. `origin/feature/foo`) and switch to it.
 #[tauri::command]
 pub fn create_branch_from_remote(path: String, remote_ref: String) -> Result<(), String> {
