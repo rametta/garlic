@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { CommitGraphColumn } from "./components/CommitGraphColumn";
 import { UnifiedDiff } from "./components/UnifiedDiff";
 import {
@@ -527,22 +527,31 @@ function LocalBranchRow({
   currentBranchName,
   branchBusy,
   onCheckoutLocal,
+  onLocalBranchContextMenu,
   graph,
 }: {
   branch: LocalBranchEntry;
   currentBranchName: string | null;
   branchBusy: string | null;
   onCheckoutLocal: (name: string) => void;
+  onLocalBranchContextMenu: (branchName: string, clientX: number, clientY: number) => void;
   graph: BranchGraphControls;
 }) {
   const isCurrent = currentBranchName === branch.name;
-  const busy = branchBusy === `local:${branch.name}`;
+  const busy = branchBusy === `local:${branch.name}` || branchBusy === `delete:${branch.name}`;
   const upstreamLabel = localBranchUpstreamLabel(branch.ahead, branch.behind);
   const graphVisible = graph.graphVisibleLocal(branch.name);
 
   return (
     <li className={isCurrent ? "menu-active" : ""}>
-      <div className="flex w-full min-w-0 items-stretch gap-0">
+      <div
+        className="flex w-full min-w-0 items-stretch gap-0"
+        onContextMenu={(e) => {
+          if (isCurrent || busy) return;
+          e.preventDefault();
+          onLocalBranchContextMenu(branch.name, e.clientX, e.clientY);
+        }}
+      >
         <button
           type="button"
           disabled={busy || isCurrent}
@@ -604,6 +613,7 @@ function renderLocalBranchTrieChildren(
   currentBranchName: string | null,
   branchBusy: string | null,
   onCheckoutLocal: (name: string) => void,
+  onLocalBranchContextMenu: (branchName: string, clientX: number, clientY: number) => void,
   graph: BranchGraphControls,
 ): ReactNode {
   const sorted = [...node.children.entries()].sort((a, b) =>
@@ -620,6 +630,7 @@ function renderLocalBranchTrieChildren(
           currentBranchName={currentBranchName}
           branchBusy={branchBusy}
           onCheckoutLocal={onCheckoutLocal}
+          onLocalBranchContextMenu={onLocalBranchContextMenu}
           graph={graph}
         />
       );
@@ -660,6 +671,7 @@ function renderLocalBranchTrieChildren(
                 currentBranchName={currentBranchName}
                 branchBusy={branchBusy}
                 onCheckoutLocal={onCheckoutLocal}
+                onLocalBranchContextMenu={onLocalBranchContextMenu}
                 graph={graph}
               />
             ) : null}
@@ -668,6 +680,7 @@ function renderLocalBranchTrieChildren(
               currentBranchName,
               branchBusy,
               onCheckoutLocal,
+              onLocalBranchContextMenu,
               graph,
             )}
           </ul>
@@ -857,6 +870,12 @@ export default function App({
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
   /** Case-insensitive substring filter for local + remote branch lists in the sidebar. */
   const [branchListFilter, setBranchListFilter] = useState("");
+  /** Right-click context menu on a local branch row (`clientX` / `clientY` for positioning). */
+  const [branchContextMenu, setBranchContextMenu] = useState<{
+    branchName: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
@@ -878,6 +897,23 @@ export default function App({
   useEffect(() => {
     setBranchListFilter("");
   }, [repo?.path]);
+
+  useEffect(() => {
+    setBranchContextMenu(null);
+  }, [repo?.path]);
+
+  useEffect(() => {
+    if (!branchContextMenu) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setBranchContextMenu(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [branchContextMenu]);
 
   useEffect(() => {
     setGraphBranchVisible((prev) => {
@@ -1255,6 +1291,34 @@ export default function App({
       }
     },
     [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse],
+  );
+
+  const deleteLocalBranch = useCallback(
+    async (branchName: string, force: boolean) => {
+      if (!repo?.path || repo.error) return;
+      const ok = await ask(
+        force
+          ? `Force-delete local branch "${branchName}"? Unmerged work on this branch will be lost.`
+          : `Delete local branch "${branchName}"?`,
+        { title: "Garlic", kind: "warning" },
+      );
+      if (!ok) return;
+      setBranchBusy(`delete:${branchName}`);
+      setOperationError(null);
+      try {
+        await invoke("delete_local_branch", {
+          path: repo.path,
+          branch: branchName,
+          force,
+        });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, refreshAfterMutation],
   );
 
   useEffect(() => {
@@ -1682,6 +1746,9 @@ export default function App({
                   branchBusy,
                   (name) => {
                     void onCheckoutLocal(name);
+                  },
+                  (branchName, clientX, clientY) => {
+                    setBranchContextMenu({ branchName, x: clientX, y: clientY });
                   },
                   branchGraphControls,
                 )}
@@ -2343,6 +2410,56 @@ export default function App({
           </div>
         </aside>
       </div>
+      {branchContextMenu ? (
+        <>
+          <div
+            className="fixed inset-0 z-[100]"
+            role="presentation"
+            onClick={() => {
+              setBranchContextMenu(null);
+            }}
+          />
+          <ul
+            role="menu"
+            className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
+            style={{
+              left: Math.min(Math.max(8, branchContextMenu.x), window.innerWidth - 228),
+              top: Math.min(Math.max(8, branchContextMenu.y), window.innerHeight - 148),
+            }}
+          >
+            <li role="none">
+              <button
+                type="button"
+                role="menuitem"
+                className="rounded"
+                disabled={Boolean(branchBusy)}
+                onClick={() => {
+                  const name = branchContextMenu.branchName;
+                  setBranchContextMenu(null);
+                  void deleteLocalBranch(name, false);
+                }}
+              >
+                Delete branch…
+              </button>
+            </li>
+            <li role="none">
+              <button
+                type="button"
+                role="menuitem"
+                className="rounded text-error"
+                disabled={Boolean(branchBusy)}
+                onClick={() => {
+                  const name = branchContextMenu.branchName;
+                  setBranchContextMenu(null);
+                  void deleteLocalBranch(name, true);
+                }}
+              >
+                Force delete…
+              </button>
+            </li>
+          </ul>
+        </>
+      ) : null}
     </main>
   );
 }

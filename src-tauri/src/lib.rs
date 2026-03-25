@@ -83,6 +83,7 @@ pub fn run() {
             git::checkout_local_branch,
             git::create_local_branch,
             git::create_branch_from_remote,
+            git::delete_local_branch,
             git::list_working_tree_files,
             git::stage_paths,
             git::unstage_paths,

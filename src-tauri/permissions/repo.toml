@@ -11,6 +11,7 @@ commands.allow = [
   "checkout_local_branch",
   "create_local_branch",
   "create_branch_from_remote",
+  "delete_local_branch",
   "list_working_tree_files",
   "stage_paths",
   "unstage_paths",

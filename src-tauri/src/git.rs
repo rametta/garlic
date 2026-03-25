@@ -622,6 +622,20 @@ pub fn create_branch_from_remote(path: String, remote_ref: String) -> Result<(),
     Ok(())
 }
 
+/// Delete a local branch (`git branch -d` or `-D` when `force`).
+#[tauri::command]
+pub fn delete_local_branch(path: String, branch: String, force: bool) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let name = branch.trim();
+    if name.is_empty() {
+        return Err("Branch name cannot be empty.".to_string());
+    }
+    let flag = if force { "-D" } else { "-d" };
+    git_output(&path_buf, &["branch", flag, name])?;
+    Ok(())
+}
+
 fn non_empty_lines(text: &str) -> Vec<String> {
     text.lines()
         .map(|s| s.trim().to_string())

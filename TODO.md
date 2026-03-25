@@ -1,7 +1,7 @@
 - [x] Add eye icon in lefthand sidebar next to branch groups so to hide all branches in the folder at the same time
 - [x] Add an input textbox to the lefthand sidebar to do some filtering on branches so that it's easier to find some branches when there are a lot.
-- [] Add ability to delete a local branch.
+- [x] Add ability to delete a local branch with right click menu.
 - [x] Add syntax highlighting to the diff view for popular languages
 - [] Add ability to stash current changes - show all stashes available in the left hand column as a card underneath the remote branches box and ability to pop stash.
-- [] Add ability to do interactive rebasing - this should be a right-click option on branches and select the branch to rebase on top of.
+- [] Add ability to do regular rebase and interactive rebasing - this should be a right-click option on branches and select the branch to rebase on top of.
 - [] Lazy load more commits when reaching the bottom of the graph list.
