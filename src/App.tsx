@@ -1530,6 +1530,9 @@ export default function App({
         setThemePreference(pref);
         document.documentElement.setAttribute("data-theme", resolveThemePreference(pref));
       }),
+      listen("repository-mutated", () => {
+        void refreshAfterMutation();
+      }),
       listen("window-focused", () => {
         if (focusRefreshDebounceRef.current !== null) {
           clearTimeout(focusRefreshDebounceRef.current);

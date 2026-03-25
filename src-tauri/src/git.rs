@@ -1292,6 +1292,18 @@ pub fn pull_local_branch(path: String, branch: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Current branch name, or an error if `HEAD` is detached or the path is not a repo.
+pub fn current_branch_name(path: impl AsRef<Path>) -> Result<String, String> {
+    let path_buf = path.as_ref().to_path_buf();
+    ensure_git_repo(&path_buf)?;
+    let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let head_ref = head_ref.trim();
+    if head_ref == "HEAD" {
+        return Err("Cannot push while in detached HEAD. Check out a branch first.".to_string());
+    }
+    Ok(head_ref.to_string())
+}
+
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).
 #[tauri::command]
 pub fn push_to_origin(path: String) -> Result<(), String> {
@@ -1306,5 +1318,26 @@ pub fn push_to_origin(path: String) -> Result<(), String> {
             .to_string()
     })?;
     git_output(&path_buf, &["push", "-u", "origin", "HEAD"])?;
+    Ok(())
+}
+
+/// Force-push the current branch to `origin` with lease (`git push --force-with-lease -u origin HEAD`).
+/// Refuses if `HEAD` is detached or `origin` is missing (same rules as [`push_to_origin`]).
+#[tauri::command]
+pub fn force_push_to_origin(path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if head_ref.trim() == "HEAD" {
+        return Err("Cannot push while in detached HEAD. Check out a branch first.".to_string());
+    }
+    git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
+        "No remote named \"origin\" configured. Add it under Remotes or use git remote add."
+            .to_string()
+    })?;
+    git_output(
+        &path_buf,
+        &["push", "--force-with-lease", "-u", "origin", "HEAD"],
+    )?;
     Ok(())
 }

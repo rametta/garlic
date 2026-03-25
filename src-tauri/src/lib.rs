@@ -8,7 +8,7 @@ use tauri::Emitter;
 use tauri::Manager;
 use tauri::WindowEvent;
 use tauri::Wry;
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 const RECENT_MENU_SLOTS: usize = settings::MAX_RECENT_REPO_PATHS;
 
@@ -97,6 +97,7 @@ pub fn run() {
             git::get_commit_file_diff,
             git::pull_local_branch,
             git::push_to_origin,
+            git::force_push_to_origin,
             git::list_stashes,
             git::stash_push,
             git::stash_pop,
@@ -139,7 +140,19 @@ pub fn run() {
 
             let repo_metadata =
                 MenuItem::with_id(app, "repo_metadata", "Repo Metadata", true, None::<&str>)?;
-            let repo_menu = Submenu::with_items(app, "Repository", true, &[&repo_metadata])?;
+            let force_push = MenuItem::with_id(
+                app,
+                "force_push",
+                "Force Push…",
+                true,
+                None::<&str>,
+            )?;
+            let repo_menu = Submenu::with_items(
+                app,
+                "Repository",
+                true,
+                &[&repo_metadata, &force_push],
+            )?;
 
             let current = settings::persisted_theme_preference(&app.handle());
             let mut checks = Vec::new();
@@ -229,6 +242,63 @@ pub fn run() {
                             .show(|_| {});
                     }
                 }
+                return;
+            }
+            if menu_id_is(&event, "force_push") {
+                let handle = app.clone();
+                let path_opt = handle
+                    .try_state::<active_repo::ActiveRepoPath>()
+                    .and_then(|state| state.0.lock().ok().map(|g| (*g).clone()).flatten());
+                let Some(path) = path_opt else {
+                    handle
+                        .dialog()
+                        .message("No repository is open.")
+                        .title("Force Push")
+                        .kind(MessageDialogKind::Info)
+                        .show(|_| {});
+                    return;
+                };
+                let branch_name = match git::current_branch_name(&path) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        handle
+                            .dialog()
+                            .message(e)
+                            .title("Force Push")
+                            .kind(MessageDialogKind::Warning)
+                            .show(|_| {});
+                        return;
+                    }
+                };
+                let msg = format!(
+                    r#"Force push "{branch_name}" to origin? This runs git push --force-with-lease: the remote branch will be updated to match your local tip, but only if the remote has not received new commits (otherwise the push is rejected)."#
+                );
+                let handle_confirm = handle.clone();
+                let path_for_push = path.clone();
+                handle
+                    .dialog()
+                    .message(msg)
+                    .title("Garlic")
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::YesNo)
+                    .show(move |confirmed| {
+                        if !confirmed {
+                            return;
+                        }
+                        match git::force_push_to_origin(path_for_push) {
+                            Ok(()) => {
+                                let _ = handle_confirm.emit("repository-mutated", ());
+                            }
+                            Err(e) => {
+                                let h = handle_confirm.clone();
+                                h.dialog()
+                                    .message(e)
+                                    .title("Force Push")
+                                    .kind(MessageDialogKind::Error)
+                                    .show(|_| {});
+                            }
+                        }
+                    });
                 return;
             }
             let id = event.id().as_ref();
