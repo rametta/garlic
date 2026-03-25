@@ -41,6 +41,8 @@ pub fn run() {
             git::stage_paths,
             git::unstage_paths,
             git::commit_staged,
+            git::get_staged_diff,
+            git::get_unstaged_diff,
             git::push_to_origin,
             settings::restore_app_bootstrap,
             settings::set_last_repo_path,
@@ -58,7 +60,8 @@ pub fn run() {
             )?;
             let file_menu = Submenu::with_items(app, "File", true, &[&open_repo])?;
 
-            let repo_metadata = MenuItem::with_id(app, "repo_metadata", "Repo Metadata", true, None::<&str>)?;
+            let repo_metadata =
+                MenuItem::with_id(app, "repo_metadata", "Repo Metadata", true, None::<&str>)?;
             let repo_menu = Submenu::with_items(app, "Repository", true, &[&repo_metadata])?;
 
             let current = settings::persisted_theme_preference(&app.handle());

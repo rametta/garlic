@@ -292,7 +292,11 @@ fn head_upstream_ahead_behind(workdir: &Path) -> Option<(u32, u32)> {
 fn branch_upstream_abbrev(workdir: &Path, branch: &str) -> Option<String> {
     let s = git_output_allow_fail(
         workdir,
-        &["rev-parse", "--abbrev-ref", &format!("{branch}@{{upstream}}")],
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            &format!("{branch}@{{upstream}}"),
+        ],
     )?;
     let s = s.trim();
     if s.is_empty() {
@@ -480,10 +484,7 @@ fn unstaged_paths(workdir: &Path) -> Result<Vec<String>, String> {
 }
 
 fn untracked_paths(workdir: &Path) -> Result<Vec<String>, String> {
-    let out = git_output(
-        workdir,
-        &["ls-files", "--others", "--exclude-standard"],
-    )?;
+    let out = git_output(workdir, &["ls-files", "--others", "--exclude-standard"])?;
     Ok(non_empty_lines(&out))
 }
 
@@ -492,9 +493,7 @@ fn untracked_paths(workdir: &Path) -> Result<Vec<String>, String> {
 pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let staged = staged_paths(&path_buf)?
-        .into_iter()
-        .collect::<HashSet<_>>();
+    let staged = staged_paths(&path_buf)?.into_iter().collect::<HashSet<_>>();
     let unstaged = unstaged_paths(&path_buf)?
         .into_iter()
         .collect::<HashSet<_>>();
@@ -561,6 +560,35 @@ pub fn commit_staged(path: String, message: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Staged diff for a path (`git diff --cached -- <path>`).
+#[tauri::command]
+pub fn get_staged_diff(path: String, file_path: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["diff", "--cached", "--", rel])
+}
+
+/// Unstaged diff for a path (`git diff -- <path>`), or full file vs empty for untracked paths.
+#[tauri::command]
+pub fn get_unstaged_diff(path: String, file_path: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    let out = git_output(&path_buf, &["diff", "--", rel]);
+    match out {
+        Ok(ref s) if !s.trim().is_empty() => out,
+        Ok(_) => git_output(&path_buf, &["diff", "--no-index", "--", "/dev/null", rel]),
+        Err(e) => Err(e),
+    }
+}
+
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).
 #[tauri::command]
 pub fn push_to_origin(path: String) -> Result<(), String> {
@@ -571,7 +599,8 @@ pub fn push_to_origin(path: String) -> Result<(), String> {
         return Err("Cannot push while in detached HEAD. Check out a branch first.".to_string());
     }
     git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
-        "No remote named \"origin\" configured. Add it under Remotes or use git remote add.".to_string()
+        "No remote named \"origin\" configured. Add it under Remotes or use git remote add."
+            .to_string()
     })?;
     git_output(&path_buf, &["push", "-u", "origin", "HEAD"])?;
     Ok(())

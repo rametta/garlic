@@ -150,13 +150,18 @@ export default function App({
   const [branchBusy, setBranchBusy] = useState<string | null>(null);
   const [listsError, setListsError] = useState<string | null>(() => startup.listsError ?? null);
   const [commitMessage, setCommitMessage] = useState("");
+  const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(null);
+  const [diffStagedText, setDiffStagedText] = useState<string | null>(null);
+  const [diffUnstagedText, setDiffUnstagedText] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const [newBranchName, setNewBranchName] = useState("");
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
-  const refreshLists = useCallback(async (repoPath: string) => {
+  const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
       const [locals, remotes, log, worktree] = await Promise.all([
@@ -169,15 +174,58 @@ export default function App({
       setRemoteBranches(remotes);
       setCommits(log);
       setWorkingTreeFiles(worktree);
+      return worktree;
     } catch (e) {
       setListsError(e instanceof Error ? e.message : String(e));
+      return null;
     }
+  }, []);
+
+  const loadDiffForFile = useCallback(
+    async (f: WorkingTreeFile) => {
+      if (!repo?.path || repo.error) return;
+      if (!f.staged && !f.unstaged) return;
+      setSelectedDiffPath(f.path);
+      setDiffLoading(true);
+      setDiffError(null);
+      setDiffStagedText(null);
+      setDiffUnstagedText(null);
+      try {
+        const [staged, unstaged] = await Promise.all([
+          f.staged
+            ? invoke<string>("get_staged_diff", { path: repo.path, filePath: f.path })
+            : Promise.resolve<string | null>(null),
+          f.unstaged
+            ? invoke<string>("get_unstaged_diff", { path: repo.path, filePath: f.path })
+            : Promise.resolve<string | null>(null),
+        ]);
+        setDiffStagedText(staged);
+        setDiffUnstagedText(unstaged);
+      } catch (e) {
+        setDiffError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setDiffLoading(false);
+      }
+    },
+    [repo],
+  );
+
+  const clearDiffSelection = useCallback(() => {
+    setSelectedDiffPath(null);
+    setDiffStagedText(null);
+    setDiffUnstagedText(null);
+    setDiffError(null);
+    setDiffLoading(false);
   }, []);
 
   const loadRepo = useCallback(
     async (selected: string) => {
       setLoading(true);
       setLoadError(null);
+      setSelectedDiffPath(null);
+      setDiffStagedText(null);
+      setDiffUnstagedText(null);
+      setDiffError(null);
       try {
         const meta = await invoke<RepoMetadata>("get_repo_metadata", {
           path: selected,
@@ -215,12 +263,23 @@ export default function App({
       });
       setRepo(meta);
       if (!meta.error) {
-        await refreshLists(repo.path);
+        const files = await refreshLists(repo.path);
+        if (selectedDiffPath && files) {
+          const next = files.find((w) => w.path === selectedDiffPath);
+          if (next && (next.staged || next.unstaged)) {
+            void loadDiffForFile(next);
+          } else {
+            setSelectedDiffPath(null);
+            setDiffStagedText(null);
+            setDiffUnstagedText(null);
+            setDiffError(null);
+          }
+        }
       }
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }
-  }, [repo, refreshLists]);
+  }, [repo, refreshLists, selectedDiffPath, loadDiffForFile]);
 
   useEffect(() => {
     const promise = Promise.all([
@@ -421,7 +480,7 @@ export default function App({
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
       <div
-        className="grid flex-1 grid-cols-12 gap-4 lg:items-start"
+        className="grid min-h-0 flex-1 grid-cols-12 gap-4 lg:min-h-[calc(100vh-5rem)] lg:items-stretch"
         aria-live="polite"
         aria-busy={loading}
       >
@@ -595,9 +654,21 @@ export default function App({
           </BranchPanel>
         </aside>
 
-        <div className="col-span-12 flex min-w-0 flex-col gap-4 lg:col-span-6">
-          <section className="card border-base-300 bg-base-100 shadow-md">
-            <div className="card-body px-6 py-5">
+        <div
+          className={`col-span-12 flex min-w-0 flex-col gap-4 lg:col-span-6 ${
+            selectedDiffPath && !listsError ? "min-h-0 lg:flex lg:h-full lg:flex-col" : ""
+          }`}
+        >
+          <section
+            className={`card border-base-300 bg-base-100 shadow-md ${
+              selectedDiffPath && !listsError ? "flex min-h-0 flex-1 flex-col" : ""
+            }`}
+          >
+            <div
+              className={`card-body px-6 py-5 ${
+                selectedDiffPath && !listsError ? "flex min-h-0 flex-1 flex-col gap-0" : ""
+              }`}
+            >
               {loading ? (
                 <div className="flex flex-col items-center justify-center gap-3 py-4">
                   <span className="loading loading-md loading-spinner text-primary" />
@@ -628,43 +699,108 @@ export default function App({
                         </div>
                       ) : null}
 
-                      <div className="mb-6">
-                        <h2 className="m-0 mb-3 border-b border-base-300 pb-2 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
-                          {commitsSectionTitle}
-                        </h2>
-                        {commits.length === 0 ? (
-                          <p className="m-0 text-center text-sm text-base-content/60">
-                            No commits to show
-                          </p>
-                        ) : (
-                          <ol className="m-0 list-none space-y-2 p-0">
-                            {commits.map((c) => (
-                              <li
-                                key={c.hash}
-                                className="rounded-box border border-base-300 bg-base-200 px-3 py-2"
-                              >
-                                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                                  <code className="shrink-0 font-mono text-[0.75rem] text-base-content/80">
-                                    {c.shortHash}
-                                  </code>
-                                  <span className="min-w-0 flex-1 font-medium text-base-content">
-                                    {c.subject}
-                                  </span>
-                                </div>
-                                <p className="mt-1 mb-0 text-xs text-base-content/70">
-                                  {c.author}
-                                  {formatDate(c.date) ? (
-                                    <span className="text-base-content/50">
-                                      {" "}
-                                      · {formatDate(c.date)}
+                      {!listsError && selectedDiffPath ? (
+                        <div className="flex min-h-0 flex-1 flex-col gap-3">
+                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                            <div className="min-w-0">
+                              <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                                Diff
+                              </h2>
+                              <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
+                                {selectedDiffPath}
+                              </code>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn shrink-0 btn-ghost btn-sm"
+                              onClick={clearDiffSelection}
+                            >
+                              Back to commits
+                            </button>
+                          </div>
+                          <div className="flex min-h-0 flex-1 flex-col">
+                            {diffLoading ? (
+                              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                <span className="loading loading-md loading-spinner text-primary" />
+                                <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
+                              </div>
+                            ) : diffError ? (
+                              <div role="alert" className="alert text-sm alert-error">
+                                <span className="wrap-break-word">{diffError}</span>
+                              </div>
+                            ) : (
+                              <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
+                                {diffStagedText !== null ? (
+                                  <div className="mb-8 last:mb-0">
+                                    <p className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                      Staged
+                                    </p>
+                                    <pre className="m-0 font-mono text-[0.8125rem] leading-relaxed wrap-break-word whitespace-pre-wrap text-base-content">
+                                      {diffStagedText || (
+                                        <span className="text-base-content/50">
+                                          (no staged diff)
+                                        </span>
+                                      )}
+                                    </pre>
+                                  </div>
+                                ) : null}
+                                {diffUnstagedText !== null ? (
+                                  <div>
+                                    <p className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                      Unstaged
+                                    </p>
+                                    <pre className="m-0 font-mono text-[0.8125rem] leading-relaxed wrap-break-word whitespace-pre-wrap text-base-content">
+                                      {diffUnstagedText || (
+                                        <span className="text-base-content/50">
+                                          (no unstaged diff)
+                                        </span>
+                                      )}
+                                    </pre>
+                                  </div>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mb-6">
+                          <h2 className="m-0 mb-3 border-b border-base-300 pb-2 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                            {commitsSectionTitle}
+                          </h2>
+                          {commits.length === 0 ? (
+                            <p className="m-0 text-center text-sm text-base-content/60">
+                              No commits to show
+                            </p>
+                          ) : (
+                            <ol className="m-0 list-none space-y-2 p-0">
+                              {commits.map((c) => (
+                                <li
+                                  key={c.hash}
+                                  className="rounded-box border border-base-300 bg-base-200 px-3 py-2"
+                                >
+                                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                                    <code className="shrink-0 font-mono text-[0.75rem] text-base-content/80">
+                                      {c.shortHash}
+                                    </code>
+                                    <span className="min-w-0 flex-1 font-medium text-base-content">
+                                      {c.subject}
                                     </span>
-                                  ) : null}
-                                </p>
-                              </li>
-                            ))}
-                          </ol>
-                        )}
-                      </div>
+                                  </div>
+                                  <p className="mt-1 mb-0 text-xs text-base-content/70">
+                                    {c.author}
+                                    {formatDate(c.date) ? (
+                                      <span className="text-base-content/50">
+                                        {" "}
+                                        · {formatDate(c.date)}
+                                      </span>
+                                    ) : null}
+                                  </p>
+                                </li>
+                              ))}
+                            </ol>
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
                 </>
@@ -695,7 +831,7 @@ export default function App({
                   </button>
                 ) : null}
               </div>
-              <div className="flex max-h-[min(42vh,22rem)] min-h-16 flex-col gap-2 overflow-y-auto p-2">
+              <div className="max-h-[min(52vh,28rem)] min-h-16 overflow-y-auto p-2">
                 {!canShowBranches ? (
                   <p className="m-0 py-2 text-center text-xs text-base-content/50">
                     Open a repository to manage changes
@@ -706,44 +842,75 @@ export default function App({
                   </p>
                 ) : (
                   <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                    {workingTreeFiles.map((f) => (
-                      <li
-                        key={f.path}
-                        className="rounded-md border border-base-300 bg-base-200/80 px-2 py-1"
-                      >
-                        <div className="flex min-h-7 items-center gap-2">
-                          <code className="min-w-0 flex-1 font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
-                            {f.path}
-                          </code>
-                          <div className="flex shrink-0 items-center gap-0.5">
-                            {f.unstaged ? (
-                              <button
-                                type="button"
-                                className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-xs btn-primary"
-                                disabled={stageCommitBusy}
-                                aria-label={`Stage ${f.path}`}
-                                title="Stage"
-                                onClick={() => void onStagePaths([f.path])}
-                              >
-                                +
-                              </button>
-                            ) : null}
-                            {f.staged ? (
-                              <button
-                                type="button"
-                                className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-ghost btn-xs"
-                                disabled={stageCommitBusy}
-                                aria-label={`Unstage ${f.path}`}
-                                title="Unstage"
-                                onClick={() => void onUnstagePaths([f.path])}
-                              >
-                                −
-                              </button>
-                            ) : null}
+                    {workingTreeFiles.map((f) => {
+                      const selectable = f.staged || f.unstaged;
+                      const selected = selectedDiffPath === f.path;
+                      return (
+                        <li
+                          key={f.path}
+                          role={selectable ? "button" : undefined}
+                          tabIndex={selectable ? 0 : undefined}
+                          className={`rounded-md border bg-base-200/80 px-2 py-1 ${
+                            selectable
+                              ? `cursor-pointer transition-colors hover:bg-base-300/50 ${
+                                  selected
+                                    ? "border-primary ring-1 ring-primary/40"
+                                    : "border-base-300"
+                                }`
+                              : "border-base-300"
+                          }`}
+                          onClick={() => {
+                            if (!selectable) return;
+                            void loadDiffForFile(f);
+                          }}
+                          onKeyDown={(e) => {
+                            if (!selectable) return;
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              void loadDiffForFile(f);
+                            }
+                          }}
+                        >
+                          <div className="flex min-h-7 items-center gap-2">
+                            <code className="min-w-0 flex-1 font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
+                              {f.path}
+                            </code>
+                            <div className="flex shrink-0 items-center gap-0.5">
+                              {f.unstaged ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-xs btn-primary"
+                                  disabled={stageCommitBusy}
+                                  aria-label={`Stage ${f.path}`}
+                                  title="Stage"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void onStagePaths([f.path]);
+                                  }}
+                                >
+                                  +
+                                </button>
+                              ) : null}
+                              {f.staged ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-ghost btn-xs"
+                                  disabled={stageCommitBusy}
+                                  aria-label={`Unstage ${f.path}`}
+                                  title="Unstage"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void onUnstagePaths([f.path]);
+                                  }}
+                                >
+                                  −
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
-                        </div>
-                      </li>
-                    ))}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
