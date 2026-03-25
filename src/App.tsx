@@ -185,6 +185,88 @@ function invokeErrorMessage(e: unknown): string {
   return String(e);
 }
 
+function StagePanelFileRow({
+  f,
+  selected,
+  busy,
+  variant,
+  onSelect,
+  onStage,
+  onUnstage,
+}: {
+  f: WorkingTreeFile;
+  selected: boolean;
+  busy: boolean;
+  variant: "unstaged" | "staged";
+  onSelect: () => void;
+  onStage: () => void;
+  onUnstage: () => void;
+}) {
+  const selectable = f.staged || f.unstaged;
+  return (
+    <li
+      role={selectable ? "button" : undefined}
+      tabIndex={selectable ? 0 : undefined}
+      className={`rounded-md border bg-base-200/80 px-2 py-1 ${
+        selectable
+          ? `cursor-pointer transition-colors hover:bg-base-300/50 ${
+              selected ? "border-primary ring-1 ring-primary/40" : "border-base-300"
+            }`
+          : "border-base-300"
+      }`}
+      onClick={() => {
+        if (!selectable) return;
+        onSelect();
+      }}
+      onKeyDown={(e) => {
+        if (!selectable) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <div className="flex min-h-7 items-center gap-2">
+        <code className="min-w-0 flex-1 font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
+          {f.path}
+        </code>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {variant === "unstaged" && f.unstaged ? (
+            <button
+              type="button"
+              className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-xs btn-primary"
+              disabled={busy}
+              aria-label={`Stage ${f.path}`}
+              title="Stage"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStage();
+              }}
+            >
+              +
+            </button>
+          ) : null}
+          {variant === "staged" && f.staged ? (
+            <button
+              type="button"
+              className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-ghost btn-xs"
+              disabled={busy}
+              aria-label={`Unstage ${f.path}`}
+              title="Unstage"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnstage();
+              }}
+            >
+              −
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </li>
+  );
+}
+
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[8.5rem_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
@@ -940,8 +1022,10 @@ export default function App({
       : (repo?.headShort ?? "Current branch"));
 
   const hasStagedFiles = workingTreeFiles.some((f) => f.staged);
-  const unstagedPaths = workingTreeFiles.filter((f) => f.unstaged).map((f) => f.path);
-  const stagedPaths = workingTreeFiles.filter((f) => f.staged).map((f) => f.path);
+  const unstagedFiles = workingTreeFiles.filter((f) => f.unstaged);
+  const stagedFiles = workingTreeFiles.filter((f) => f.staged);
+  const unstagedPaths = unstagedFiles.map((f) => f.path);
+  const stagedPaths = stagedFiles.map((f) => f.path);
   const canCommit =
     Boolean(repo?.path && !repo.error && !loading) &&
     hasStagedFiles &&
@@ -1435,110 +1519,141 @@ export default function App({
           </section>
         </div>
 
-        <aside className="col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3">
-          <div className="card border-base-300 bg-base-100 shadow-sm">
-            <div className="card-body min-h-0 gap-0 p-0">
-              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-3 py-2">
-                <h2 className="m-0 card-title min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-70">
-                  Stage & commit
-                </h2>
-                {canShowBranches && unstagedPaths.length > 0 ? (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs"
-                    disabled={stageCommitBusy}
-                    onClick={() => void onStagePaths(unstagedPaths)}
+        <aside className="col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3 lg:h-full lg:max-h-[calc(100vh-5rem)] lg:min-h-0">
+          <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm">
+            <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
+              <section
+                className="flex min-h-0 flex-[1_1_0%] flex-col border-b border-base-300"
+                aria-labelledby="sidebar-unstaged-heading"
+              >
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
+                  <h2
+                    id="sidebar-unstaged-heading"
+                    className="m-0 min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-80"
                   >
-                    Stage all
-                  </button>
-                ) : null}
-              </div>
-              <div className="max-h-[min(52vh,28rem)] min-h-16 overflow-y-auto p-2">
-                {!canShowBranches ? (
-                  <p className="m-0 py-2 text-center text-xs text-base-content/50">
-                    Open a repository to manage changes
-                  </p>
-                ) : workingTreeFiles.length === 0 ? (
-                  <p className="m-0 py-2 text-center text-xs text-base-content/50">
-                    No pending changes
-                  </p>
-                ) : (
-                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                    {workingTreeFiles.map((f) => {
-                      const selectable = f.staged || f.unstaged;
-                      const selected = selectedDiffPath === f.path;
-                      return (
-                        <li
+                    Unstaged files ({unstagedFiles.length})
+                  </h2>
+                  {canShowBranches && unstagedPaths.length > 0 ? (
+                    <button
+                      type="button"
+                      className="btn shrink-0 btn-outline btn-xs btn-success"
+                      disabled={stageCommitBusy}
+                      onClick={() => void onStagePaths(unstagedPaths)}
+                    >
+                      Stage all
+                    </button>
+                  ) : null}
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                  {!canShowBranches ? (
+                    <p className="m-0 py-2 text-center text-xs text-base-content/50">
+                      Open a repository to manage changes
+                    </p>
+                  ) : unstagedFiles.length === 0 ? (
+                    <p className="m-0 py-2 text-center text-xs text-base-content/50">
+                      {workingTreeFiles.length === 0 ? "No pending changes" : "No unstaged changes"}
+                    </p>
+                  ) : (
+                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                      {unstagedFiles.map((f) => (
+                        <StagePanelFileRow
                           key={f.path}
-                          role={selectable ? "button" : undefined}
-                          tabIndex={selectable ? 0 : undefined}
-                          className={`rounded-md border bg-base-200/80 px-2 py-1 ${
-                            selectable
-                              ? `cursor-pointer transition-colors hover:bg-base-300/50 ${
-                                  selected
-                                    ? "border-primary ring-1 ring-primary/40"
-                                    : "border-base-300"
-                                }`
-                              : "border-base-300"
-                          }`}
-                          onClick={() => {
-                            if (!selectable) return;
-                            void loadDiffForFile(f);
-                          }}
-                          onKeyDown={(e) => {
-                            if (!selectable) return;
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              void loadDiffForFile(f);
-                            }
-                          }}
-                        >
-                          <div className="flex min-h-7 items-center gap-2">
-                            <code className="min-w-0 flex-1 font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
-                              {f.path}
-                            </code>
-                            <div className="flex shrink-0 items-center gap-0.5">
-                              {f.unstaged ? (
-                                <button
-                                  type="button"
-                                  className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-xs btn-primary"
-                                  disabled={stageCommitBusy}
-                                  aria-label={`Stage ${f.path}`}
-                                  title="Stage"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    void onStagePaths([f.path]);
-                                  }}
-                                >
-                                  +
-                                </button>
-                              ) : null}
-                              {f.staged ? (
-                                <button
-                                  type="button"
-                                  className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-ghost btn-xs"
-                                  disabled={stageCommitBusy}
-                                  aria-label={`Unstage ${f.path}`}
-                                  title="Unstage"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    void onUnstagePaths([f.path]);
-                                  }}
-                                >
-                                  −
-                                </button>
-                              ) : null}
-                            </div>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-              <div className="border-t border-base-300 p-3">
+                          f={f}
+                          variant="unstaged"
+                          selected={selectedDiffPath === f.path}
+                          busy={stageCommitBusy}
+                          onSelect={() => void loadDiffForFile(f)}
+                          onStage={() => void onStagePaths([f.path])}
+                          onUnstage={() => void onUnstagePaths([f.path])}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </section>
+
+              <section
+                className="flex min-h-0 flex-[1_1_0%] flex-col border-b border-base-300"
+                aria-labelledby="sidebar-staged-heading"
+              >
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
+                  <h2
+                    id="sidebar-staged-heading"
+                    className="m-0 min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-80"
+                  >
+                    Staged files ({stagedFiles.length})
+                  </h2>
+                  {canShowBranches && stagedPaths.length > 0 ? (
+                    <button
+                      type="button"
+                      className="btn shrink-0 btn-outline btn-xs btn-error"
+                      disabled={stageCommitBusy || commitPushBusy}
+                      onClick={() => void onUnstagePaths(stagedPaths)}
+                    >
+                      Unstage all
+                    </button>
+                  ) : null}
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                  {!canShowBranches ? (
+                    <p className="m-0 py-2 text-center text-xs text-base-content/50">
+                      Open a repository to manage changes
+                    </p>
+                  ) : stagedFiles.length === 0 ? (
+                    <p className="m-0 py-2 text-center text-xs text-base-content/50">
+                      No staged changes
+                    </p>
+                  ) : (
+                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                      {stagedFiles.map((f) => (
+                        <StagePanelFileRow
+                          key={f.path}
+                          f={f}
+                          variant="staged"
+                          selected={selectedDiffPath === f.path}
+                          busy={stageCommitBusy}
+                          onSelect={() => void loadDiffForFile(f)}
+                          onStage={() => void onStagePaths([f.path])}
+                          onUnstage={() => void onUnstagePaths([f.path])}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </section>
+
+              <section
+                className="shrink-0 border-t border-base-300 bg-base-100 p-3"
+                aria-labelledby="sidebar-commit-heading"
+              >
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <h2
+                    id="sidebar-commit-heading"
+                    className="m-0 text-xs font-semibold tracking-wide uppercase opacity-80"
+                  >
+                    Commit
+                  </h2>
+                  <span className="ml-auto flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      className="btn gap-1 px-2 btn-ghost btn-xs"
+                      disabled={!canPush}
+                      title="Push the current branch to origin"
+                      onClick={() => void onPushToOrigin()}
+                    >
+                      {pushBusy ? (
+                        <span className="loading loading-xs loading-spinner" />
+                      ) : (
+                        <>
+                          <span aria-hidden>↑</span>
+                          <span className="hidden sm:inline">Push</span>
+                        </>
+                      )}
+                    </button>
+                  </span>
+                </div>
                 <label className="form-control w-full">
-                  <span className="label-text mb-1 text-xs font-medium">Commit message</span>
+                  <span className="label-text mb-1 text-xs font-medium">Message</span>
                   <textarea
                     className="textarea-bordered textarea min-h-18 w-full resize-y font-sans text-sm textarea-sm"
                     placeholder="Describe your changes…"
@@ -1550,55 +1665,34 @@ export default function App({
                     rows={3}
                   />
                 </label>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  {stagedPaths.length > 0 ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      disabled={stageCommitBusy || commitPushBusy}
-                      onClick={() => void onUnstagePaths(stagedPaths)}
-                    >
-                      Unstage all
-                    </button>
-                  ) : null}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    className="btn btn-ghost btn-sm"
-                    disabled={!canPush}
-                    title="Push the current branch to origin (commits must be committed first)"
-                    onClick={() => void onPushToOrigin()}
+                    className="btn btn-outline btn-sm"
+                    disabled={!canCommitAndPush}
+                    title="Create the commit, then push the branch to origin"
+                    onClick={() => void onCommitAndPush()}
                   >
-                    {pushBusy ? <span className="loading loading-xs loading-spinner" /> : "Push"}
+                    {commitPushBusy ? (
+                      <span className="loading loading-xs loading-spinner" />
+                    ) : (
+                      "Commit & Push"
+                    )}
                   </button>
-                  <span className="ml-auto flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-outline btn-sm"
-                      disabled={!canCommitAndPush}
-                      title="Create the commit, then push the branch to origin"
-                      onClick={() => void onCommitAndPush()}
-                    >
-                      {commitPushBusy ? (
-                        <span className="loading loading-xs loading-spinner" />
-                      ) : (
-                        "Commit & Push"
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-primary"
-                      disabled={!canCommit}
-                      onClick={() => void onCommit()}
-                    >
-                      {stageCommitBusy ? (
-                        <span className="loading loading-xs loading-spinner" />
-                      ) : (
-                        "Commit"
-                      )}
-                    </button>
-                  </span>
+                  <button
+                    type="button"
+                    className="btn ml-auto btn-sm btn-primary"
+                    disabled={!canCommit}
+                    onClick={() => void onCommit()}
+                  >
+                    {stageCommitBusy ? (
+                      <span className="loading loading-xs loading-spinner" />
+                    ) : (
+                      "Commit"
+                    )}
+                  </button>
                 </div>
-              </div>
+              </section>
             </div>
           </div>
         </aside>
