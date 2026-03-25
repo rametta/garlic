@@ -573,6 +573,8 @@ export default function App({
   const [listsError, setListsError] = useState<string | null>(() => startup.listsError ?? null);
   const [commitMessage, setCommitMessage] = useState("");
   const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(null);
+  /** Which sidebar list opened the diff (staged vs unstaged); matters when both apply to the same path. */
+  const [selectedDiffSide, setSelectedDiffSide] = useState<"unstaged" | "staged" | null>(null);
   const [diffStagedText, setDiffStagedText] = useState<string | null>(null);
   const [diffUnstagedText, setDiffUnstagedText] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -629,26 +631,31 @@ export default function App({
   }, []);
 
   const loadDiffForFile = useCallback(
-    async (f: WorkingTreeFile) => {
+    async (f: WorkingTreeFile, side: "unstaged" | "staged") => {
       if (!repo?.path || repo.error) return;
-      if (!f.staged && !f.unstaged) return;
+      if (side === "unstaged" && !f.unstaged) return;
+      if (side === "staged" && !f.staged) return;
       clearCommitBrowse();
       setSelectedDiffPath(f.path);
+      setSelectedDiffSide(side);
       setDiffLoading(true);
       setDiffError(null);
       setDiffStagedText(null);
       setDiffUnstagedText(null);
       try {
-        const [staged, unstaged] = await Promise.all([
-          f.staged
-            ? invoke<string>("get_staged_diff", { path: repo.path, filePath: f.path })
-            : Promise.resolve<string | null>(null),
-          f.unstaged
-            ? invoke<string>("get_unstaged_diff", { path: repo.path, filePath: f.path })
-            : Promise.resolve<string | null>(null),
-        ]);
-        setDiffStagedText(staged);
-        setDiffUnstagedText(unstaged);
+        if (side === "unstaged") {
+          const unstaged = await invoke<string>("get_unstaged_diff", {
+            path: repo.path,
+            filePath: f.path,
+          });
+          setDiffUnstagedText(unstaged);
+        } else {
+          const staged = await invoke<string>("get_staged_diff", {
+            path: repo.path,
+            filePath: f.path,
+          });
+          setDiffStagedText(staged);
+        }
       } catch (e) {
         setDiffError(invokeErrorMessage(e));
       } finally {
@@ -662,6 +669,7 @@ export default function App({
     async (hash: string) => {
       if (!repo?.path || repo.error) return;
       setSelectedDiffPath(null);
+      setSelectedDiffSide(null);
       setDiffStagedText(null);
       setDiffUnstagedText(null);
       setDiffError(null);
@@ -733,6 +741,7 @@ export default function App({
 
   const clearDiffSelection = useCallback(() => {
     setSelectedDiffPath(null);
+    setSelectedDiffSide(null);
     setDiffStagedText(null);
     setDiffUnstagedText(null);
     setDiffError(null);
@@ -746,6 +755,7 @@ export default function App({
       setOperationError(null);
       clearCommitBrowse();
       setSelectedDiffPath(null);
+      setSelectedDiffSide(null);
       setDiffStagedText(null);
       setDiffUnstagedText(null);
       setDiffError(null);
@@ -796,9 +806,25 @@ export default function App({
         if (selectedDiffPath && files) {
           const next = files.find((w) => w.path === selectedDiffPath);
           if (next && (next.staged || next.unstaged)) {
-            void loadDiffForFile(next);
+            const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
+            if (preferredSide === "unstaged" && next.unstaged) {
+              void loadDiffForFile(next, "unstaged");
+            } else if (preferredSide === "staged" && next.staged) {
+              void loadDiffForFile(next, "staged");
+            } else if (next.unstaged) {
+              void loadDiffForFile(next, "unstaged");
+            } else if (next.staged) {
+              void loadDiffForFile(next, "staged");
+            } else {
+              setSelectedDiffPath(null);
+              setSelectedDiffSide(null);
+              setDiffStagedText(null);
+              setDiffUnstagedText(null);
+              setDiffError(null);
+            }
           } else {
             setSelectedDiffPath(null);
+            setSelectedDiffSide(null);
             setDiffStagedText(null);
             setDiffUnstagedText(null);
             setDiffError(null);
@@ -808,7 +834,7 @@ export default function App({
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     }
-  }, [repo, refreshLists, selectedDiffPath, loadDiffForFile, clearCommitBrowse]);
+  }, [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse]);
 
   useEffect(() => {
     const promise = Promise.all([
@@ -1253,6 +1279,13 @@ export default function App({
                               <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
                                 {selectedDiffPath}
                               </code>
+                              {selectedDiffSide ? (
+                                <p className="mt-1 mb-0 text-xs text-base-content/65">
+                                  {selectedDiffSide === "staged"
+                                    ? "Staged changes"
+                                    : "Unstaged changes"}
+                                </p>
+                              ) : null}
                             </div>
                             <button
                               type="button"
@@ -1560,9 +1593,9 @@ export default function App({
                           key={f.path}
                           f={f}
                           variant="unstaged"
-                          selected={selectedDiffPath === f.path}
+                          selected={selectedDiffPath === f.path && selectedDiffSide === "unstaged"}
                           busy={stageCommitBusy}
-                          onSelect={() => void loadDiffForFile(f)}
+                          onSelect={() => void loadDiffForFile(f, "unstaged")}
                           onStage={() => void onStagePaths([f.path])}
                           onUnstage={() => void onUnstagePaths([f.path])}
                         />
@@ -1610,9 +1643,9 @@ export default function App({
                           key={f.path}
                           f={f}
                           variant="staged"
-                          selected={selectedDiffPath === f.path}
+                          selected={selectedDiffPath === f.path && selectedDiffSide === "staged"}
                           busy={stageCommitBusy}
-                          onSelect={() => void loadDiffForFile(f)}
+                          onSelect={() => void loadDiffForFile(f, "staged")}
                           onStage={() => void onStagePaths([f.path])}
                           onUnstage={() => void onUnstagePaths([f.path])}
                         />
