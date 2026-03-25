@@ -33,6 +33,7 @@ interface CommitEntry {
   subject: string;
   author: string;
   date: string;
+  signatureGood: boolean;
 }
 
 /** Local branch row from `list_local_branches` / bootstrap. */
@@ -118,6 +119,41 @@ function formatRelativeShort(iso: string | null): string | null {
     day: "numeric",
     year: d.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined,
   });
+}
+
+/** Prefer `Name` from Git's `Name <email>` for dense rows. */
+function formatAuthorDisplay(author: string): string {
+  const t = author.trim();
+  const lt = t.indexOf("<");
+  if (lt > 0) {
+    return t.slice(0, lt).trim();
+  }
+  return t;
+}
+
+function SignedCommitIcon() {
+  return (
+    <span
+      className="inline-flex shrink-0 text-success"
+      aria-hidden
+      title="Signed commit (verified)"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        fill="none"
+        viewBox="0 0 24 24"
+        strokeWidth={1.5}
+        stroke="currentColor"
+        className="h-3 w-3"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"
+        />
+      </svg>
+    </span>
+  );
 }
 
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
@@ -416,6 +452,10 @@ export default function App({
           if (selected === null || Array.isArray(selected)) return;
           await loadRepo(selected);
         })();
+      }),
+      listen<string>("open-recent-repo", (e) => {
+        const path = e.payload.trim();
+        if (path) void loadRepo(path);
       }),
       listen<{ theme: string }>("theme-changed", (e) => {
         const pref = e.payload.theme;
@@ -992,11 +1032,12 @@ export default function App({
                             </p>
                           ) : (
                             <>
-                              <div className="mb-0.5 grid grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,3.5rem)] items-center gap-x-1.5 border-b border-base-300/80 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                              <div className="mb-0.5 grid grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 border-b border-base-300/80 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
                                 <span className="truncate">Branch / tag</span>
                                 <span className="text-center"></span>
                                 <span className="min-w-0 truncate">Commit message</span>
-                                <span className="text-right" />
+                                <span className="min-w-0 truncate">Author</span>
+                                <span className="text-right">When</span>
                               </div>
                               <ol className="m-0 list-none p-0">
                                 {commits.map((c, idx) => {
@@ -1022,6 +1063,7 @@ export default function App({
                                     `${c.shortHash} — ${c.subject}`,
                                     c.author,
                                     formatDate(c.date) ?? undefined,
+                                    c.signatureGood ? "Signature: verified" : undefined,
                                   ]
                                     .filter(Boolean)
                                     .join("\n");
@@ -1033,7 +1075,7 @@ export default function App({
                                       <button
                                         type="button"
                                         title={fullTitle}
-                                        className={`grid w-full grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,3.5rem)] items-center gap-x-1.5 px-1 py-0.5 text-left text-[0.6875rem] leading-tight transition-colors ${
+                                        className={`grid w-full grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 py-0.5 text-left text-[0.6875rem] leading-tight transition-colors ${
                                           isBrowsing
                                             ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
                                             : "hover:bg-base-300/40"
@@ -1048,8 +1090,17 @@ export default function App({
                                           <span className="absolute top-0 bottom-0 left-1/2 w-px -translate-x-1/2 bg-primary/35" />
                                           <span className="relative z-1 mt-px h-1.5 w-1.5 shrink-0 rounded-full border-base-100 bg-primary ring-1 ring-base-100" />
                                         </div>
-                                        <span className="min-w-0 truncate text-base-content/90">
-                                          {c.subject}
+                                        <span className="flex min-w-0 items-center gap-1">
+                                          {c.signatureGood ? <SignedCommitIcon /> : null}
+                                          <span className="min-w-0 flex-1 truncate text-base-content/90">
+                                            {c.subject}
+                                          </span>
+                                        </span>
+                                        <span
+                                          className="min-w-0 truncate text-[0.62rem] text-base-content/55"
+                                          title={c.author.trim() || undefined}
+                                        >
+                                          {formatAuthorDisplay(c.author) || "—"}
                                         </span>
                                         <span
                                           className="shrink-0 text-right text-[0.6rem] text-base-content/45 tabular-nums"

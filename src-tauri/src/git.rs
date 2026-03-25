@@ -19,6 +19,8 @@ pub struct CommitEntry {
     pub subject: String,
     pub author: String,
     pub date: String,
+    /// True when `git log` reports a good verified signature (`%G?` == `G`).
+    pub signature_good: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -396,7 +398,7 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
             "-n",
             "100",
             // %x1f (unit separator): subject last so it can contain delimiters
-            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s",
+            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%G?%x1f%s",
         ],
     )?;
     let mut commits = Vec::new();
@@ -405,21 +407,24 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(5, '\x1f');
+        let mut parts = line.splitn(6, '\x1f');
         let hash = parts.next().map(String::from);
         let short_hash = parts.next().map(String::from);
         let author = parts.next().map(String::from);
         let date = parts.next().map(String::from);
+        let gpg_flag = parts.next().map(String::from);
         let subject = parts.next().map(String::from);
-        if let (Some(h), Some(sh), Some(auth), Some(dt), Some(sub)) =
-            (hash, short_hash, author, date, subject)
+        if let (Some(h), Some(sh), Some(auth), Some(dt), Some(gs), Some(sub)) =
+            (hash, short_hash, author, date, gpg_flag, subject)
         {
+            let signature_good = gs.trim() == "G";
             commits.push(CommitEntry {
                 hash: h,
                 short_hash: sh,
                 subject: sub,
                 author: auth,
                 date: dt,
+                signature_good,
             });
         }
     }
@@ -598,7 +603,10 @@ pub fn get_unstaged_diff(path: String, file_path: String) -> Result<String, Stri
     let out = git_output(&path_buf, &["diff", "-U1", "--", rel]);
     match out {
         Ok(ref s) if !s.trim().is_empty() => out,
-        Ok(_) =>     git_output(&path_buf, &["diff", "-U1", "--no-index", "--", "/dev/null", rel]),
+        Ok(_) => git_output(
+            &path_buf,
+            &["diff", "-U1", "--no-index", "--", "/dev/null", rel],
+        ),
         Err(e) => Err(e),
     }
 }
@@ -621,7 +629,11 @@ pub fn list_commit_files(path: String, commit_hash: String) -> Result<Vec<String
 
 /// Unified diff for one file in a given commit (`git show <hash> -- <path>`), patch only (no commit headers).
 #[tauri::command]
-pub fn get_commit_file_diff(path: String, commit_hash: String, file_path: String) -> Result<String, String> {
+pub fn get_commit_file_diff(
+    path: String,
+    commit_hash: String,
+    file_path: String,
+) -> Result<String, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let hash = commit_hash.trim();
