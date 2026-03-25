@@ -97,6 +97,7 @@ pub fn run() {
             git::list_stashes,
             git::stash_push,
             git::stash_pop,
+            git::stash_drop,
             settings::restore_app_bootstrap,
             set_last_repo_path,
             settings::set_theme,

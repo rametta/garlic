@@ -25,6 +25,7 @@ commands.allow = [
   "list_stashes",
   "stash_push",
   "stash_pop",
+  "stash_drop",
   "restore_app_bootstrap",
   "set_last_repo_path",
   "set_theme",

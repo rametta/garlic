@@ -1197,6 +1197,19 @@ pub fn stash_pop(path: String, stash_ref: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Remove a stash without applying (`git stash drop stash@{n}`).
+#[tauri::command]
+pub fn stash_drop(path: String, stash_ref: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let s = stash_ref.trim();
+    if !is_valid_stash_ref(s) {
+        return Err("Invalid stash reference.".to_string());
+    }
+    git_output(&path_buf, &["stash", "drop", "-q", s])?;
+    Ok(())
+}
+
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).
 #[tauri::command]
 pub fn push_to_origin(path: String) -> Result<(), String> {

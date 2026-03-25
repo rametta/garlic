@@ -896,6 +896,12 @@ export default function App({
     x: number;
     y: number;
   } | null>(null);
+  /** Right-click context menu on a stash row. */
+  const [stashContextMenu, setStashContextMenu] = useState<{
+    stashRef: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
@@ -922,20 +928,22 @@ export default function App({
 
   useEffect(() => {
     setBranchContextMenu(null);
+    setStashContextMenu(null);
   }, [repo?.path]);
 
   useEffect(() => {
-    if (!branchContextMenu) return;
+    if (!branchContextMenu && !stashContextMenu) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setBranchContextMenu(null);
+        setStashContextMenu(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [branchContextMenu]);
+  }, [branchContextMenu, stashContextMenu]);
 
   useEffect(() => {
     setGraphBranchVisible((prev) => {
@@ -1550,6 +1558,25 @@ export default function App({
     }
   }
 
+  async function onStashDrop(stashRef: string) {
+    if (!repo?.path || repo.error) return;
+    const ok = await ask(`Drop ${stashRef} permanently? This cannot be undone.`, {
+      title: "Garlic",
+      kind: "warning",
+    });
+    if (!ok) return;
+    setStashBusy(`drop:${stashRef}`);
+    setOperationError(null);
+    try {
+      await invoke("stash_drop", { path: repo.path, stashRef });
+      await refreshAfterMutation();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setStashBusy(null);
+    }
+  }
+
   async function onStagePaths(paths: string[]) {
     if (!repo?.path || repo.error || paths.length === 0) return;
     setStageCommitBusy(true);
@@ -1838,6 +1865,7 @@ export default function App({
                     void onCheckoutLocal(name);
                   },
                   (branchName, clientX, clientY) => {
+                    setStashContextMenu(null);
                     setBranchContextMenu({ branchName, x: clientX, y: clientY });
                   },
                   branchGraphControls,
@@ -1888,9 +1916,22 @@ export default function App({
               <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
                 {stashes.map((s) => {
                   const popping = stashBusy === `pop:${s.refName}`;
+                  const stashRowBusy = Boolean(branchBusy) || stashBusy !== null;
                   return (
                     <li key={s.refName}>
-                      <div className="flex w-full min-w-0 items-stretch gap-0">
+                      <div
+                        className="flex w-full min-w-0 items-stretch gap-0"
+                        onContextMenu={(e) => {
+                          if (stashRowBusy) return;
+                          e.preventDefault();
+                          setBranchContextMenu(null);
+                          setStashContextMenu({
+                            stashRef: s.refName,
+                            x: e.clientX,
+                            y: e.clientY,
+                          });
+                        }}
+                      >
                         <span
                           className="flex min-h-0 min-w-0 flex-1 flex-col justify-center gap-0.5 py-2 pr-1 pl-2 text-left"
                           title={`${s.refName}: ${s.message}`}
@@ -1906,7 +1947,7 @@ export default function App({
                           type="button"
                           className="btn shrink-0 self-stretch rounded-none px-2 btn-ghost btn-xs"
                           title="Pop stash"
-                          disabled={Boolean(branchBusy) || stashBusy !== null}
+                          disabled={stashRowBusy}
                           onClick={() => {
                             void onStashPop(s.refName);
                           }}
@@ -2587,54 +2628,83 @@ export default function App({
           </div>
         </aside>
       </div>
-      {branchContextMenu ? (
+      {branchContextMenu || stashContextMenu ? (
         <>
           <div
             className="fixed inset-0 z-[100]"
             role="presentation"
             onClick={() => {
               setBranchContextMenu(null);
+              setStashContextMenu(null);
             }}
           />
-          <ul
-            role="menu"
-            className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
-            style={{
-              left: Math.min(Math.max(8, branchContextMenu.x), window.innerWidth - 228),
-              top: Math.min(Math.max(8, branchContextMenu.y), window.innerHeight - 148),
-            }}
-          >
-            <li role="none">
-              <button
-                type="button"
-                role="menuitem"
-                className="rounded"
-                disabled={Boolean(branchBusy)}
-                onClick={() => {
-                  const name = branchContextMenu.branchName;
-                  setBranchContextMenu(null);
-                  void deleteLocalBranch(name, false);
-                }}
-              >
-                Delete branch…
-              </button>
-            </li>
-            <li role="none">
-              <button
-                type="button"
-                role="menuitem"
-                className="rounded text-error"
-                disabled={Boolean(branchBusy)}
-                onClick={() => {
-                  const name = branchContextMenu.branchName;
-                  setBranchContextMenu(null);
-                  void deleteLocalBranch(name, true);
-                }}
-              >
-                Force delete…
-              </button>
-            </li>
-          </ul>
+          {branchContextMenu ? (
+            <ul
+              role="menu"
+              className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
+              style={{
+                left: Math.min(Math.max(8, branchContextMenu.x), window.innerWidth - 228),
+                top: Math.min(Math.max(8, branchContextMenu.y), window.innerHeight - 148),
+              }}
+            >
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="rounded"
+                  disabled={Boolean(branchBusy)}
+                  onClick={() => {
+                    const name = branchContextMenu.branchName;
+                    setBranchContextMenu(null);
+                    void deleteLocalBranch(name, false);
+                  }}
+                >
+                  Delete branch…
+                </button>
+              </li>
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="rounded text-error"
+                  disabled={Boolean(branchBusy)}
+                  onClick={() => {
+                    const name = branchContextMenu.branchName;
+                    setBranchContextMenu(null);
+                    void deleteLocalBranch(name, true);
+                  }}
+                >
+                  Force delete…
+                </button>
+              </li>
+            </ul>
+          ) : null}
+          {stashContextMenu ? (
+            <ul
+              role="menu"
+              className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
+              style={{
+                left: Math.min(Math.max(8, stashContextMenu.x), window.innerWidth - 228),
+                top: Math.min(Math.max(8, stashContextMenu.y), window.innerHeight - 120),
+              }}
+            >
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="rounded text-error"
+                  disabled={Boolean(branchBusy) || stashBusy !== null}
+                  onClick={() => {
+                    const ref = stashContextMenu.stashRef;
+                    setStashContextMenu(null);
+                    void onStashDrop(ref);
+                  }}
+                >
+                  Delete stash…
+                </button>
+              </li>
+            </ul>
+          ) : null}
         </>
       ) : null}
     </main>
