@@ -855,6 +855,8 @@ export default function App({
   const focusRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [newBranchName, setNewBranchName] = useState("");
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
+  /** Case-insensitive substring filter for local + remote branch lists in the sidebar. */
+  const [branchListFilter, setBranchListFilter] = useState("");
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
@@ -872,6 +874,10 @@ export default function App({
       return null;
     }
   }, []);
+
+  useEffect(() => {
+    setBranchListFilter("");
+  }, [repo?.path]);
 
   useEffect(() => {
     setGraphBranchVisible((prev) => {
@@ -1507,11 +1513,29 @@ export default function App({
   const showExpandedDiff =
     Boolean(selectedDiffPath || commitDiffPath) && !listsError && Boolean(repo && !repo.error);
 
-  const localBranchTrieRoot = useMemo(() => buildLocalBranchTrie(localBranches), [localBranches]);
-  const remoteBranchTrieRoot = useMemo(
-    () => buildRemoteBranchTrie(remoteBranches),
-    [remoteBranches],
+  const branchFilterNorm = branchListFilter.trim().toLowerCase();
+  const filteredLocalBranches = useMemo(() => {
+    if (!branchFilterNorm) return localBranches;
+    return localBranches.filter((b) => b.name.toLowerCase().includes(branchFilterNorm));
+  }, [localBranches, branchFilterNorm]);
+  const filteredRemoteBranches = useMemo(() => {
+    if (!branchFilterNorm) return remoteBranches;
+    return remoteBranches.filter((r) => r.name.toLowerCase().includes(branchFilterNorm));
+  }, [remoteBranches, branchFilterNorm]);
+
+  const localBranchTrieRoot = useMemo(
+    () => buildLocalBranchTrie(filteredLocalBranches),
+    [filteredLocalBranches],
   );
+  const remoteBranchTrieRoot = useMemo(
+    () => buildRemoteBranchTrie(filteredRemoteBranches),
+    [filteredRemoteBranches],
+  );
+
+  const localBranchesEmptyHint =
+    localBranches.length === 0 ? "No local branches" : "No branches match filter";
+  const remoteBranchesEmptyHint =
+    remoteBranches.length === 0 ? "No remote-tracking branches" : "No branches match filter";
 
   const commitGraphLayout = useMemo(
     () =>
@@ -1611,10 +1635,30 @@ export default function App({
             </div>
           </dialog>
 
+          {canShowBranches ? (
+            <label className="form-control w-full shrink-0">
+              <span className="label-text mb-1 text-xs font-semibold tracking-wide uppercase opacity-70">
+                Filter branches
+              </span>
+              <input
+                type="search"
+                className="input-bordered input input-sm w-full font-mono text-sm"
+                value={branchListFilter}
+                onChange={(e) => {
+                  setBranchListFilter(e.target.value);
+                }}
+                placeholder="Filter by name…"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Filter branch lists by name"
+              />
+            </label>
+          ) : null}
+
           <BranchPanel
             title="Local branches"
-            empty={canShowBranches && localBranches.length === 0}
-            emptyHint="No local branches"
+            empty={canShowBranches && filteredLocalBranches.length === 0}
+            emptyHint={localBranchesEmptyHint}
             headerRight={
               canShowBranches ? (
                 <button
@@ -1647,8 +1691,8 @@ export default function App({
 
           <BranchPanel
             title="Remote branches"
-            empty={canShowBranches && remoteBranches.length === 0}
-            emptyHint="No remote-tracking branches"
+            empty={canShowBranches && filteredRemoteBranches.length === 0}
+            emptyHint={remoteBranchesEmptyHint}
           >
             {canShowBranches ? (
               <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
