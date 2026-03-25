@@ -84,6 +84,7 @@ pub fn run() {
             git::create_local_branch,
             git::create_branch_from_remote,
             git::delete_local_branch,
+            git::rebase_current_branch_onto,
             git::list_working_tree_files,
             git::stage_paths,
             git::unstage_paths,

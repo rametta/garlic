@@ -746,6 +746,30 @@ pub fn delete_local_branch(path: String, branch: String, force: bool) -> Result<
     Ok(())
 }
 
+/// Rebase the current branch onto `onto` (local branch name or remote ref such as `origin/main`).
+/// With `interactive`, runs `git rebase -i` using the user's configured sequence/core editor.
+#[tauri::command]
+pub fn rebase_current_branch_onto(
+    path: String,
+    onto: String,
+    interactive: bool,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let onto = onto.trim();
+    if onto.is_empty() {
+        return Err("Branch or ref is empty.".to_string());
+    }
+    let verify_spec = format!("{onto}^{{commit}}");
+    git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+    if interactive {
+        git_output(&path_buf, &["rebase", "-i", onto])?;
+    } else {
+        git_output(&path_buf, &["rebase", onto])?;
+    }
+    Ok(())
+}
+
 fn non_empty_lines(text: &str) -> Vec<String> {
     text.lines()
         .map(|s| s.trim().to_string())
