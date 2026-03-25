@@ -994,7 +994,7 @@ export default function App({
                             <>
                               <div className="mb-0.5 grid grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,3.5rem)] items-center gap-x-1.5 border-b border-base-300/80 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
                                 <span className="truncate">Branch / tag</span>
-                                <span className="text-center">Graph</span>
+                                <span className="text-center"></span>
                                 <span className="min-w-0 truncate">Commit message</span>
                                 <span className="text-right" />
                               </div>
