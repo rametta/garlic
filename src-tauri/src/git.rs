@@ -473,6 +473,20 @@ fn non_empty_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// `git show` prints commit metadata before the patch; `react-diff-view` needs a patch-only string.
+fn unified_diff_patch_only(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|line| {
+        line.starts_with("diff --git ")
+            || line.starts_with("--- ")
+            || line.starts_with("diff --cc ")
+    });
+    match start {
+        Some(i) => lines[i..].join("\n"),
+        None => text.to_string(),
+    }
+}
+
 fn staged_paths(workdir: &Path) -> Result<Vec<String>, String> {
     let out = git_output(workdir, &["diff", "--cached", "--name-only"])?;
     Ok(non_empty_lines(&out))
@@ -605,7 +619,7 @@ pub fn list_commit_files(path: String, commit_hash: String) -> Result<Vec<String
     Ok(non_empty_lines(&out))
 }
 
-/// Unified diff for one file in a given commit (`git show <hash> -- <path>`).
+/// Unified diff for one file in a given commit (`git show <hash> -- <path>`), patch only (no commit headers).
 #[tauri::command]
 pub fn get_commit_file_diff(path: String, commit_hash: String, file_path: String) -> Result<String, String> {
     let path_buf = PathBuf::from(&path);
@@ -618,7 +632,8 @@ pub fn get_commit_file_diff(path: String, commit_hash: String, file_path: String
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
     }
-    git_output(&path_buf, &["show", "-U1", hash, "--", rel])
+    let raw = git_output(&path_buf, &["show", "-U1", hash, "--", rel])?;
+    Ok(unified_diff_patch_only(&raw))
 }
 
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).

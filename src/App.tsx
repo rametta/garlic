@@ -875,10 +875,15 @@ export default function App({
                               </div>
                             ) : (
                               <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
-                                <UnifiedDiff
-                                  text={commitDiffText ?? ""}
-                                  emptyLabel="(no diff for this file)"
-                                />
+                                <div className="mb-8 last:mb-0">
+                                  <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                    Commit
+                                  </div>
+                                  <UnifiedDiff
+                                    text={commitDiffText ?? ""}
+                                    emptyLabel="(no diff for this file)"
+                                  />
+                                </div>
                               </div>
                             )}
                           </div>
