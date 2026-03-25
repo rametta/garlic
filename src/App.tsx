@@ -174,6 +174,17 @@ function formatAuthorDisplay(author: string): string {
   return t;
 }
 
+/** Tauri `invoke` may reject with a string or a non-Error object; normalize for display. */
+function invokeErrorMessage(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  if (e !== null && typeof e === "object" && "message" in e) {
+    const m = (e as { message?: unknown }).message;
+    if (typeof m === "string") return m;
+  }
+  return String(e);
+}
+
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[8.5rem_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
@@ -229,6 +240,8 @@ export default function App({
   const [themePreference, setThemePreference] = useState(initialThemePreference);
   const [repo, setRepo] = useState<RepoMetadata | null>(() => startup.metadata ?? null);
   const [loadError, setLoadError] = useState<string | null>(() => startup.loadError ?? null);
+  /** Mutations (checkout, commit, refresh, …) while a repo is open — shown inline, not as a full-panel error. */
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [localBranches, setLocalBranches] = useState<LocalBranchEntry[]>(
     () => startup.localBranches,
@@ -279,7 +292,7 @@ export default function App({
       setWorkingTreeFiles(worktree);
       return worktree;
     } catch (e) {
-      setListsError(e instanceof Error ? e.message : String(e));
+      setListsError(invokeErrorMessage(e));
       return null;
     }
   }, []);
@@ -318,7 +331,7 @@ export default function App({
         setDiffStagedText(staged);
         setDiffUnstagedText(unstaged);
       } catch (e) {
-        setDiffError(e instanceof Error ? e.message : String(e));
+        setDiffError(invokeErrorMessage(e));
       } finally {
         setDiffLoading(false);
       }
@@ -356,11 +369,7 @@ export default function App({
         setCommitBrowseFiles(filesSettled.value);
       } else {
         setCommitBrowseFiles([]);
-        setCommitBrowseError(
-          filesSettled.reason instanceof Error
-            ? filesSettled.reason.message
-            : String(filesSettled.reason),
-        );
+        setCommitBrowseError(invokeErrorMessage(filesSettled.reason));
       }
 
       let verified: boolean | null = null;
@@ -388,7 +397,7 @@ export default function App({
         });
         setCommitDiffText(text);
       } catch (e) {
-        setCommitDiffError(e instanceof Error ? e.message : String(e));
+        setCommitDiffError(invokeErrorMessage(e));
       } finally {
         setCommitDiffLoading(false);
       }
@@ -415,6 +424,7 @@ export default function App({
     async (selected: string) => {
       setLoading(true);
       setLoadError(null);
+      setOperationError(null);
       clearCommitBrowse();
       setSelectedDiffPath(null);
       setDiffStagedText(null);
@@ -440,7 +450,7 @@ export default function App({
         setRemoteBranches([]);
         setCommits([]);
         setWorkingTreeFiles([]);
-        setLoadError(e instanceof Error ? e.message : String(e));
+        setLoadError(invokeErrorMessage(e));
         void invoke("reset_main_window_title").catch(() => {});
       } finally {
         setLoading(false);
@@ -477,7 +487,7 @@ export default function App({
         }
       }
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setOperationError(invokeErrorMessage(e));
     }
   }, [repo, refreshLists, selectedDiffPath, loadDiffForFile, clearCommitBrowse]);
 
@@ -533,7 +543,7 @@ export default function App({
   async function onCheckoutLocal(branch: string) {
     if (!repo?.path || repo.error) return;
     setBranchBusy(`local:${branch}`);
-    setLoadError(null);
+    setOperationError(null);
     try {
       await invoke("checkout_local_branch", {
         path: repo.path,
@@ -541,7 +551,7 @@ export default function App({
       });
       await refreshAfterMutation();
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setOperationError(invokeErrorMessage(e));
     } finally {
       setBranchBusy(null);
     }
@@ -550,7 +560,7 @@ export default function App({
   function openCreateBranchDialog() {
     setNewBranchName("");
     setCreateBranchFieldError(null);
-    setLoadError(null);
+    setOperationError(null);
     createBranchDialogRef.current?.showModal();
     requestAnimationFrame(() => {
       newBranchInputRef.current?.focus();
@@ -571,7 +581,7 @@ export default function App({
     }
     setCreateBranchFieldError(null);
     setBranchBusy("create");
-    setLoadError(null);
+    setOperationError(null);
     try {
       await invoke("create_local_branch", {
         path: repo.path,
@@ -580,7 +590,7 @@ export default function App({
       createBranchDialogRef.current?.close();
       await refreshAfterMutation();
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setOperationError(invokeErrorMessage(e));
     } finally {
       setBranchBusy(null);
     }
@@ -589,7 +599,7 @@ export default function App({
   async function onCreateFromRemote(remoteRef: string) {
     if (!repo?.path || repo.error) return;
     setBranchBusy(`remote:${remoteRef}`);
-    setLoadError(null);
+    setOperationError(null);
     try {
       await invoke("create_branch_from_remote", {
         path: repo.path,
@@ -597,7 +607,7 @@ export default function App({
       });
       await refreshAfterMutation();
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setOperationError(invokeErrorMessage(e));
     } finally {
       setBranchBusy(null);
     }
@@ -606,12 +616,12 @@ export default function App({
   async function onStagePaths(paths: string[]) {
     if (!repo?.path || repo.error || paths.length === 0) return;
     setStageCommitBusy(true);
-    setLoadError(null);
+    setOperationError(null);
     try {
       await invoke("stage_paths", { path: repo.path, paths });
       await refreshAfterMutation();
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setOperationError(invokeErrorMessage(e));
     } finally {
       setStageCommitBusy(false);
     }
@@ -620,12 +630,12 @@ export default function App({
   async function onUnstagePaths(paths: string[]) {
     if (!repo?.path || repo.error || paths.length === 0) return;
     setStageCommitBusy(true);
-    setLoadError(null);
+    setOperationError(null);
     try {
       await invoke("unstage_paths", { path: repo.path, paths });
       await refreshAfterMutation();
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setOperationError(invokeErrorMessage(e));
     } finally {
       setStageCommitBusy(false);
     }
@@ -636,13 +646,13 @@ export default function App({
     const msg = commitMessage.trim();
     if (!msg) return;
     setStageCommitBusy(true);
-    setLoadError(null);
+    setOperationError(null);
     try {
       await invoke("commit_staged", { path: repo.path, message: msg });
       setCommitMessage("");
       await refreshAfterMutation();
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setOperationError(invokeErrorMessage(e));
     } finally {
       setStageCommitBusy(false);
     }
@@ -651,12 +661,12 @@ export default function App({
   async function onPushToOrigin() {
     if (!repo?.path || repo.error) return;
     setPushBusy(true);
-    setLoadError(null);
+    setOperationError(null);
     try {
       await invoke("push_to_origin", { path: repo.path });
       await refreshAfterMutation();
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setOperationError(invokeErrorMessage(e));
     } finally {
       setPushBusy(false);
     }
@@ -921,6 +931,13 @@ export default function App({
                       {listsError ? (
                         <div role="alert" className="mb-3 alert text-sm alert-error">
                           <span>{listsError}</span>
+                        </div>
+                      ) : null}
+                      {operationError ? (
+                        <div role="alert" className="mb-3 alert text-sm alert-error">
+                          <span className="wrap-break-word whitespace-pre-wrap">
+                            {operationError}
+                          </span>
                         </div>
                       ) : null}
 
