@@ -401,7 +401,7 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
         aria-live="polite"
         aria-busy={loading}
       >
-        <aside className="col-span-12 flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3 lg:max-h-[calc(100vh-3rem)]">
+        <aside className="col-span-12 flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3">
           <dialog
             ref={createBranchDialogRef}
             className="modal"
@@ -613,7 +613,7 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
                             No commits to show
                           </p>
                         ) : (
-                          <ol className="m-0 max-h-[min(50vh,28rem)] list-none space-y-2 overflow-y-auto p-0">
+                          <ol className="m-0 list-none space-y-2 p-0">
                             {commits.map((c) => (
                               <li
                                 key={c.hash}
@@ -653,7 +653,7 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
           </section>
         </div>
 
-        <aside className="col-span-12 flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3 lg:max-h-[calc(100vh-3rem)]">
+        <aside className="col-span-12 flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3">
           <div className="card border-base-300 bg-base-100 shadow-sm">
             <div className="card-body min-h-0 gap-0 p-0">
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-3 py-2">

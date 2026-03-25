@@ -8,14 +8,12 @@ Desktop **Git client** with a simple UI: open or clone repos, manage branches an
 
 ## Stack
 
-| Layer           | Choice                                                                                                                                                                                                                |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Desktop shell   | **Tauri 2** (`src-tauri/`, Rust)                                                                                                                                                                                      |
-| Frontend        | **React** + **TypeScript** (`src/`)                                                                                                                                                                                   |
-| Styling         | **Tailwind CSS v4** with the **Vite plugin** (`@tailwindcss/vite`): `@import "tailwindcss"` in `src/index.css`, utilities in components — see [Tailwind + Vite](https://tailwindcss.com/docs/installation/using-vite) |
-| Bundler         | **Vite**                                                                                                                                                                                                              |
-| Package manager | **Bun** (user preference; scripts in `package.json` work with `bun run …`)                                                                                                                                            |
-| Lint / format   | **oxlint** + **oxfmt** (configs: `.oxlintrc.json`, `.oxfmtrc.json`)                                                                                                                                                   |
+- **Desktop shell:** Tauri 2 (`src-tauri/`, Rust)
+- **Frontend:** React + TypeScript (`src/`)
+- **Styling:** Tailwind CSS v4 with the Vite plugin (`@tailwindcss/vite`): `@import "tailwindcss"` in `src/index.css`, utilities in components — see [Tailwind + Vite](https://tailwindcss.com/docs/installation/using-vite)
+- **Bundler:** Vite
+- **Package manager:** Bun (user preference; scripts in `package.json` work with `bun run …`)
+- **Lint / format:** oxlint + oxfmt (configs: `.oxlintrc.json`, `.oxfmtrc.json`)
 
 **After editing TypeScript, TSX, JSON, or CSS in this repo:** run `bun run fmt` to format and `bun run lint` to lint before considering the task complete.
 
