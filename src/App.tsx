@@ -11,6 +11,14 @@ import {
 } from "./commitGraphLayout";
 import { resolveThemePreference } from "./theme";
 
+/** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
+const FOCUS_REFRESH_DEBOUNCE_MS = 350;
+/**
+ * On window focus, skip `list_local_branches` / `list_remote_branches` unless HEAD changed or this
+ * many ms have passed since the last full branch list refresh (reduces subprocess churn).
+ */
+const BRANCH_LIST_FULL_REFRESH_INTERVAL_MS = 45_000;
+
 function IconEye({ className }: { className?: string }) {
   return (
     <svg
@@ -847,6 +855,9 @@ export default function App({
   const [commitPushBusy, setCommitPushBusy] = useState(false);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
+  /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
+  const lastFullBranchListRefreshAtRef = useRef(0);
+  const focusRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [newBranchName, setNewBranchName] = useState("");
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
@@ -1138,6 +1149,7 @@ export default function App({
         if (!meta.error) {
           await invoke("set_last_repo_path", { path: selected });
           await refreshLists(selected);
+          lastFullBranchListRefreshAtRef.current = Date.now();
         } else {
           setLocalBranches([]);
           setRemoteBranches([]);
@@ -1159,33 +1171,70 @@ export default function App({
     [refreshLists, clearCommitBrowse],
   );
 
-  const refreshAfterMutation = useCallback(async () => {
-    if (!repo?.path || repo.error) return;
-    const prevBranch = repo.branch;
-    const prevDetached = repo.detached;
-    try {
-      const meta = await invoke<RepoMetadata>("get_repo_metadata", {
-        path: repo.path,
-      });
-      const branchContextChanged = meta.branch !== prevBranch || meta.detached !== prevDetached;
-      setRepo(meta);
-      if (!meta.error) {
-        if (branchContextChanged) {
-          clearCommitBrowse();
-        }
-        const files = await refreshLists(repo.path);
-        if (selectedDiffPath && files) {
-          const next = files.find((w) => w.path === selectedDiffPath);
-          if (next && (next.staged || next.unstaged)) {
-            const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
-            if (preferredSide === "unstaged" && next.unstaged) {
-              void loadDiffForFile(next, "unstaged");
-            } else if (preferredSide === "staged" && next.staged) {
-              void loadDiffForFile(next, "staged");
-            } else if (next.unstaged) {
-              void loadDiffForFile(next, "unstaged");
-            } else if (next.staged) {
-              void loadDiffForFile(next, "staged");
+  const refreshAfterMutation = useCallback(
+    async (options?: { fromFocus?: boolean }) => {
+      const fromFocus = options?.fromFocus ?? false;
+      if (!repo?.path || repo.error) return;
+      const prevBranch = repo.branch;
+      const prevDetached = repo.detached;
+      try {
+        const meta = await invoke<RepoMetadata>("get_repo_metadata", {
+          path: repo.path,
+        });
+        const branchContextChanged = meta.branch !== prevBranch || meta.detached !== prevDetached;
+        setRepo(meta);
+        if (!meta.error) {
+          if (branchContextChanged) {
+            clearCommitBrowse();
+          }
+
+          let files: WorkingTreeFile[] | null = null;
+
+          if (!fromFocus) {
+            lastFullBranchListRefreshAtRef.current = Date.now();
+            files = await refreshLists(repo.path);
+          } else {
+            const now = Date.now();
+            const needFullBranchList =
+              branchContextChanged ||
+              now - lastFullBranchListRefreshAtRef.current >= BRANCH_LIST_FULL_REFRESH_INTERVAL_MS;
+            if (needFullBranchList) {
+              lastFullBranchListRefreshAtRef.current = Date.now();
+              files = await refreshLists(repo.path);
+            } else {
+              try {
+                const worktree = await invoke<WorkingTreeFile[]>("list_working_tree_files", {
+                  path: repo.path,
+                });
+                setWorkingTreeFiles(worktree);
+                setListsError(null);
+                files = worktree;
+              } catch (e) {
+                setListsError(invokeErrorMessage(e));
+                files = null;
+              }
+            }
+          }
+
+          if (selectedDiffPath && files) {
+            const next = files.find((w) => w.path === selectedDiffPath);
+            if (next && (next.staged || next.unstaged)) {
+              const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
+              if (preferredSide === "unstaged" && next.unstaged) {
+                void loadDiffForFile(next, "unstaged");
+              } else if (preferredSide === "staged" && next.staged) {
+                void loadDiffForFile(next, "staged");
+              } else if (next.unstaged) {
+                void loadDiffForFile(next, "unstaged");
+              } else if (next.staged) {
+                void loadDiffForFile(next, "staged");
+              } else {
+                setSelectedDiffPath(null);
+                setSelectedDiffSide(null);
+                setDiffStagedText(null);
+                setDiffUnstagedText(null);
+                setDiffError(null);
+              }
             } else {
               setSelectedDiffPath(null);
               setSelectedDiffSide(null);
@@ -1193,19 +1242,14 @@ export default function App({
               setDiffUnstagedText(null);
               setDiffError(null);
             }
-          } else {
-            setSelectedDiffPath(null);
-            setSelectedDiffSide(null);
-            setDiffStagedText(null);
-            setDiffUnstagedText(null);
-            setDiffError(null);
           }
         }
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
       }
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    }
-  }, [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse]);
+    },
+    [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse],
+  );
 
   useEffect(() => {
     const promise = Promise.all([
@@ -1230,11 +1274,28 @@ export default function App({
         document.documentElement.setAttribute("data-theme", resolveThemePreference(pref));
       }),
       listen("window-focused", () => {
-        void refreshAfterMutation();
+        if (focusRefreshDebounceRef.current !== null) {
+          clearTimeout(focusRefreshDebounceRef.current);
+        }
+        focusRefreshDebounceRef.current = setTimeout(() => {
+          focusRefreshDebounceRef.current = null;
+          const run = () => {
+            void refreshAfterMutation({ fromFocus: true });
+          };
+          if (typeof requestIdleCallback !== "undefined") {
+            requestIdleCallback(run, { timeout: 600 });
+          } else {
+            setTimeout(run, 0);
+          }
+        }, FOCUS_REFRESH_DEBOUNCE_MS);
       }),
     ]);
 
     return () => {
+      if (focusRefreshDebounceRef.current !== null) {
+        clearTimeout(focusRefreshDebounceRef.current);
+        focusRefreshDebounceRef.current = null;
+      }
       void promise.then((listeners) => {
         for (const u of listeners) {
           u();
