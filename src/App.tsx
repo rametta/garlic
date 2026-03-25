@@ -2224,8 +2224,12 @@ export default function App({
                         </div>
                       ) : (
                         <div className="mb-4 min-w-0">
-                          <h2 className="m-0 mb-1.5 border-b border-base-300 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                            Commits
+                          <h2 className="m-0 mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0 border-b border-base-300 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                            <span>Commits</span>
+                            <span className="font-mono text-[0.6rem] font-normal tracking-normal text-base-content/55 normal-case">
+                              {commits.length}
+                              {graphCommitsHasMore ? "+" : ""}
+                            </span>
                           </h2>
                           {commits.length === 0 ? (
                             <p className="m-0 text-center text-xs text-base-content/60">
