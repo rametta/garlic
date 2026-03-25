@@ -21,6 +21,8 @@ pub struct CommitEntry {
     pub subject: String,
     pub author: String,
     pub date: String,
+    /// Parent commit hashes (first parent is mainline; merge commits have 2+).
+    pub parent_hashes: Vec<String>,
 }
 
 /// Result of `git log -1 --format=%G?` for one commit (on-demand; not used in bulk log).
@@ -35,6 +37,8 @@ pub struct CommitSignatureStatus {
 #[serde(rename_all = "camelCase")]
 pub struct LocalBranchEntry {
     pub name: String,
+    /// Tip commit OID for this branch (`refs/heads/<name>`).
+    pub tip_hash: String,
     /// Remote-tracking ref for this branch's upstream (e.g. `origin/main`), if configured.
     pub upstream_name: Option<String>,
     /// Commits on this branch not on its upstream (`None` if no upstream is configured).
@@ -86,6 +90,31 @@ fn git_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
         return Err(msg);
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// `git diff` / `git diff --no-index` use exit status 1 when there are differences (POSIX).
+fn git_diff_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .current_dir(workdir)
+        .args(args)
+        .output()
+        .map_err(|e| format!("Could not run git: {e}"))?;
+    let code = output.status.code().unwrap_or(-1);
+    if code == 0 || code == 1 {
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let msg = if stderr.is_empty() {
+        format!("git {} failed (exit {code})", args.join(" "))
+    } else {
+        stderr
+    };
+    Err(msg)
+}
+
+/// True if `path` is known to the index (tracked or staged).
+fn git_path_known_to_git(workdir: &Path, rel: &str) -> bool {
+    git_output(workdir, &["ls-files", "--error-unmatch", "--", rel]).is_ok()
 }
 
 fn git_output_allow_fail(workdir: &Path, args: &[&str]) -> Option<String> {
@@ -346,19 +375,43 @@ fn ensure_git_repo(workdir: &Path) -> Result<(), String> {
 pub fn list_local_branches(path: String) -> Result<Vec<LocalBranchEntry>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
+    // `for-each-ref` does not expand `%x1f` (it prints the literal); use a real tab.
     let out = git_output(
         &path_buf,
-        &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+        &[
+            "for-each-ref",
+            "--format=%(objectname)\t%(refname:short)",
+            "refs/heads/",
+        ],
     )?;
-    let mut branches: Vec<String> = out
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    branches.sort();
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (tip_hash, name) = if let Some((a, b)) = line.split_once('\t') {
+            (a.trim().to_string(), b.trim().to_string())
+        } else {
+            // Fallback: first token is object id, rest is ref short name.
+            let mut it = line.split_whitespace();
+            let Some(oid) = it.next() else {
+                continue;
+            };
+            let rest: String = it.collect::<Vec<_>>().join(" ");
+            if rest.is_empty() {
+                continue;
+            }
+            (oid.to_string(), rest)
+        };
+        if !name.is_empty() && !tip_hash.is_empty() {
+            pairs.push((name, tip_hash));
+        }
+    }
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let mut entries = Vec::with_capacity(branches.len());
-    for name in branches {
+    let mut entries = Vec::with_capacity(pairs.len());
+    for (name, tip_hash) in pairs {
         let upstream_name = branch_upstream_abbrev(&path_buf, &name);
         let (ahead, behind) = match branch_upstream_ahead_behind(&path_buf, &name) {
             Some((a, b)) => (Some(a), Some(b)),
@@ -366,6 +419,7 @@ pub fn list_local_branches(path: String) -> Result<Vec<LocalBranchEntry>, String
         };
         entries.push(LocalBranchEntry {
             name,
+            tip_hash,
             upstream_name,
             ahead,
             behind,
@@ -393,7 +447,7 @@ pub fn list_remote_branches(path: String) -> Result<Vec<String>, String> {
     Ok(branches)
 }
 
-/// Commits reachable from `HEAD` (current branch or detached), newest first.
+/// Commits reachable from any local branch (`--branches`), topological order, newest first.
 #[tauri::command]
 pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
     let path_buf = PathBuf::from(&path);
@@ -402,12 +456,13 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
         &path_buf,
         &[
             "log",
-            "HEAD",
+            "--branches",
+            "--topo-order",
             "-n",
-            "100",
+            "500",
             // Avoid `%G?` here: signature verification can block repo loading.
-            // %x1f (unit separator): subject last so it can contain delimiters.
-            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s",
+            // %P: space-separated parents; %x1f: subject last so it can contain delimiters.
+            "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s",
         ],
     )?;
     let mut commits = Vec::new();
@@ -416,21 +471,28 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(5, '\x1f');
+        let mut parts = line.splitn(6, '\x1f');
         let hash = parts.next().map(String::from);
+        let parents_raw = parts.next().map(String::from);
         let short_hash = parts.next().map(String::from);
         let author = parts.next().map(String::from);
         let date = parts.next().map(String::from);
         let subject = parts.next().map(String::from);
-        if let (Some(h), Some(sh), Some(auth), Some(dt), Some(sub)) =
-            (hash, short_hash, author, date, subject)
+        if let (Some(h), Some(pr), Some(sh), Some(auth), Some(dt), Some(sub)) =
+            (hash, parents_raw, short_hash, author, date, subject)
         {
+            let parent_hashes: Vec<String> = pr
+                .split_whitespace()
+                .map(String::from)
+                .filter(|s| !s.is_empty())
+                .collect();
             commits.push(CommitEntry {
                 hash: h,
                 short_hash: sh,
                 subject: sub,
                 author: auth,
                 date: dt,
+                parent_hashes,
             });
         }
     }
@@ -609,10 +671,17 @@ pub fn get_unstaged_diff(path: String, file_path: String) -> Result<String, Stri
     let out = git_output(&path_buf, &["diff", "-U1", "--", rel]);
     match out {
         Ok(ref s) if !s.trim().is_empty() => out,
-        Ok(_) => git_output(
-            &path_buf,
-            &["diff", "-U1", "--no-index", "--", "/dev/null", rel],
-        ),
+        Ok(_) => {
+            if git_path_known_to_git(&path_buf, rel) {
+                Ok(String::new())
+            } else {
+                let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
+                git_diff_output(
+                    &path_buf,
+                    &["diff", "-U1", "--no-index", "--", null_path, rel],
+                )
+            }
+        }
         Err(e) => Err(e),
     }
 }

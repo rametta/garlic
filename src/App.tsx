@@ -1,8 +1,10 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { CommitGraphColumn } from "./components/CommitGraphColumn";
 import { UnifiedDiff } from "./components/UnifiedDiff";
+import { COMMIT_GRAPH_ROW_HEIGHT, computeCommitGraphLayout } from "./commitGraphLayout";
 import { resolveThemePreference } from "./theme";
 
 interface RemoteEntry {
@@ -33,6 +35,7 @@ interface CommitEntry {
   subject: string;
   author: string;
   date: string;
+  parentHashes: string[];
 }
 
 /** From `get_commit_signature_status` (`git log -1 --format=%G?`). */
@@ -43,6 +46,8 @@ interface CommitSignatureStatus {
 /** Local branch row from `list_local_branches` / bootstrap. */
 export interface LocalBranchEntry {
   name: string;
+  /** Tip commit OID for this branch. */
+  tipHash: string;
   /** Remote-tracking upstream ref (e.g. origin/main); null if not configured. */
   upstreamName: string | null;
   /** Commits on this branch not on upstream; null if no upstream. */
@@ -1081,6 +1086,16 @@ export default function App({
     [remoteBranches],
   );
 
+  const commitGraphLayout = useMemo(
+    () =>
+      computeCommitGraphLayout(
+        commits.map((c) => ({ hash: c.hash, parentHashes: c.parentHashes })),
+        localBranches.map((b) => ({ name: b.name, tipHash: b.tipHash })),
+        currentBranchName,
+      ),
+    [commits, localBranches, currentBranchName],
+  );
+
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
       <div
@@ -1459,20 +1474,65 @@ export default function App({
                             </p>
                           ) : (
                             <>
-                              <div className="mb-0.5 grid grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 border-b border-base-300/80 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
-                                <span className="truncate">Branch / tag</span>
-                                <span className="text-center"></span>
+                              <div
+                                className="mb-0.5 grid items-center gap-x-1.5 border-b border-base-300/80 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase"
+                                style={{
+                                  gridTemplateColumns: `minmax(0, 6.75rem) ${commitGraphLayout.graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`,
+                                }}
+                              >
+                                <span className="truncate">Branch</span>
+                                <span className="text-center text-[0.55rem] opacity-70">Graph</span>
                                 <span className="min-w-0 truncate">Commit message</span>
                                 <span className="min-w-0 truncate">Author</span>
                                 <span className="text-right">When</span>
                               </div>
-                              <ol className="m-0 list-none p-0">
+                              <div
+                                className="grid w-full min-w-0 gap-x-1.5"
+                                style={{
+                                  gridTemplateColumns: `minmax(0, 6.75rem) ${commitGraphLayout.graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`,
+                                  gridTemplateRows: `repeat(${commits.length}, ${COMMIT_GRAPH_ROW_HEIGHT}px)`,
+                                }}
+                              >
                                 {commits.map((c, idx) => {
-                                  const isBrowsing = commitBrowseHash === c.hash;
+                                  const tipsHere = localBranches.filter(
+                                    (b) => b.tipHash === c.hash,
+                                  );
+                                  const firstTip = tipsHere[0];
+                                  const laneIdx = firstTip
+                                    ? commitGraphLayout.branchNamesSorted.indexOf(firstTip.name)
+                                    : -1;
+                                  const laneColor =
+                                    laneIdx >= 0
+                                      ? commitGraphLayout.laneColors[
+                                          laneIdx % commitGraphLayout.laneColors.length
+                                        ]
+                                      : undefined;
                                   const branchCell =
-                                    idx === 0 ? (
+                                    tipsHere.length > 0 ? (
                                       <span
-                                        className="flex min-w-0 items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content"
+                                        className="flex min-w-0 items-center gap-0.5 truncate text-[0.62rem] leading-tight text-base-content"
+                                        title={tipsHere.map((b) => b.name).join(", ")}
+                                        style={
+                                          laneColor
+                                            ? {
+                                                borderLeft: `2px solid ${laneColor}`,
+                                                paddingLeft: 4,
+                                              }
+                                            : undefined
+                                        }
+                                      >
+                                        {tipsHere.some((b) => b.name === currentBranchName) ? (
+                                          <span className="shrink-0 text-primary" aria-hidden>
+                                            ✓
+                                          </span>
+                                        ) : null}
+                                        <span className="min-w-0 truncate font-medium">
+                                          {tipsHere.map((b) => b.name).join(", ")}
+                                        </span>
+                                      </span>
+                                    ) : idx === 0 ? (
+                                      <span
+                                        className="flex min-w-0 items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content/85"
                                         title={commitsSectionTitle}
                                       >
                                         <span className="shrink-0 text-primary" aria-hidden>
@@ -1482,9 +1542,8 @@ export default function App({
                                           {commitsSectionTitle}
                                         </span>
                                       </span>
-                                    ) : (
-                                      <span />
-                                    );
+                                    ) : null;
+                                  const isBrowsing = commitBrowseHash === c.hash;
                                   const rel = formatRelativeShort(c.date);
                                   const fullTitle = [
                                     `${c.shortHash} — ${c.subject}`,
@@ -1493,29 +1552,27 @@ export default function App({
                                   ]
                                     .filter(Boolean)
                                     .join("\n");
+                                  const rowRule =
+                                    idx < commits.length - 1 ? "border-b border-base-300/40" : "";
                                   return (
-                                    <li
-                                      key={c.hash}
-                                      className="border-b border-base-300/40 last:border-b-0"
-                                    >
+                                    <Fragment key={c.hash}>
+                                      <div
+                                        className={`flex min-h-0 min-w-0 items-center px-0.5 ${rowRule}`}
+                                        style={{ gridColumn: 1, gridRow: idx + 1 }}
+                                      >
+                                        {branchCell}
+                                      </div>
                                       <button
                                         type="button"
                                         title={fullTitle}
-                                        className={`grid w-full grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 py-0.5 text-left text-[0.6875rem] leading-tight transition-colors ${
+                                        className={`grid h-full min-h-0 w-full grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left text-[0.6875rem] leading-tight transition-colors ${rowRule} ${
                                           isBrowsing
                                             ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
                                             : "hover:bg-base-300/40"
                                         }`}
+                                        style={{ gridColumn: "3 / 6", gridRow: idx + 1 }}
                                         onClick={() => void selectCommit(c.hash)}
                                       >
-                                        <div className="min-w-0">{branchCell}</div>
-                                        <div
-                                          className="relative flex min-h-4.5 w-3.5 shrink-0 flex-col items-center justify-start pt-0.5"
-                                          aria-hidden
-                                        >
-                                          <span className="absolute top-0 bottom-0 left-1/2 w-px -translate-x-1/2 bg-primary/35" />
-                                          <span className="relative z-1 mt-px h-1.5 w-1.5 shrink-0 rounded-full border-base-100 bg-primary ring-1 ring-base-100" />
-                                        </div>
                                         <span className="min-w-0 truncate text-base-content/90">
                                           {c.subject}
                                         </span>
@@ -1532,10 +1589,22 @@ export default function App({
                                           {rel ?? "—"}
                                         </span>
                                       </button>
-                                    </li>
+                                    </Fragment>
                                   );
                                 })}
-                              </ol>
+                                <div
+                                  className="flex min-h-0 items-start justify-center self-stretch"
+                                  style={{
+                                    gridColumn: 2,
+                                    gridRow: `1 / span ${commits.length}`,
+                                  }}
+                                >
+                                  <CommitGraphColumn
+                                    layout={commitGraphLayout}
+                                    commitCount={commits.length}
+                                  />
+                                </div>
+                              </div>
                             </>
                           )}
                         </div>
