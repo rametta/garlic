@@ -42,10 +42,15 @@ pub fn persisted_theme_preference(app: &AppHandle) -> String {
     resolve_persisted_theme_preference(&s.theme)
 }
 
+/// Most recently opened repo paths (newest first), capped for the File → Open Recent menu.
+pub const MAX_RECENT_REPO_PATHS: usize = 5;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct AppSettings {
     #[serde(default)]
     last_repo_path: Option<String>,
+    #[serde(default)]
+    recent_repo_paths: Vec<String>,
     #[serde(default)]
     theme: Option<String>,
 }
@@ -62,7 +67,13 @@ fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
         return Ok(AppSettings::default());
     }
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&content).map_err(|e| e.to_string())
+    let mut s: AppSettings = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    if s.recent_repo_paths.is_empty() {
+        if let Some(ref p) = s.last_repo_path {
+            s.recent_repo_paths.push(p.clone());
+        }
+    }
+    Ok(s)
 }
 
 fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
@@ -173,12 +184,23 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
     Ok(AppBootstrap { repo, theme })
 }
 
-/// Persists the last successfully opened repository path (`None` clears).
-#[tauri::command]
-pub fn set_last_repo_path(app: AppHandle, path: Option<String>) -> Result<(), String> {
-    let mut s = load_settings(&app)?;
-    s.last_repo_path = path;
-    save_settings(&app, &s)
+/// Persists the last opened repository path and updates the recent list (`None` clears last only).
+pub fn persist_last_repo_path(app: &AppHandle, path: Option<String>) -> Result<(), String> {
+    let mut s = load_settings(app)?;
+    s.last_repo_path = path.clone();
+    if let Some(p) = path {
+        s.recent_repo_paths.retain(|x| x != &p);
+        s.recent_repo_paths.insert(0, p);
+        s.recent_repo_paths.truncate(MAX_RECENT_REPO_PATHS);
+    }
+    save_settings(app, &s)
+}
+
+/// Paths for the Open Recent menu (newest first, at most [`MAX_RECENT_REPO_PATHS`]).
+pub fn recent_repo_paths(app: &AppHandle) -> Vec<String> {
+    load_settings(app)
+        .map(|s| s.recent_repo_paths)
+        .unwrap_or_default()
 }
 
 /// Persists theme preference: `auto` (follow OS light/dark) or a DaisyUI `data-theme` name.

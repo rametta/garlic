@@ -3,16 +3,61 @@ mod git;
 mod settings;
 mod window_title;
 
-use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, Submenu};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::WindowEvent;
 use tauri::Wry;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
+const RECENT_MENU_SLOTS: usize = settings::MAX_RECENT_REPO_PATHS;
+
+#[derive(Clone)]
+struct RecentMenuState {
+    items: Vec<MenuItem<Wry>>,
+}
+
 #[derive(Clone)]
 struct ThemeMenuState {
     checks: Vec<CheckMenuItem<Wry>>,
+}
+
+fn format_recent_menu_label(path: &str) -> String {
+    const MAX: usize = 72;
+    let path = path.trim();
+    if path.chars().count() <= MAX {
+        return path.to_string();
+    }
+    const HEAD: usize = 34;
+    const TAIL: usize = 34;
+    let chars: Vec<char> = path.chars().collect();
+    let n = chars.len();
+    let start: String = chars.iter().take(HEAD).collect();
+    let end: String = chars.iter().skip(n.saturating_sub(TAIL)).collect();
+    format!("{start} … {end}")
+}
+
+fn sync_recent_menu(app: &tauri::AppHandle) {
+    let paths = settings::recent_repo_paths(app);
+    let Some(state) = app.try_state::<RecentMenuState>() else {
+        return;
+    };
+    for (i, item) in state.items.iter().enumerate() {
+        if let Some(p) = paths.get(i) {
+            let _ = item.set_text(format_recent_menu_label(p));
+            let _ = item.set_enabled(true);
+        } else {
+            let _ = item.set_text(" ");
+            let _ = item.set_enabled(false);
+        }
+    }
+}
+
+#[tauri::command]
+fn set_last_repo_path(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
+    settings::persist_last_repo_path(&app, path)?;
+    sync_recent_menu(&app);
+    Ok(())
 }
 
 fn format_theme_label(name: &str) -> String {
@@ -47,7 +92,7 @@ pub fn run() {
             git::get_commit_file_diff,
             git::push_to_origin,
             settings::restore_app_bootstrap,
-            settings::set_last_repo_path,
+            set_last_repo_path,
             settings::set_theme,
         ])
         .setup(|app| {
@@ -60,7 +105,27 @@ pub fn run() {
                 true,
                 Some("CmdOrCtrl+O"),
             )?;
-            let file_menu = Submenu::with_items(app, "File", true, &[&open_repo])?;
+
+            let mut recent_items: Vec<MenuItem<Wry>> = Vec::new();
+            for i in 0..RECENT_MENU_SLOTS {
+                let id = format!("recent_repo_{i}");
+                let item = MenuItem::with_id(app, id, " ", false, None::<&str>)?;
+                recent_items.push(item);
+            }
+            let recent_submenu = Submenu::with_items(
+                app,
+                "Open Recent",
+                true,
+                &[
+                    &recent_items[0] as &dyn IsMenuItem<Wry>,
+                    &recent_items[1] as &dyn IsMenuItem<Wry>,
+                    &recent_items[2] as &dyn IsMenuItem<Wry>,
+                    &recent_items[3] as &dyn IsMenuItem<Wry>,
+                    &recent_items[4] as &dyn IsMenuItem<Wry>,
+                ],
+            )?;
+
+            let file_menu = Submenu::with_items(app, "File", true, &[&open_repo, &recent_submenu])?;
 
             let repo_metadata =
                 MenuItem::with_id(app, "repo_metadata", "Repo Metadata", true, None::<&str>)?;
@@ -95,12 +160,28 @@ pub fn run() {
                 theme_submenu.append(item)?;
             }
             app.manage(ThemeMenuState { checks });
+            app.manage(RecentMenuState {
+                items: recent_items,
+            });
+            sync_recent_menu(app.handle());
 
             let menu = Menu::with_items(app, &[&file_menu, &repo_menu, &theme_submenu])?;
             menu.set_as_app_menu()?;
             Ok(())
         })
         .on_menu_event(|app, event| {
+            let id = event.id().as_ref();
+            if let Some(idx_str) = id.strip_prefix("recent_repo_") {
+                if let Ok(i) = idx_str.parse::<usize>() {
+                    if i < RECENT_MENU_SLOTS {
+                        let paths = settings::recent_repo_paths(app);
+                        if let Some(path) = paths.get(i) {
+                            let _ = app.emit("open-recent-repo", path.as_str());
+                        }
+                    }
+                }
+                return;
+            }
             if menu_id_is(&event, "open_repo") {
                 let _ = app.emit("open-repo-request", ());
                 return;
