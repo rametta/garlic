@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
@@ -57,10 +57,22 @@ pub struct LocalBranchEntry {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LineStat {
+    pub additions: u32,
+    pub deletions: u32,
+    pub is_binary: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkingTreeFile {
     pub path: String,
     pub staged: bool,
     pub unstaged: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staged_stats: Option<LineStat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unstaged_stats: Option<LineStat>,
 }
 
 #[derive(Debug, Serialize)]
@@ -637,30 +649,127 @@ fn untracked_paths(workdir: &Path) -> Result<Vec<String>, String> {
     Ok(non_empty_lines(&out))
 }
 
+/// `git diff --numstat` / `diff-tree --numstat` lines: `additions TAB deletions TAB path` (`-` `-` for binary).
+fn parse_numstat_output(out: &str) -> HashMap<String, LineStat> {
+    let mut m = HashMap::new();
+    for line in out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, '\t');
+        let add_s = parts.next().unwrap_or("");
+        let del_s = parts.next().unwrap_or("");
+        let path = parts.next().unwrap_or("").to_string();
+        if path.is_empty() {
+            continue;
+        }
+        let is_binary = add_s == "-" && del_s == "-";
+        let stat = if is_binary {
+            LineStat {
+                additions: 0,
+                deletions: 0,
+                is_binary: true,
+            }
+        } else {
+            let additions = add_s.parse().unwrap_or(0);
+            let deletions = del_s.parse().unwrap_or(0);
+            LineStat {
+                additions,
+                deletions,
+                is_binary: false,
+            }
+        };
+        m.insert(path, stat);
+    }
+    m
+}
+
+fn numstat_line_stats(workdir: &Path, args: &[&str]) -> Result<HashMap<String, LineStat>, String> {
+    let out = git_output(workdir, args)?;
+    Ok(parse_numstat_output(&out))
+}
+
+fn line_stat_untracked_file(workdir: &Path, rel: &str) -> LineStat {
+    let full = workdir.join(rel);
+    let Ok(bytes) = std::fs::read(&full) else {
+        return LineStat {
+            additions: 0,
+            deletions: 0,
+            is_binary: false,
+        };
+    };
+    if bytes.contains(&0) {
+        return LineStat {
+            additions: 0,
+            deletions: 0,
+            is_binary: true,
+        };
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let additions = text.lines().count() as u32;
+    LineStat {
+        additions,
+        deletions: 0,
+        is_binary: false,
+    }
+}
+
 /// Combined working tree file list for the UI (staged / unstaged flags per path).
 #[tauri::command]
 pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let staged = staged_paths(&path_buf)?.into_iter().collect::<HashSet<_>>();
-    let unstaged = unstaged_paths(&path_buf)?
+    let staged_set = staged_paths(&path_buf)?.into_iter().collect::<HashSet<_>>();
+    let unstaged_set = unstaged_paths(&path_buf)?
         .into_iter()
         .collect::<HashSet<_>>();
     let untracked = untracked_paths(&path_buf)?
         .into_iter()
         .collect::<HashSet<_>>();
+    let staged_map = numstat_line_stats(&path_buf, &["diff", "--cached", "--numstat"])?;
+    let unstaged_map = numstat_line_stats(&path_buf, &["diff", "--numstat"])?;
     let mut paths: HashSet<String> = HashSet::new();
-    paths.extend(staged.iter().cloned());
-    paths.extend(unstaged.iter().cloned());
+    paths.extend(staged_set.iter().cloned());
+    paths.extend(unstaged_set.iter().cloned());
     paths.extend(untracked.iter().cloned());
     let mut paths: Vec<String> = paths.into_iter().collect();
     paths.sort();
     Ok(paths
         .into_iter()
-        .map(|p| WorkingTreeFile {
-            path: p.clone(),
-            staged: staged.contains(&p),
-            unstaged: unstaged.contains(&p) || untracked.contains(&p),
+        .map(|p| {
+            let staged = staged_set.contains(&p);
+            let unstaged = unstaged_set.contains(&p) || untracked.contains(&p);
+            let staged_stats = if staged {
+                Some(staged_map.get(&p).cloned().unwrap_or(LineStat {
+                    additions: 0,
+                    deletions: 0,
+                    is_binary: false,
+                }))
+            } else {
+                None
+            };
+            let unstaged_stats = if unstaged {
+                Some(if let Some(s) = unstaged_map.get(&p) {
+                    s.clone()
+                } else if untracked.contains(&p) {
+                    line_stat_untracked_file(&path_buf, &p)
+                } else {
+                    LineStat {
+                        additions: 0,
+                        deletions: 0,
+                        is_binary: false,
+                    }
+                })
+            } else {
+                None
+            };
+            WorkingTreeFile {
+                path: p.clone(),
+                staged,
+                unstaged,
+                staged_stats,
+                unstaged_stats,
+            }
         })
         .collect())
 }
@@ -748,9 +857,19 @@ pub fn get_unstaged_diff(path: String, file_path: String) -> Result<String, Stri
     }
 }
 
-/// Paths changed in a single commit (`git diff-tree --name-only`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitFileEntry {
+    pub path: String,
+    pub stats: LineStat,
+}
+
+/// Paths changed in a single commit with line stats (`git diff-tree --numstat`).
 #[tauri::command]
-pub fn list_commit_files(path: String, commit_hash: String) -> Result<Vec<String>, String> {
+pub fn list_commit_files(
+    path: String,
+    commit_hash: String,
+) -> Result<Vec<CommitFileEntry>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let hash = commit_hash.trim();
@@ -759,9 +878,22 @@ pub fn list_commit_files(path: String, commit_hash: String) -> Result<Vec<String
     }
     let out = git_output(
         &path_buf,
-        &["diff-tree", "--no-commit-id", "--name-only", "-r", hash],
+        &["diff-tree", "--no-commit-id", "--numstat", "-r", hash],
     )?;
-    Ok(non_empty_lines(&out))
+    let stat_map = parse_numstat_output(&out);
+    let mut paths: Vec<String> = stat_map.keys().cloned().collect();
+    paths.sort();
+    Ok(paths
+        .into_iter()
+        .map(|p| CommitFileEntry {
+            stats: stat_map.get(&p).cloned().unwrap_or(LineStat {
+                additions: 0,
+                deletions: 0,
+                is_binary: false,
+            }),
+            path: p,
+        })
+        .collect())
 }
 
 /// Good-signature check for a single commit using Git's `%G?` trust letter. Runs in a thread with a timeout so gpg/key lookup cannot block the app indefinitely.

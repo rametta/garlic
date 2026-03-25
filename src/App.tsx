@@ -108,11 +108,26 @@ export interface RemoteBranchEntry {
   tipHash: string;
 }
 
+/** Line counts from `git diff --numstat` / `--cached` (or file read for untracked). */
+export interface LineStat {
+  additions: number;
+  deletions: number;
+  isBinary: boolean;
+}
+
+/** One file changed in a commit from `list_commit_files`. */
+export interface CommitFileEntry {
+  path: string;
+  stats: LineStat;
+}
+
 /** One path in the working tree from `list_working_tree_files` / bootstrap. */
 export interface WorkingTreeFile {
   path: string;
   staged: boolean;
   unstaged: boolean;
+  stagedStats?: LineStat;
+  unstagedStats?: LineStat;
 }
 
 /** Repo snapshot from `restore_app_bootstrap` (`repo` field). */
@@ -242,6 +257,35 @@ function invokeErrorMessage(e: unknown): string {
   return String(e);
 }
 
+function DiffLineStatBadge({ stat }: { stat: LineStat }) {
+  if (stat.isBinary) {
+    return (
+      <span className="shrink-0 text-[0.65rem] text-base-content/50 tabular-nums">binary</span>
+    );
+  }
+  return (
+    <span
+      className="shrink-0 text-[0.65rem] leading-none tabular-nums"
+      title={`${stat.additions} insertions, ${stat.deletions} deletions`}
+    >
+      <span className="text-success">+{stat.additions}</span>{" "}
+      <span className="text-error">−{stat.deletions}</span>
+    </span>
+  );
+}
+
+function StagePanelLineStats({
+  variant,
+  f,
+}: {
+  variant: "unstaged" | "staged";
+  f: WorkingTreeFile;
+}) {
+  const s = variant === "unstaged" ? f.unstagedStats : f.stagedStats;
+  if (!s) return null;
+  return <DiffLineStatBadge stat={s} />;
+}
+
 function StagePanelFileRow({
   f,
   selected,
@@ -287,6 +331,7 @@ function StagePanelFileRow({
         <code className="min-w-0 flex-1 font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
           {f.path}
         </code>
+        <StagePanelLineStats variant={variant} f={f} />
         <div className="flex shrink-0 items-center gap-0.5">
           {variant === "unstaged" && f.unstaged ? (
             <button
@@ -708,7 +753,7 @@ export default function App({
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [commitBrowseHash, setCommitBrowseHash] = useState<string | null>(null);
-  const [commitBrowseFiles, setCommitBrowseFiles] = useState<string[]>([]);
+  const [commitBrowseFiles, setCommitBrowseFiles] = useState<CommitFileEntry[]>([]);
   const [commitBrowseLoading, setCommitBrowseLoading] = useState(false);
   const [commitBrowseError, setCommitBrowseError] = useState<string | null>(null);
   const [commitSignature, setCommitSignature] = useState<{
@@ -896,7 +941,7 @@ export default function App({
       setCommitBrowseError(null);
       setCommitSignature({ loading: true, verified: null });
       const [filesSettled, sigSettled] = await Promise.allSettled([
-        invoke<string[]>("list_commit_files", {
+        invoke<CommitFileEntry[]>("list_commit_files", {
           path: repo.path,
           commitHash: hash,
         }),
@@ -1660,18 +1705,19 @@ export default function App({
                             </p>
                           ) : (
                             <ul className="m-0 flex max-h-[min(52vh,28rem)] list-none flex-col gap-2 overflow-y-auto py-1 pr-0.5">
-                              {commitBrowseFiles.map((fp) => (
-                                <li key={fp}>
+                              {commitBrowseFiles.map((entry) => (
+                                <li key={entry.path}>
                                   <button
                                     type="button"
-                                    className="w-full rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
+                                    className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
                                     onClick={() =>
-                                      void loadCommitFileDiff(fp, commitBrowseHash ?? "")
+                                      void loadCommitFileDiff(entry.path, commitBrowseHash ?? "")
                                     }
                                   >
-                                    <code className="font-mono wrap-break-word text-base-content/95">
-                                      {fp}
+                                    <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
+                                      {entry.path}
                                     </code>
+                                    <DiffLineStatBadge stat={entry.stats} />
                                   </button>
                                 </li>
                               ))}
