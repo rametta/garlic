@@ -556,6 +556,7 @@ function LocalBranchRow({
   const busy =
     branchBusy === `local:${branch.name}` ||
     branchBusy === `delete:${branch.name}` ||
+    branchBusy === `pull:${branch.name}` ||
     branchBusy === "rebase";
   const upstreamLabel = localBranchUpstreamLabel(branch.ahead, branch.behind);
   const graphVisible = graph.graphVisibleLocal(branch.name);
@@ -1387,6 +1388,26 @@ export default function App({
       }
     },
     [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse],
+  );
+
+  const pullLocalBranch = useCallback(
+    async (branchName: string) => {
+      if (!repo?.path || repo.error) return;
+      setBranchBusy(`pull:${branchName}`);
+      setOperationError(null);
+      try {
+        await invoke("pull_local_branch", {
+          path: repo.path,
+          branch: branchName,
+        });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, refreshAfterMutation],
   );
 
   const deleteLocalBranch = useCallback(
@@ -2862,9 +2883,27 @@ export default function App({
                     className="menu fixed z-[101] min-w-[14rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
                     style={{
                       left: Math.min(Math.max(8, m.x), window.innerWidth - 240),
-                      top: Math.min(Math.max(8, m.y), window.innerHeight - 280),
+                      top: Math.min(Math.max(8, m.y), window.innerHeight - 320),
                     }}
                   >
+                    {m.kind === "local" ? (
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="rounded"
+                          disabled={Boolean(branchBusy)}
+                          title="Fetch and merge (or fast-forward) this branch from its upstream"
+                          onClick={() => {
+                            const name = m.branchName;
+                            setBranchContextMenu(null);
+                            void pullLocalBranch(name);
+                          }}
+                        >
+                          Pull
+                        </button>
+                      </li>
+                    ) : null}
                     <li role="none">
                       <button
                         type="button"

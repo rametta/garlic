@@ -95,6 +95,7 @@ pub fn run() {
             git::list_commit_files,
             git::get_commit_signature_status,
             git::get_commit_file_diff,
+            git::pull_local_branch,
             git::push_to_origin,
             git::list_stashes,
             git::stash_push,

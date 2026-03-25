@@ -23,6 +23,7 @@ commands.allow = [
   "list_commit_files",
   "get_commit_signature_status",
   "get_commit_file_diff",
+  "pull_local_branch",
   "push_to_origin",
   "list_stashes",
   "stash_push",

@@ -1253,6 +1253,45 @@ pub fn stash_drop(path: String, stash_ref: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Pull latest changes for a local branch: `git pull` when it is checked out; otherwise
+/// `git fetch` to fast-forward `refs/heads/<branch>` from its configured upstream, or from
+/// `origin` when no upstream is set (same convention as [`push_to_origin`]).
+#[tauri::command]
+pub fn pull_local_branch(path: String, branch: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let name = branch.trim();
+    if name.is_empty() {
+        return Err("Branch name cannot be empty.".to_string());
+    }
+    git_output(
+        &path_buf,
+        &["rev-parse", "--verify", &format!("refs/heads/{name}")],
+    )?;
+    let head = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let head = head.trim();
+    if head == name {
+        git_output(&path_buf, &["pull"])?;
+        return Ok(());
+    }
+    if let Some(upstream) = branch_upstream_abbrev(&path_buf, name) {
+        let Some((remote, remote_branch)) = upstream.split_once('/') else {
+            return Err("Could not parse upstream ref.".to_string());
+        };
+        git_output(
+            &path_buf,
+            &["fetch", remote, &format!("{remote_branch}:{name}")],
+        )?;
+        return Ok(());
+    }
+    git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
+        "No upstream configured for this branch and no remote named \"origin\"."
+            .to_string()
+    })?;
+    git_output(&path_buf, &["fetch", "origin", &format!("{name}:{name}")])?;
+    Ok(())
+}
+
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).
 #[tauri::command]
 pub fn push_to_origin(path: String) -> Result<(), String> {
