@@ -1,3 +1,4 @@
+import { getTokenStyleObject } from "@shikijs/core";
 import { useMemo, type ReactNode } from "react";
 import {
   computeNewLineNumber,
@@ -10,6 +11,10 @@ import {
   type FileData,
   type HunkData,
 } from "react-diff-view";
+import type { BundledLanguage, Highlighter } from "shiki";
+
+import { diffFileDisplayPath, pathToShikiLang } from "../diffLanguage";
+import { useDiffShikiTheme, useShikiHighlighter } from "../diffShiki";
 
 function fileKey(file: FileData, index: number): string {
   return `${file.oldRevision}-${file.newRevision}-${file.newPath || file.oldPath}-${index}`;
@@ -25,7 +30,19 @@ function gutterKind(change: ChangeData): "insert" | "delete" | "normal" {
   return "normal";
 }
 
-function DiffGridRow({ change }: { change: ChangeData }) {
+function DiffGridRow({
+  change,
+  lang,
+  binary,
+  highlighter,
+  shikiTheme,
+}: {
+  change: ChangeData;
+  lang: string | null;
+  binary: boolean;
+  highlighter: Highlighter | null;
+  shikiTheme: "github-light" | "github-dark";
+}) {
   const oldN = computeOldLineNumber(change);
   const newN = computeNewLineNumber(change);
   const oldText = oldN === -1 ? "" : String(oldN);
@@ -45,6 +62,22 @@ function DiffGridRow({ change }: { change: ChangeData }) {
       : kind === "delete"
         ? "diff-code-delete"
         : "diff-code-normal";
+
+  const content = change.content.length === 0 ? " " : change.content;
+
+  const lineTokens = useMemo(() => {
+    if (binary || !highlighter || !lang) return null;
+    try {
+      const row = highlighter.codeToTokens(content, {
+        lang: lang as BundledLanguage,
+        theme: shikiTheme,
+        tokenizeMaxLineLength: 12000,
+      }).tokens[0];
+      return row?.length ? row : null;
+    } catch {
+      return null;
+    }
+  }, [binary, content, highlighter, lang, shikiTheme]);
 
   return (
     <div
@@ -66,13 +99,33 @@ function DiffGridRow({ change }: { change: ChangeData }) {
       <pre
         className={`diff-line diff-code m-0 min-h-0 min-w-0 overflow-x-auto border-0 py-0 pr-2 pl-2 [word-break:break-word] whitespace-pre-wrap ${codeClass}`}
       >
-        {change.content.length === 0 ? " " : change.content}
+        {lineTokens
+          ? lineTokens.map((tok, i) => (
+              <span key={i} style={getTokenStyleObject(tok)}>
+                {tok.content}
+              </span>
+            ))
+          : content}
       </pre>
     </div>
   );
 }
 
-function UnifiedDiffFile({ file, fileIndex }: { file: FileData; fileIndex: number }) {
+function UnifiedDiffFile({
+  file,
+  fileIndex,
+  highlighter,
+  shikiTheme,
+}: {
+  file: FileData;
+  fileIndex: number;
+  highlighter: Highlighter | null;
+  shikiTheme: "github-light" | "github-dark";
+}) {
+  const path = diffFileDisplayPath(file);
+  const lang = useMemo(() => pathToShikiLang(path), [path]);
+  const binary = file.isBinary === true;
+
   return (
     <div className="unified-diff-file flex min-w-0 flex-col gap-0">
       {file.hunks.map((hunk, hi) => (
@@ -84,7 +137,14 @@ function UnifiedDiffFile({ file, fileIndex }: { file: FileData; fileIndex: numbe
             {hunk.content.trim()}
           </div>
           {hunk.changes.map((change) => (
-            <DiffGridRow key={getChangeKey(change)} change={change} />
+            <DiffGridRow
+              key={getChangeKey(change)}
+              change={change}
+              lang={lang}
+              binary={binary}
+              highlighter={highlighter}
+              shikiTheme={shikiTheme}
+            />
           ))}
         </div>
       ))}
@@ -128,11 +188,24 @@ export function UnifiedDiff({
     );
   }
 
+  return <UnifiedDiffWithHighlight parsedFiles={parsed.files} />;
+}
+
+function UnifiedDiffWithHighlight({ parsedFiles }: { parsedFiles: FileData[] }) {
+  const highlighter = useShikiHighlighter();
+  const shikiTheme = useDiffShikiTheme();
+
   return (
     <div className="unified-diff-panel unified-diff-grid block w-full min-w-0">
       <div className="w-full max-w-full min-w-0 overflow-x-auto">
-        {parsed.files.map((file, i) => (
-          <UnifiedDiffFile key={fileKey(file, i)} file={file} fileIndex={i} />
+        {parsedFiles.map((file, i) => (
+          <UnifiedDiffFile
+            key={fileKey(file, i)}
+            file={file}
+            fileIndex={i}
+            highlighter={highlighter}
+            shikiTheme={shikiTheme}
+          />
         ))}
       </div>
     </div>
