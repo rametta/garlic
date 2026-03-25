@@ -1073,8 +1073,21 @@ pub fn get_commit_signature_status(
     }
 }
 
-/// Unified diff for one file in a given commit (`git show -m …`), patch only (no commit headers).
-/// `-m` is required for **merge commits** (stash WIPs, merges); for single-parent commits output matches plain `git show`.
+/// True when `rev` has at least two parents (merge commit, including stash WIPs).
+fn merge_commit_has_second_parent(workdir: &Path, rev: &str) -> bool {
+    git_output(
+        workdir,
+        &["rev-parse", "--verify", &format!("{rev}^2")],
+    )
+    .is_ok()
+}
+
+/// Unified diff for one file in a given commit, patch only (no commit headers).
+///
+/// Merge commits (stash WIPs, branch merges) must not use `git show` alone: Git emits **combined**
+/// merge diffs (`diff --cc`, `@@@` hunks) which typical unified-diff UIs do not highlight. For merges we
+/// use `git diff <rev>^1 <rev>` instead, matching `git stash show -p` and producing normal `@@` hunks.
+/// Do not use `git show -m` here: it duplicates the same path once per parent.
 #[tauri::command]
 pub fn get_commit_file_diff(
     path: String,
@@ -1091,7 +1104,12 @@ pub fn get_commit_file_diff(
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
     }
-    let raw = git_output(&path_buf, &["show", "-m", "-U1", hash, "--", rel])?;
+    let p1 = format!("{hash}^1");
+    let raw = if merge_commit_has_second_parent(&path_buf, hash) {
+        git_diff_output(&path_buf, &["diff", "-U1", &p1, hash, "--", rel])?
+    } else {
+        git_output(&path_buf, &["show", "-U1", hash, "--", rel])?
+    };
     Ok(unified_diff_patch_only(&raw))
 }
 
