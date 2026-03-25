@@ -7,6 +7,7 @@ commands.allow = [
   "list_local_branches",
   "list_remote_branches",
   "list_branch_commits",
+  "list_graph_commits",
   "checkout_local_branch",
   "create_local_branch",
   "create_branch_from_remote",

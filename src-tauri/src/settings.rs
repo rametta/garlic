@@ -94,7 +94,7 @@ pub struct RestoreLastRepo {
     pub load_error: Option<String>,
     pub metadata: Option<git::RepoMetadata>,
     pub local_branches: Vec<git::LocalBranchEntry>,
-    pub remote_branches: Vec<String>,
+    pub remote_branches: Vec<git::RemoteBranchEntry>,
     pub commits: Vec<git::CommitEntry>,
     pub working_tree_files: Vec<git::WorkingTreeFile>,
     pub lists_error: Option<String>,
@@ -134,7 +134,16 @@ fn restore_repo_snapshot(
 
             let locals = git::list_local_branches(path.clone());
             let remotes = git::list_remote_branches(path.clone());
-            let commits = git::list_branch_commits(path.clone());
+            let commits = match (&locals, &remotes) {
+                (Ok(loc), Ok(rem)) => {
+                    let mut refs: Vec<String> = loc.iter().map(|b| b.name.clone()).collect();
+                    refs.extend(rem.iter().map(|r| r.name.clone()));
+                    refs.sort();
+                    refs.dedup();
+                    git::list_graph_commits(path.clone(), refs)
+                }
+                _ => git::list_branch_commits(path.clone()),
+            };
             let working_tree = git::list_working_tree_files(path.clone());
 
             let lists_error = locals

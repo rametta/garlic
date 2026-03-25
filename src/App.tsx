@@ -4,8 +4,54 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { CommitGraphColumn } from "./components/CommitGraphColumn";
 import { UnifiedDiff } from "./components/UnifiedDiff";
-import { COMMIT_GRAPH_ROW_HEIGHT, computeCommitGraphLayout } from "./commitGraphLayout";
+import {
+  COMMIT_GRAPH_ROW_HEIGHT,
+  computeCommitGraphLayout,
+  type BranchTip,
+} from "./commitGraphLayout";
 import { resolveThemePreference } from "./theme";
+
+function IconEye({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function IconEyeOff({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" />
+      <path d="M14.084 14.158a3 3 0 0 1-4.087-4.087" />
+      <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" />
+      <path d="m2 2 20 20" />
+    </svg>
+  );
+}
 
 interface RemoteEntry {
   name: string;
@@ -56,6 +102,12 @@ export interface LocalBranchEntry {
   behind: number | null;
 }
 
+/** Remote-tracking branch from `list_remote_branches`. */
+export interface RemoteBranchEntry {
+  name: string;
+  tipHash: string;
+}
+
 /** One path in the working tree from `list_working_tree_files` / bootstrap. */
 export interface WorkingTreeFile {
   path: string;
@@ -68,7 +120,7 @@ export interface RestoreLastRepo {
   loadError: string | null;
   metadata: RepoMetadata | null;
   localBranches: LocalBranchEntry[];
-  remoteBranches: string[];
+  remoteBranches: RemoteBranchEntry[];
   commits: CommitEntry[];
   workingTreeFiles: WorkingTreeFile[];
   listsError: string | null;
@@ -378,24 +430,33 @@ function insertRemoteRefIntoTrie(root: RemoteTrieNode, fullRef: string) {
   }
 }
 
-function buildRemoteBranchTrie(refs: string[]): RemoteTrieNode {
+function buildRemoteBranchTrie(refs: RemoteBranchEntry[]): RemoteTrieNode {
   const root = emptyRemoteTrieNode();
   for (const r of refs) {
-    insertRemoteRefIntoTrie(root, r);
+    insertRemoteRefIntoTrie(root, r.name);
   }
   return root;
 }
+
+type BranchGraphControls = {
+  graphVisibleLocal: (name: string) => boolean;
+  toggleGraphLocal: (name: string) => void;
+  graphVisibleRemote: (name: string) => boolean;
+  toggleGraphRemote: (name: string) => void;
+};
 
 function LocalBranchRow({
   branch,
   currentBranchName,
   branchBusy,
   onCheckoutLocal,
+  graph,
 }: {
   branch: LocalBranchEntry;
   currentBranchName: string | null;
   branchBusy: string | null;
   onCheckoutLocal: (name: string) => void;
+  graph: BranchGraphControls;
 }) {
   const isCurrent = currentBranchName === branch.name;
   const busy = branchBusy === `local:${branch.name}`;
@@ -404,17 +465,19 @@ function LocalBranchRow({
     branch.behind,
     branch.upstreamName ?? null,
   );
+  const graphVisible = graph.graphVisibleLocal(branch.name);
+
   return (
     <li className={isCurrent ? "menu-active" : ""}>
-      <button
-        type="button"
-        disabled={busy || isCurrent}
-        onClick={() => {
-          onCheckoutLocal(branch.name);
-        }}
-        className={`flex h-auto min-h-0 flex-col items-stretch justify-start gap-0.5 py-2 text-left whitespace-normal ${busy ? "opacity-60" : ""}`}
-      >
-        <span className="flex w-full min-w-0 items-baseline justify-between gap-2">
+      <div className="flex w-full min-w-0 items-stretch gap-0">
+        <button
+          type="button"
+          disabled={busy || isCurrent}
+          onClick={() => {
+            onCheckoutLocal(branch.name);
+          }}
+          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 py-2 pr-1 pl-2 text-left whitespace-normal ${busy ? "opacity-60" : ""}`}
+        >
           <span className="min-w-0 wrap-break-word">
             {busy ? "Switching…" : branch.name}
             {isCurrent && !busy ? (
@@ -435,8 +498,27 @@ function LocalBranchRow({
               {upstreamLabel}
             </span>
           ) : null}
-        </span>
-      </button>
+        </button>
+        <button
+          type="button"
+          className="btn shrink-0 rounded-none px-2 opacity-90 btn-ghost btn-xs"
+          title={graphVisible ? "Hide branch from commit graph" : "Show branch in commit graph"}
+          aria-label={graphVisible ? "Hide from graph" : "Show in graph"}
+          aria-pressed={graphVisible}
+          disabled={busy}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            graph.toggleGraphLocal(branch.name);
+          }}
+        >
+          {graphVisible ? (
+            <IconEye className="opacity-90" />
+          ) : (
+            <IconEyeOff className="opacity-50" />
+          )}
+        </button>
+      </div>
     </li>
   );
 }
@@ -446,6 +528,7 @@ function renderLocalBranchTrieChildren(
   currentBranchName: string | null,
   branchBusy: string | null,
   onCheckoutLocal: (name: string) => void,
+  graph: BranchGraphControls,
 ): ReactNode {
   const sorted = [...node.children.entries()].sort((a, b) =>
     a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
@@ -461,6 +544,7 @@ function renderLocalBranchTrieChildren(
           currentBranchName={currentBranchName}
           branchBusy={branchBusy}
           onCheckoutLocal={onCheckoutLocal}
+          graph={graph}
         />
       );
     }
@@ -475,9 +559,16 @@ function renderLocalBranchTrieChildren(
                 currentBranchName={currentBranchName}
                 branchBusy={branchBusy}
                 onCheckoutLocal={onCheckoutLocal}
+                graph={graph}
               />
             ) : null}
-            {renderLocalBranchTrieChildren(child, currentBranchName, branchBusy, onCheckoutLocal)}
+            {renderLocalBranchTrieChildren(
+              child,
+              currentBranchName,
+              branchBusy,
+              onCheckoutLocal,
+              graph,
+            )}
           </ul>
         </details>
       </li>
@@ -489,24 +580,49 @@ function RemoteBranchRow({
   fullRef,
   branchBusy,
   onCreateFromRemote,
+  graph,
 }: {
   fullRef: string;
   branchBusy: string | null;
   onCreateFromRemote: (remoteRef: string) => void;
+  graph: BranchGraphControls;
 }) {
   const busy = branchBusy === `remote:${fullRef}`;
+  const graphVisible = graph.graphVisibleRemote(fullRef);
+
   return (
     <li>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => {
-          onCreateFromRemote(fullRef);
-        }}
-        className={`h-auto min-h-0 justify-start py-2 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
-      >
-        {busy ? "Creating…" : fullRef}
-      </button>
+      <div className="flex w-full min-w-0 items-stretch gap-0">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            onCreateFromRemote(fullRef);
+          }}
+          className={`flex h-auto min-h-0 min-w-0 flex-1 justify-start py-2 pr-1 pl-2 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
+        >
+          {busy ? "Creating…" : fullRef}
+        </button>
+        <button
+          type="button"
+          className="btn shrink-0 rounded-none px-2 opacity-90 btn-ghost btn-xs"
+          title={graphVisible ? "Hide remote from commit graph" : "Show remote in commit graph"}
+          aria-label={graphVisible ? "Hide from graph" : "Show in graph"}
+          aria-pressed={graphVisible}
+          disabled={busy}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            graph.toggleGraphRemote(fullRef);
+          }}
+        >
+          {graphVisible ? (
+            <IconEye className="opacity-90" />
+          ) : (
+            <IconEyeOff className="opacity-50" />
+          )}
+        </button>
+      </div>
     </li>
   );
 }
@@ -515,6 +631,7 @@ function renderRemoteBranchTrieChildren(
   node: RemoteTrieNode,
   branchBusy: string | null,
   onCreateFromRemote: (remoteRef: string) => void,
+  graph: BranchGraphControls,
 ): ReactNode {
   const sorted = [...node.children.entries()].sort((a, b) =>
     a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
@@ -529,6 +646,7 @@ function renderRemoteBranchTrieChildren(
           fullRef={r}
           branchBusy={branchBusy}
           onCreateFromRemote={onCreateFromRemote}
+          graph={graph}
         />
       );
     }
@@ -542,9 +660,10 @@ function renderRemoteBranchTrieChildren(
                 fullRef={child.refHere}
                 branchBusy={branchBusy}
                 onCreateFromRemote={onCreateFromRemote}
+                graph={graph}
               />
             ) : null}
-            {renderRemoteBranchTrieChildren(child, branchBusy, onCreateFromRemote)}
+            {renderRemoteBranchTrieChildren(child, branchBusy, onCreateFromRemote, graph)}
           </ul>
         </details>
       </li>
@@ -569,8 +688,12 @@ export default function App({
   const [localBranches, setLocalBranches] = useState<LocalBranchEntry[]>(
     () => startup.localBranches,
   );
-  const [remoteBranches, setRemoteBranches] = useState<string[]>(() => startup.remoteBranches);
+  const [remoteBranches, setRemoteBranches] = useState<RemoteBranchEntry[]>(
+    () => startup.remoteBranches,
+  );
   const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
+  /** `local:name` / `remote:name` → visible in commit graph (default true when key missing). */
+  const [graphBranchVisible, setGraphBranchVisible] = useState<Record<string, boolean>>({});
   const [workingTreeFiles, setWorkingTreeFiles] = useState<WorkingTreeFile[]>(
     () => startup.workingTreeFiles,
   );
@@ -606,15 +729,13 @@ export default function App({
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
-      const [locals, remotes, log, worktree] = await Promise.all([
+      const [locals, remotes, worktree] = await Promise.all([
         invoke<LocalBranchEntry[]>("list_local_branches", { path: repoPath }),
-        invoke<string[]>("list_remote_branches", { path: repoPath }),
-        invoke<CommitEntry[]>("list_branch_commits", { path: repoPath }),
+        invoke<RemoteBranchEntry[]>("list_remote_branches", { path: repoPath }),
         invoke<WorkingTreeFile[]>("list_working_tree_files", { path: repoPath }),
       ]);
       setLocalBranches(locals);
       setRemoteBranches(remotes);
-      setCommits(log);
       setWorkingTreeFiles(worktree);
       return worktree;
     } catch (e) {
@@ -622,6 +743,94 @@ export default function App({
       return null;
     }
   }, []);
+
+  useEffect(() => {
+    setGraphBranchVisible((prev) => {
+      const next = { ...prev };
+      const valid = new Set<string>();
+      for (const b of localBranches) {
+        const k = `local:${b.name}`;
+        valid.add(k);
+        if (!(k in next)) next[k] = true;
+      }
+      for (const r of remoteBranches) {
+        const k = `remote:${r.name}`;
+        valid.add(k);
+        if (!(k in next)) next[k] = true;
+      }
+      for (const key of Object.keys(next)) {
+        if (!valid.has(key)) delete next[key];
+      }
+      return next;
+    });
+  }, [localBranches, remoteBranches]);
+
+  const graphRefs = useMemo(() => {
+    const refs: string[] = [];
+    for (const b of localBranches) {
+      if (graphBranchVisible[`local:${b.name}`] !== false) refs.push(b.name);
+    }
+    for (const r of remoteBranches) {
+      if (graphBranchVisible[`remote:${r.name}`] !== false) refs.push(r.name);
+    }
+    return refs;
+  }, [localBranches, remoteBranches, graphBranchVisible]);
+
+  const graphRefsKey = useMemo(() => graphRefs.join("\0"), [graphRefs]);
+
+  useEffect(() => {
+    if (!repo?.path || repo.error) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const log = await invoke<CommitEntry[]>("list_graph_commits", {
+          path: repo.path,
+          refs: graphRefs,
+        });
+        if (!cancelled) {
+          setCommits(log);
+          setListsError(null);
+        }
+      } catch (e) {
+        if (!cancelled) setListsError(invokeErrorMessage(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [repo?.path, repo?.error, graphRefsKey, graphRefs]);
+
+  const branchGraphControls: BranchGraphControls = useMemo(
+    () => ({
+      graphVisibleLocal: (name) => graphBranchVisible[`local:${name}`] !== false,
+      toggleGraphLocal: (name) => {
+        const k = `local:${name}`;
+        setGraphBranchVisible((prev) => ({ ...prev, [k]: !(prev[k] !== false) }));
+      },
+      graphVisibleRemote: (name) => graphBranchVisible[`remote:${name}`] !== false,
+      toggleGraphRemote: (name) => {
+        const k = `remote:${name}`;
+        setGraphBranchVisible((prev) => ({ ...prev, [k]: !(prev[k] !== false) }));
+      },
+    }),
+    [graphBranchVisible],
+  );
+
+  const graphBranchTips = useMemo((): BranchTip[] => {
+    const tips: BranchTip[] = [];
+    for (const b of localBranches) {
+      if (graphBranchVisible[`local:${b.name}`] !== false) {
+        tips.push({ name: b.name, tipHash: b.tipHash });
+      }
+    }
+    for (const r of remoteBranches) {
+      if (graphBranchVisible[`remote:${r.name}`] !== false) {
+        tips.push({ name: r.name, tipHash: r.tipHash });
+      }
+    }
+    tips.sort((a, b) => a.name.localeCompare(b.name));
+    return tips;
+  }, [localBranches, remoteBranches, graphBranchVisible]);
 
   const clearCommitBrowse = useCallback(() => {
     setCommitBrowseHash(null);
@@ -1090,10 +1299,10 @@ export default function App({
     () =>
       computeCommitGraphLayout(
         commits.map((c) => ({ hash: c.hash, parentHashes: c.parentHashes })),
-        localBranches.map((b) => ({ name: b.name, tipHash: b.tipHash })),
+        graphBranchTips,
         currentBranchName,
       ),
-    [commits, localBranches, currentBranchName],
+    [commits, graphBranchTips, currentBranchName],
   );
 
   return (
@@ -1212,6 +1421,7 @@ export default function App({
                   (name) => {
                     void onCheckoutLocal(name);
                   },
+                  branchGraphControls,
                 )}
               </ul>
             ) : null}
@@ -1224,9 +1434,14 @@ export default function App({
           >
             {canShowBranches ? (
               <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                {renderRemoteBranchTrieChildren(remoteBranchTrieRoot, branchBusy, (remoteRef) => {
-                  void onCreateFromRemote(remoteRef);
-                })}
+                {renderRemoteBranchTrieChildren(
+                  remoteBranchTrieRoot,
+                  branchBusy,
+                  (remoteRef) => {
+                    void onCreateFromRemote(remoteRef);
+                  },
+                  branchGraphControls,
+                )}
               </ul>
             ) : null}
           </BranchPanel>
@@ -1494,12 +1709,26 @@ export default function App({
                                 }}
                               >
                                 {commits.map((c, idx) => {
-                                  const tipsHere = localBranches.filter(
-                                    (b) => b.tipHash === c.hash,
+                                  const visibleLocalTips = localBranches.filter(
+                                    (b) =>
+                                      graphBranchVisible[`local:${b.name}`] !== false &&
+                                      b.tipHash === c.hash,
                                   );
-                                  const firstTip = tipsHere[0];
-                                  const laneIdx = firstTip
-                                    ? commitGraphLayout.branchNamesSorted.indexOf(firstTip.name)
+                                  const visibleRemoteTips = remoteBranches.filter(
+                                    (r) =>
+                                      graphBranchVisible[`remote:${r.name}`] !== false &&
+                                      r.tipHash === c.hash,
+                                  );
+                                  const sortedNames = commitGraphLayout.branchNamesSorted;
+                                  const tipsHereNames = [
+                                    ...visibleLocalTips.map((b) => b.name),
+                                    ...visibleRemoteTips.map((r) => r.name),
+                                  ];
+                                  const firstTipName = sortedNames.find((n) =>
+                                    tipsHereNames.includes(n),
+                                  );
+                                  const laneIdx = firstTipName
+                                    ? sortedNames.indexOf(firstTipName)
                                     : -1;
                                   const laneColor =
                                     laneIdx >= 0
@@ -1507,42 +1736,67 @@ export default function App({
                                           laneIdx % commitGraphLayout.laneColors.length
                                         ]
                                       : undefined;
-                                  const branchCell =
-                                    tipsHere.length > 0 ? (
-                                      <span
-                                        className="flex min-w-0 items-center gap-0.5 truncate text-[0.62rem] leading-tight text-base-content"
-                                        title={tipsHere.map((b) => b.name).join(", ")}
-                                        style={
-                                          laneColor
-                                            ? {
-                                                borderLeft: `2px solid ${laneColor}`,
-                                                paddingLeft: 4,
-                                              }
-                                            : undefined
-                                        }
-                                      >
-                                        {tipsHere.some((b) => b.name === currentBranchName) ? (
-                                          <span className="shrink-0 text-primary" aria-hidden>
-                                            ✓
-                                          </span>
-                                        ) : null}
-                                        <span className="min-w-0 truncate font-medium">
-                                          {tipsHere.map((b) => b.name).join(", ")}
-                                        </span>
-                                      </span>
-                                    ) : idx === 0 ? (
-                                      <span
-                                        className="flex min-w-0 items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content/85"
-                                        title={commitsSectionTitle}
-                                      >
+                                  const hasBranchTips =
+                                    visibleLocalTips.length > 0 || visibleRemoteTips.length > 0;
+                                  const branchCell = hasBranchTips ? (
+                                    <span
+                                      className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[0.62rem] leading-tight text-base-content"
+                                      title={tipsHereNames.join(", ")}
+                                      style={
+                                        laneColor
+                                          ? {
+                                              borderLeft: `2px solid ${laneColor}`,
+                                              paddingLeft: 4,
+                                            }
+                                          : undefined
+                                      }
+                                    >
+                                      {visibleLocalTips.some(
+                                        (b) => b.name === currentBranchName,
+                                      ) ? (
                                         <span className="shrink-0 text-primary" aria-hidden>
                                           ✓
                                         </span>
-                                        <span className="min-w-0 truncate font-medium">
-                                          {commitsSectionTitle}
+                                      ) : null}
+                                      {visibleLocalTips.map((b) => (
+                                        <span
+                                          key={`l:${b.name}`}
+                                          className="max-w-full min-w-0 truncate font-medium"
+                                        >
+                                          {b.name}
                                         </span>
+                                      ))}
+                                      {visibleLocalTips.length > 0 &&
+                                      visibleRemoteTips.length > 0 ? (
+                                        <span
+                                          className="shrink-0 text-[0.55rem] text-base-content/45"
+                                          aria-hidden
+                                        >
+                                          ·
+                                        </span>
+                                      ) : null}
+                                      {visibleRemoteTips.map((r) => (
+                                        <span
+                                          key={`r:${r.name}`}
+                                          className="max-w-full min-w-0 truncate font-medium text-secondary"
+                                        >
+                                          {r.name}
+                                        </span>
+                                      ))}
+                                    </span>
+                                  ) : idx === 0 ? (
+                                    <span
+                                      className="flex min-w-0 items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content/85"
+                                      title={commitsSectionTitle}
+                                    >
+                                      <span className="shrink-0 text-primary" aria-hidden>
+                                        ✓
                                       </span>
-                                    ) : null;
+                                      <span className="min-w-0 truncate font-medium">
+                                        {commitsSectionTitle}
+                                      </span>
+                                    </span>
+                                  ) : null;
                                   const isBrowsing = commitBrowseHash === c.hash;
                                   const rel = formatRelativeShort(c.date);
                                   const fullTitle = [

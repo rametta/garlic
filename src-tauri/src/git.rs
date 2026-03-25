@@ -33,6 +33,14 @@ pub struct CommitSignatureStatus {
     pub verified: Option<bool>,
 }
 
+/// Remote-tracking branch (`refs/remotes/...`) with tip OID.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteBranchEntry {
+    pub name: String,
+    pub tip_hash: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalBranchEntry {
@@ -430,41 +438,46 @@ pub fn list_local_branches(path: String) -> Result<Vec<LocalBranchEntry>, String
 
 /// Remote-tracking branches as `remote/branch` (e.g. `origin/main`), excluding `*/HEAD`.
 #[tauri::command]
-pub fn list_remote_branches(path: String) -> Result<Vec<String>, String> {
-    let path_buf = PathBuf::from(&path);
-    ensure_git_repo(&path_buf)?;
-    let out = git_output(
-        &path_buf,
-        &["for-each-ref", "--format=%(refname:short)", "refs/remotes/"],
-    )?;
-    let mut branches: Vec<String> = out
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .filter(|s| !s.ends_with("/HEAD"))
-        .collect();
-    branches.sort();
-    Ok(branches)
-}
-
-/// Commits reachable from any local branch (`--branches`), topological order, newest first.
-#[tauri::command]
-pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
+pub fn list_remote_branches(path: String) -> Result<Vec<RemoteBranchEntry>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let out = git_output(
         &path_buf,
         &[
-            "log",
-            "--branches",
-            "--topo-order",
-            "-n",
-            "500",
-            // Avoid `%G?` here: signature verification can block repo loading.
-            // %P: space-separated parents; %x1f: subject last so it can contain delimiters.
-            "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s",
+            "for-each-ref",
+            "--format=%(objectname)\t%(refname:short)",
+            "refs/remotes/",
         ],
     )?;
+    let mut entries: Vec<RemoteBranchEntry> = Vec::new();
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (tip_hash, name) = if let Some((a, b)) = line.split_once('\t') {
+            (a.trim().to_string(), b.trim().to_string())
+        } else {
+            let mut it = line.split_whitespace();
+            let Some(oid) = it.next() else {
+                continue;
+            };
+            let rest: String = it.collect::<Vec<_>>().join(" ");
+            if rest.is_empty() {
+                continue;
+            }
+            (oid.to_string(), rest)
+        };
+        if name.is_empty() || name.ends_with("/HEAD") || tip_hash.is_empty() {
+            continue;
+        }
+        entries.push(RemoteBranchEntry { name, tip_hash });
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+fn parse_commit_log_lines(out: &str) -> Vec<CommitEntry> {
     let mut commits = Vec::new();
     for line in out.lines() {
         let line = line.trim();
@@ -496,7 +509,56 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
             });
         }
     }
-    Ok(commits)
+    commits
+}
+
+/// Commits reachable from any local branch (`--branches`), topological order, newest first.
+#[tauri::command]
+pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let out = git_output(
+        &path_buf,
+        &[
+            "log",
+            "--branches",
+            "--topo-order",
+            "-n",
+            "500",
+            // Avoid `%G?` here: signature verification can block repo loading.
+            // %P: space-separated parents; %x1f: subject last so it can contain delimiters.
+            "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s",
+        ],
+    )?;
+    Ok(parse_commit_log_lines(&out))
+}
+
+/// Commits reachable from the given refs (branch names like `main` or `origin/main`), topo order, newest first.
+#[tauri::command]
+pub fn list_graph_commits(path: String, refs: Vec<String>) -> Result<Vec<CommitEntry>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let mut clean: Vec<String> = refs
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    clean.sort();
+    clean.dedup();
+    if clean.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut cmd_args: Vec<String> = vec![
+        "log".into(),
+        "--topo-order".into(),
+        "-n".into(),
+        "500".into(),
+        "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s".into(),
+    ];
+    cmd_args.extend(clean);
+    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
+    let out = git_output(&path_buf, &args_ref)?;
+    Ok(parse_commit_log_lines(&out))
 }
 
 #[tauri::command]
