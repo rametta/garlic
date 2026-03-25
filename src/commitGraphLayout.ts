@@ -17,13 +17,13 @@ export interface BranchTip {
 export interface CommitGraphLayout {
   laneCount: number;
   graphWidthPx: number;
-  /** Lane index per row (same order as `commits`). */
+  /** Lane index per row (same order as `commits`, newest first). */
   lanes: number[];
-  /** Sorted branch names used as lanes (same order as lane indices). */
+  /** Local branch names (sorted) for labels; not 1:1 with lane indices when lanes > branches. */
   branchNamesSorted: string[];
   /** Stroke color per lane index. */
   laneColors: string[];
-  /** SVG path `d` for each edge (parent below child in list). */
+  /** SVG path `d` for each edge (parent is older = lower on screen = larger row index). */
   edgePaths: { d: string; color: string }[];
 }
 
@@ -32,71 +32,87 @@ function branchLaneHue(index: number): string {
   return `hsl(${h} 58% 52%)`;
 }
 
-/** Walk parents from each branch tip to mark which branches contain each commit in the loaded window. */
-function branchNamesByCommit(
-  commits: CommitGraphCommit[],
-  tips: BranchTip[],
-): Map<string, string[]> {
+/**
+ * Assign a lane index to each commit from the DAG only (forks open new columns to the right;
+ * merges connect lanes; first parent is the mainline through a merge).
+ *
+ * `commits` must be topo-ordered newest-first (row 0 = newest).
+ */
+function assignLanesFromDag(commits: CommitGraphCommit[]): Map<string, number> {
   const hashSet = new Set(commits.map((c) => c.hash));
-  const byHash = new Map(commits.map((c) => [c.hash, c] as const));
-  const branchByCommit = new Map<string, string[]>();
+  const indexByHash = new Map(commits.map((c, i) => [c.hash, i] as const));
 
-  const sortedTips = [...tips].sort((a, b) => a.name.localeCompare(b.name));
-
-  for (const tip of sortedTips) {
-    if (!hashSet.has(tip.tipHash)) continue;
-    const stack = [tip.tipHash];
-    const seen = new Set<string>();
-    while (stack.length > 0) {
-      const h = stack.pop()!;
-      if (seen.has(h)) continue;
-      seen.add(h);
-      if (!hashSet.has(h)) continue;
-      const cur = branchByCommit.get(h) ?? [];
-      if (!cur.includes(tip.name)) {
-        cur.push(tip.name);
-        cur.sort((a, b) => a.localeCompare(b));
-        branchByCommit.set(h, cur);
+  const children = new Map<string, string[]>();
+  for (const c of commits) {
+    for (const p of c.parentHashes) {
+      if (!hashSet.has(p)) continue;
+      let list = children.get(p);
+      if (!list) {
+        list = [];
+        children.set(p, list);
       }
-      const c = byHash.get(h);
-      if (!c) continue;
-      for (const p of c.parentHashes) {
-        if (hashSet.has(p)) stack.push(p);
-      }
+      list.push(c.hash);
     }
   }
 
-  return branchByCommit;
-}
-
-function primaryBranchName(branches: string[], currentBranchName: string | null): string | null {
-  if (branches.length === 0) return null;
-  if (currentBranchName && branches.includes(currentBranchName)) {
-    return currentBranchName;
+  // Oldest sibling first (larger row index in newest-first list) continues the parent's lane.
+  for (const list of children.values()) {
+    list.sort((a, b) => (indexByHash.get(b) ?? 0) - (indexByHash.get(a) ?? 0));
   }
-  return branches[0] ?? null;
+
+  const laneByHash = new Map<string, number>();
+  let nextLane = 1;
+
+  for (let k = commits.length - 1; k >= 0; k--) {
+    const c = commits[k];
+    const parentsInGraph = c.parentHashes.filter((p) => hashSet.has(p));
+
+    if (parentsInGraph.length === 0) {
+      laneByHash.set(c.hash, 0);
+      continue;
+    }
+
+    // Merge commit (2+ parents in Git): lane follows first parent that appears in this window.
+    if (c.parentHashes.length >= 2) {
+      const firstParentInGraph = c.parentHashes.find((p) => hashSet.has(p));
+      if (firstParentInGraph !== undefined) {
+        laneByHash.set(c.hash, laneByHash.get(firstParentInGraph) ?? 0);
+      } else {
+        laneByHash.set(c.hash, 0);
+      }
+      continue;
+    }
+
+    // Single parent: fork if this is not the oldest child of that parent (side-by-side rails).
+    const p = parentsInGraph[0];
+    const laneP = laneByHash.get(p) ?? 0;
+    const sibs = children.get(p) ?? [];
+    const continuesParentLane = sibs.length === 0 || sibs[0] === c.hash;
+    if (continuesParentLane) {
+      laneByHash.set(c.hash, laneP);
+    } else {
+      laneByHash.set(c.hash, nextLane);
+      nextLane += 1;
+    }
+  }
+
+  return laneByHash;
 }
 
 export function computeCommitGraphLayout(
   commits: CommitGraphCommit[],
   tips: BranchTip[],
-  currentBranchName: string | null,
+  _currentBranchName: string | null,
 ): CommitGraphLayout {
   const branchNamesSorted = [...new Set(tips.map((t) => t.name))].sort((a, b) =>
     a.localeCompare(b),
   );
-  const laneCount = Math.max(1, branchNamesSorted.length);
-  const branchToLane = new Map<string, number>();
-  branchNamesSorted.forEach((n, i) => branchToLane.set(n, i));
 
-  const branchesAt = branchNamesByCommit(commits, tips);
+  const laneByHash = commits.length === 0 ? new Map<string, number>() : assignLanesFromDag(commits);
 
-  const lanes: number[] = commits.map((c) => {
-    const names = branchesAt.get(c.hash) ?? [];
-    const primary = primaryBranchName(names, currentBranchName);
-    if (primary === null) return 0;
-    return branchToLane.get(primary) ?? 0;
-  });
+  const lanes: number[] = commits.map((c) => laneByHash.get(c.hash) ?? 0);
+  const maxLane = lanes.length === 0 ? 0 : Math.max(...lanes);
+  const laneCount = Math.max(1, maxLane + 1);
 
   const laneColors = Array.from({ length: laneCount }, (_, i) => branchLaneHue(i));
 
@@ -115,16 +131,21 @@ export function computeCommitGraphLayout(
   for (let i = 0; i < commits.length; i++) {
     const c = commits[i];
     const y1 = cy(i);
-    const x1 = cx(lanes[i]);
+    const x1 = cx(lanes[i] ?? 0);
+    let pi = 0;
     for (const p of c.parentHashes) {
       const j = indexByHash.get(p);
       if (j === undefined) continue;
       const y2 = cy(j);
-      const x2 = cx(lanes[j]);
+      const x2 = cx(lanes[j] ?? 0);
       const yMid = (y1 + y2) / 2;
       const d = `M ${x1} ${y1} L ${x1} ${yMid} L ${x2} ${yMid} L ${x2} ${y2}`;
-      const color = laneColors[lanes[j] % laneColors.length] ?? branchLaneHue(0);
+      const color =
+        pi === 0
+          ? laneColors[(lanes[i] ?? 0) % laneColors.length]
+          : laneColors[(lanes[j] ?? 0) % laneColors.length];
       edgePaths.push({ d, color });
+      pi += 1;
     }
   }
 
