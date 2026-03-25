@@ -374,12 +374,18 @@ export default function App({
 
   const refreshAfterMutation = useCallback(async () => {
     if (!repo?.path || repo.error) return;
+    const prevBranch = repo.branch;
+    const prevDetached = repo.detached;
     try {
       const meta = await invoke<RepoMetadata>("get_repo_metadata", {
         path: repo.path,
       });
+      const branchContextChanged = meta.branch !== prevBranch || meta.detached !== prevDetached;
       setRepo(meta);
       if (!meta.error) {
+        if (branchContextChanged) {
+          clearCommitBrowse();
+        }
         const files = await refreshLists(repo.path);
         if (selectedDiffPath && files) {
           const next = files.find((w) => w.path === selectedDiffPath);
@@ -396,7 +402,7 @@ export default function App({
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }
-  }, [repo, refreshLists, selectedDiffPath, loadDiffForFile]);
+  }, [repo, refreshLists, selectedDiffPath, loadDiffForFile, clearCommitBrowse]);
 
   useEffect(() => {
     const promise = Promise.all([
@@ -877,23 +883,23 @@ export default function App({
                           </div>
                         </div>
                       ) : !listsError && commitDiffPath && commitBrowseHash ? (
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+                          <div className="flex shrink-0 flex-wrap items-end justify-between gap-2 border-b border-base-300 pb-1.5">
                             <div className="min-w-0">
-                              <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                 Commit diff
                               </h2>
-                              <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
+                              <code className="mt-0.5 block font-mono text-[0.65rem] leading-tight wrap-break-word text-base-content/85">
                                 {commitDiffPath}
                               </code>
-                              <p className="mt-1 mb-0 font-mono text-[0.65rem] text-base-content/60">
+                              <p className="mt-0.5 mb-0 font-mono text-[0.6rem] text-base-content/50">
                                 {commits.find((x) => x.hash === commitBrowseHash)?.shortHash ??
                                   commitBrowseHash.slice(0, 7)}
                               </p>
                             </div>
                             <button
                               type="button"
-                              className="btn shrink-0 btn-ghost btn-sm"
+                              className="btn shrink-0 btn-ghost btn-xs"
                               onClick={backFromCommitFileDiff}
                             >
                               Back to files
@@ -901,74 +907,72 @@ export default function App({
                           </div>
                           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                             {commitDiffLoading ? (
-                              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                              <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
                                 <span className="loading loading-md loading-spinner text-primary" />
-                                <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
+                                <p className="m-0 text-xs text-base-content/70">Loading diff…</p>
                               </div>
                             ) : commitDiffError ? (
-                              <div role="alert" className="alert text-sm alert-error">
+                              <div role="alert" className="alert py-2 text-xs alert-error">
                                 <span className="wrap-break-word">{commitDiffError}</span>
                               </div>
                             ) : (
-                              <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
-                                <div className="mb-8 last:mb-0">
-                                  <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                                    Commit
-                                  </div>
-                                  <UnifiedDiff
-                                    text={commitDiffText ?? ""}
-                                    emptyLabel="(no diff for this file)"
-                                  />
+                              <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
+                                <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                  Patch
                                 </div>
+                                <UnifiedDiff
+                                  text={commitDiffText ?? ""}
+                                  emptyLabel="(no diff for this file)"
+                                />
                               </div>
                             )}
                           </div>
                         </div>
                       ) : !listsError && commitBrowseHash ? (
-                        <div className="mb-6 flex min-h-0 min-w-0 flex-col gap-3">
-                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-2">
+                        <div className="mb-4 flex min-h-0 min-w-0 flex-col gap-2">
+                          <div className="flex shrink-0 flex-wrap items-end justify-between gap-2 border-b border-base-300 pb-1.5">
                             <div className="min-w-0">
-                              <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                 Files in commit
                               </h2>
-                              <p className="mt-1 mb-0 font-mono text-[0.65rem] text-base-content/70">
+                              <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
                                 {commits.find((x) => x.hash === commitBrowseHash)?.subject ??
                                   commitBrowseHash.slice(0, 7)}
                               </p>
                             </div>
                             <button
                               type="button"
-                              className="btn shrink-0 btn-ghost btn-sm"
+                              className="btn shrink-0 btn-ghost btn-xs"
                               onClick={clearCommitBrowse}
                             >
                               Back to commits
                             </button>
                           </div>
                           {commitBrowseLoading ? (
-                            <div className="flex flex-col items-center justify-center gap-3 py-12">
+                            <div className="flex flex-col items-center justify-center gap-2 py-8">
                               <span className="loading loading-md loading-spinner text-primary" />
-                              <p className="m-0 text-sm text-base-content/70">Loading files…</p>
+                              <p className="m-0 text-xs text-base-content/70">Loading files…</p>
                             </div>
                           ) : commitBrowseError ? (
-                            <div role="alert" className="alert text-sm alert-error">
+                            <div role="alert" className="alert py-2 text-xs alert-error">
                               <span className="wrap-break-word">{commitBrowseError}</span>
                             </div>
                           ) : commitBrowseFiles.length === 0 ? (
-                            <p className="m-0 text-center text-sm text-base-content/60">
+                            <p className="m-0 text-center text-xs text-base-content/60">
                               No files changed in this commit
                             </p>
                           ) : (
-                            <ul className="m-0 max-h-[min(52vh,28rem)] list-none space-y-1 overflow-y-auto p-0">
+                            <ul className="m-0 max-h-[min(52vh,28rem)] list-none divide-y divide-base-300/50 overflow-y-auto p-0">
                               {commitBrowseFiles.map((fp) => (
                                 <li key={fp}>
                                   <button
                                     type="button"
-                                    className="w-full rounded-md border border-base-300 bg-base-200 px-2 py-2 text-left transition-colors hover:bg-base-300/50"
+                                    className="w-full px-1 py-0.5 text-left text-[0.6875rem] leading-tight transition-colors hover:bg-base-300/35"
                                     onClick={() =>
                                       void loadCommitFileDiff(fp, commitBrowseHash ?? "")
                                     }
                                   >
-                                    <code className="font-mono text-[0.75rem] wrap-break-word text-base-content">
+                                    <code className="font-mono wrap-break-word text-base-content/90">
                                       {fp}
                                     </code>
                                   </button>
