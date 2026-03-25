@@ -20,6 +20,7 @@ pub struct CommitEntry {
     pub short_hash: String,
     pub subject: String,
     pub author: String,
+    pub author_email: String,
     pub date: String,
     /// Parent commit hashes (first parent is mainline; merge commits have 2+).
     pub parent_hashes: Vec<String>,
@@ -496,15 +497,16 @@ fn parse_commit_log_lines(out: &str) -> Vec<CommitEntry> {
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(6, '\x1f');
+        let mut parts = line.splitn(7, '\x1f');
         let hash = parts.next().map(String::from);
         let parents_raw = parts.next().map(String::from);
         let short_hash = parts.next().map(String::from);
         let author = parts.next().map(String::from);
+        let author_email = parts.next().map(String::from);
         let date = parts.next().map(String::from);
         let subject = parts.next().map(String::from);
-        if let (Some(h), Some(pr), Some(sh), Some(auth), Some(dt), Some(sub)) =
-            (hash, parents_raw, short_hash, author, date, subject)
+        if let (Some(h), Some(pr), Some(sh), Some(auth), Some(ae), Some(dt), Some(sub)) =
+            (hash, parents_raw, short_hash, author, author_email, date, subject)
         {
             let parent_hashes: Vec<String> = pr
                 .split_whitespace()
@@ -516,6 +518,7 @@ fn parse_commit_log_lines(out: &str) -> Vec<CommitEntry> {
                 short_hash: sh,
                 subject: sub,
                 author: auth,
+                author_email: ae,
                 date: dt,
                 parent_hashes,
             });
@@ -539,7 +542,7 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
             "500",
             // Avoid `%G?` here: signature verification can block repo loading.
             // %P: space-separated parents; %x1f: subject last so it can contain delimiters.
-            "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s",
+            "--format=%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s",
         ],
     )?;
     Ok(parse_commit_log_lines(&out))
@@ -565,7 +568,7 @@ pub fn list_graph_commits(path: String, refs: Vec<String>) -> Result<Vec<CommitE
         "--topo-order".into(),
         "-n".into(),
         "500".into(),
-        "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s".into(),
+        "--format=%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s".into(),
     ];
     cmd_args.extend(clean);
     let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();

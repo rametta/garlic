@@ -88,6 +88,7 @@ interface CommitEntry {
   shortHash: string;
   subject: string;
   author: string;
+  authorEmail: string;
   date: string;
   parentHashes: string[];
 }
@@ -149,14 +150,9 @@ export interface RestoreLastRepo {
   listsError: string | null;
 }
 
-function localBranchUpstreamLabel(
-  ahead: number | null,
-  behind: number | null,
-  upstreamName: string | null,
-): string | null {
+function localBranchUpstreamLabel(ahead: number | null, behind: number | null): string | null {
   if (ahead === null || behind === null) return null;
-  const vs = upstreamName ? ` · ${upstreamName}` : "";
-  return `↑${ahead} ↓${behind}${vs}`;
+  return `↑${ahead} ↓${behind}`;
 }
 
 /** Rules aligned with `git check-ref-format --branch` for short branch names. */
@@ -541,11 +537,7 @@ function LocalBranchRow({
 }) {
   const isCurrent = currentBranchName === branch.name;
   const busy = branchBusy === `local:${branch.name}`;
-  const upstreamLabel = localBranchUpstreamLabel(
-    branch.ahead,
-    branch.behind,
-    branch.upstreamName ?? null,
-  );
+  const upstreamLabel = localBranchUpstreamLabel(branch.ahead, branch.behind);
   const graphVisible = graph.graphVisibleLocal(branch.name);
 
   return (
@@ -557,9 +549,12 @@ function LocalBranchRow({
           onClick={() => {
             onCheckoutLocal(branch.name);
           }}
-          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 py-2 pr-1 pl-2 text-left whitespace-normal ${busy ? "opacity-60" : ""}`}
+          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 py-2 pr-1 pl-2 text-left ${busy ? "opacity-60" : ""}`}
         >
-          <span className="min-w-0 wrap-break-word">
+          <span
+            className="min-w-0 flex-1 truncate text-[0.8125rem] leading-snug"
+            title={busy ? undefined : branch.name}
+          >
             {busy ? "Switching…" : branch.name}
             {isCurrent && !busy ? (
               <span className="ml-1.5 text-xs font-normal opacity-70">(current)</span>
@@ -911,6 +906,11 @@ export default function App({
   }, [localBranches, remoteBranches, graphBranchVisible]);
 
   const graphRefsKey = useMemo(() => graphRefs.join("\0"), [graphRefs]);
+
+  const commitBrowseMeta = useMemo(
+    () => (commitBrowseHash ? commits.find((c) => c.hash === commitBrowseHash) : undefined),
+    [commits, commitBrowseHash],
+  );
 
   useEffect(() => {
     if (!repo?.path || repo.error) return;
@@ -1737,7 +1737,7 @@ export default function App({
                             </div>
                             <button
                               type="button"
-                              className="btn shrink-0 btn-ghost btn-sm"
+                              className="btn shrink-0 btn-sm btn-primary"
                               onClick={clearDiffSelection}
                             >
                               Back to commits
@@ -1829,21 +1829,45 @@ export default function App({
                         </div>
                       ) : !listsError && commitBrowseHash ? (
                         <div className="mb-4 flex min-h-0 min-w-0 flex-col gap-2">
-                          <div className="flex shrink-0 flex-wrap items-end justify-between gap-2 border-b border-base-300 pb-1.5">
-                            <div className="min-w-0">
-                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                Files in commit
-                              </h2>
-                              <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
-                                {commits.find((x) => x.hash === commitBrowseHash)?.subject ??
-                                  commitBrowseHash.slice(0, 7)}
-                              </p>
+                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
+                            <button
+                              type="button"
+                              className="btn shrink-0 btn-xs btn-primary"
+                              onClick={clearCommitBrowse}
+                            >
+                              Back to commits
+                            </button>
+                            <div className="max-w-[min(100%,20rem)] min-w-0 flex-1 text-right">
+                              {commitBrowseMeta?.author.trim() ? (
+                                <p className="m-0 text-[0.7rem] leading-snug font-medium text-base-content/90">
+                                  {commitBrowseMeta.author.trim()}
+                                </p>
+                              ) : null}
+                              {commitBrowseMeta?.authorEmail.trim() ? (
+                                <code className="mt-0.5 block font-mono text-[0.6rem] leading-snug wrap-break-word text-base-content/65">
+                                  {commitBrowseMeta.authorEmail.trim()}
+                                </code>
+                              ) : null}
                               {commitSignature.loading ? (
-                                <p className="mt-1 mb-0 text-[0.6rem] text-base-content/50">
+                                <p
+                                  className={`mb-0 text-[0.6rem] text-base-content/50 ${
+                                    commitBrowseMeta?.author.trim() ||
+                                    commitBrowseMeta?.authorEmail.trim()
+                                      ? "mt-1"
+                                      : "mt-0"
+                                  }`}
+                                >
                                   Signature: checking…
                                 </p>
                               ) : (
-                                <p className="mt-1 mb-0 text-[0.6rem] text-base-content/60">
+                                <p
+                                  className={`mb-0 text-[0.6rem] text-base-content/60 ${
+                                    commitBrowseMeta?.author.trim() ||
+                                    commitBrowseMeta?.authorEmail.trim()
+                                      ? "mt-1"
+                                      : "mt-0"
+                                  }`}
+                                >
                                   Signature:{" "}
                                   {commitSignature.verified === true ? (
                                     <span className="text-success">verified</span>
@@ -1855,13 +1879,16 @@ export default function App({
                                 </p>
                               )}
                             </div>
-                            <button
-                              type="button"
-                              className="btn shrink-0 btn-ghost btn-xs"
-                              onClick={clearCommitBrowse}
-                            >
-                              Back to commits
-                            </button>
+                          </div>
+                          <div className="shrink-0 border-b border-base-300 pb-1.5">
+                            <div className="min-w-0">
+                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                Files in commit
+                              </h2>
+                              <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
+                                {commitBrowseMeta?.subject ?? commitBrowseHash.slice(0, 7)}
+                              </p>
+                            </div>
                           </div>
                           {commitBrowseLoading ? (
                             <div className="flex flex-col items-center justify-center gap-2 py-8">
