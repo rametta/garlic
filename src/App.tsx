@@ -273,6 +273,7 @@ export default function App({
   const [commitDiffError, setCommitDiffError] = useState<string | null>(null);
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
+  const [commitPushBusy, setCommitPushBusy] = useState(false);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const [newBranchName, setNewBranchName] = useState("");
@@ -672,6 +673,26 @@ export default function App({
     }
   }
 
+  async function onCommitAndPush() {
+    if (!repo?.path || repo.error || repo.detached) return;
+    const msg = commitMessage.trim();
+    if (!msg) return;
+    if (!workingTreeFiles.some((f) => f.staged)) return;
+    setCommitPushBusy(true);
+    setOperationError(null);
+    try {
+      await invoke("commit_staged", { path: repo.path, message: msg });
+      setCommitMessage("");
+      await invoke("push_to_origin", { path: repo.path });
+      await refreshAfterMutation();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+      void refreshAfterMutation();
+    } finally {
+      setCommitPushBusy(false);
+    }
+  }
+
   const canShowBranches = Boolean(repo && !repo.error && !loading);
   const currentBranchName = repo?.detached ? null : (repo?.branch ?? null);
   const commitsSectionTitle =
@@ -689,12 +710,15 @@ export default function App({
     Boolean(repo?.path && !repo.error && !loading) &&
     hasStagedFiles &&
     commitMessage.trim().length > 0 &&
-    !stageCommitBusy;
+    !stageCommitBusy &&
+    !commitPushBusy;
   const canPush =
     Boolean(repo?.path && !repo.error && !loading) &&
     !repo?.detached &&
     !stageCommitBusy &&
+    !commitPushBusy &&
     !pushBusy;
+  const canCommitAndPush = canCommit && !repo?.detached && !pushBusy;
 
   const newBranchTrimmed = newBranchName.trim();
   const newBranchNameInvalid =
@@ -1094,17 +1118,17 @@ export default function App({
                               No files changed in this commit
                             </p>
                           ) : (
-                            <ul className="m-0 max-h-[min(52vh,28rem)] list-none divide-y divide-base-300/50 overflow-y-auto p-0">
+                            <ul className="m-0 flex max-h-[min(52vh,28rem)] list-none flex-col gap-2 overflow-y-auto py-1 pr-0.5">
                               {commitBrowseFiles.map((fp) => (
                                 <li key={fp}>
                                   <button
                                     type="button"
-                                    className="w-full px-1 py-0.5 text-left text-[0.6875rem] leading-tight transition-colors hover:bg-base-300/35"
+                                    className="w-full rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
                                     onClick={() =>
                                       void loadCommitFileDiff(fp, commitBrowseHash ?? "")
                                     }
                                   >
-                                    <code className="font-mono wrap-break-word text-base-content/90">
+                                    <code className="font-mono wrap-break-word text-base-content/95">
                                       {fp}
                                     </code>
                                   </button>
@@ -1325,7 +1349,7 @@ export default function App({
                     className="textarea-bordered textarea min-h-18 w-full resize-y font-sans text-sm textarea-sm"
                     placeholder="Describe your changes…"
                     value={commitMessage}
-                    disabled={!canShowBranches || stageCommitBusy}
+                    disabled={!canShowBranches || stageCommitBusy || commitPushBusy}
                     onChange={(e) => {
                       setCommitMessage(e.target.value);
                     }}
@@ -1337,7 +1361,7 @@ export default function App({
                     <button
                       type="button"
                       className="btn btn-ghost btn-xs"
-                      disabled={stageCommitBusy}
+                      disabled={stageCommitBusy || commitPushBusy}
                       onClick={() => void onUnstagePaths(stagedPaths)}
                     >
                       Unstage all
@@ -1352,18 +1376,33 @@ export default function App({
                   >
                     {pushBusy ? <span className="loading loading-xs loading-spinner" /> : "Push"}
                   </button>
-                  <button
-                    type="button"
-                    className="btn ml-auto btn-sm btn-primary"
-                    disabled={!canCommit}
-                    onClick={() => void onCommit()}
-                  >
-                    {stageCommitBusy ? (
-                      <span className="loading loading-xs loading-spinner" />
-                    ) : (
-                      "Commit"
-                    )}
-                  </button>
+                  <span className="ml-auto flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      disabled={!canCommitAndPush}
+                      title="Create the commit, then push the branch to origin"
+                      onClick={() => void onCommitAndPush()}
+                    >
+                      {commitPushBusy ? (
+                        <span className="loading loading-xs loading-spinner" />
+                      ) : (
+                        "Commit & Push"
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      disabled={!canCommit}
+                      onClick={() => void onCommit()}
+                    >
+                      {stageCommitBusy ? (
+                        <span className="loading loading-xs loading-spinner" />
+                      ) : (
+                        "Commit"
+                      )}
+                    </button>
+                  </span>
                 </div>
               </div>
             </div>
