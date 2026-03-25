@@ -84,6 +84,42 @@ function formatDate(iso: string | null): string | null {
   });
 }
 
+/** Short relative label for dense commit rows (e.g. `2h ago`, `3d ago`). */
+function formatRelativeShort(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const t = d.getTime();
+  if (Number.isNaN(t)) return null;
+  const diffSec = Math.round((Date.now() - t) / 1000);
+  if (diffSec < 0) {
+    return formatDate(iso);
+  }
+  if (diffSec < 45) {
+    return "now";
+  }
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) {
+    return `${diffMin}m ago`;
+  }
+  const diffH = Math.round(diffMin / 60);
+  if (diffH < 24) {
+    return `${diffH}h ago`;
+  }
+  const diffD = Math.round(diffH / 24);
+  if (diffD < 7) {
+    return `${diffD}d ago`;
+  }
+  const diffW = Math.round(diffD / 7);
+  if (diffW < 8) {
+    return `${diffW}w ago`;
+  }
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined,
+  });
+}
+
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[8.5rem_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
@@ -338,12 +374,18 @@ export default function App({
 
   const refreshAfterMutation = useCallback(async () => {
     if (!repo?.path || repo.error) return;
+    const prevBranch = repo.branch;
+    const prevDetached = repo.detached;
     try {
       const meta = await invoke<RepoMetadata>("get_repo_metadata", {
         path: repo.path,
       });
+      const branchContextChanged = meta.branch !== prevBranch || meta.detached !== prevDetached;
       setRepo(meta);
       if (!meta.error) {
+        if (branchContextChanged) {
+          clearCommitBrowse();
+        }
         const files = await refreshLists(repo.path);
         if (selectedDiffPath && files) {
           const next = files.find((w) => w.path === selectedDiffPath);
@@ -360,7 +402,7 @@ export default function App({
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }
-  }, [repo, refreshLists, selectedDiffPath, loadDiffForFile]);
+  }, [repo, refreshLists, selectedDiffPath, loadDiffForFile, clearCommitBrowse]);
 
   useEffect(() => {
     const promise = Promise.all([
@@ -841,23 +883,23 @@ export default function App({
                           </div>
                         </div>
                       ) : !listsError && commitDiffPath && commitBrowseHash ? (
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+                          <div className="flex shrink-0 flex-wrap items-end justify-between gap-2 border-b border-base-300 pb-1.5">
                             <div className="min-w-0">
-                              <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                 Commit diff
                               </h2>
-                              <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
+                              <code className="mt-0.5 block font-mono text-[0.65rem] leading-tight wrap-break-word text-base-content/85">
                                 {commitDiffPath}
                               </code>
-                              <p className="mt-1 mb-0 font-mono text-[0.65rem] text-base-content/60">
+                              <p className="mt-0.5 mb-0 font-mono text-[0.6rem] text-base-content/50">
                                 {commits.find((x) => x.hash === commitBrowseHash)?.shortHash ??
                                   commitBrowseHash.slice(0, 7)}
                               </p>
                             </div>
                             <button
                               type="button"
-                              className="btn shrink-0 btn-ghost btn-sm"
+                              className="btn shrink-0 btn-ghost btn-xs"
                               onClick={backFromCommitFileDiff}
                             >
                               Back to files
@@ -865,74 +907,72 @@ export default function App({
                           </div>
                           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                             {commitDiffLoading ? (
-                              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                              <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
                                 <span className="loading loading-md loading-spinner text-primary" />
-                                <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
+                                <p className="m-0 text-xs text-base-content/70">Loading diff…</p>
                               </div>
                             ) : commitDiffError ? (
-                              <div role="alert" className="alert text-sm alert-error">
+                              <div role="alert" className="alert py-2 text-xs alert-error">
                                 <span className="wrap-break-word">{commitDiffError}</span>
                               </div>
                             ) : (
-                              <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
-                                <div className="mb-8 last:mb-0">
-                                  <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                                    Commit
-                                  </div>
-                                  <UnifiedDiff
-                                    text={commitDiffText ?? ""}
-                                    emptyLabel="(no diff for this file)"
-                                  />
+                              <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
+                                <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                  Patch
                                 </div>
+                                <UnifiedDiff
+                                  text={commitDiffText ?? ""}
+                                  emptyLabel="(no diff for this file)"
+                                />
                               </div>
                             )}
                           </div>
                         </div>
                       ) : !listsError && commitBrowseHash ? (
-                        <div className="mb-6 flex min-h-0 min-w-0 flex-col gap-3">
-                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-2">
+                        <div className="mb-4 flex min-h-0 min-w-0 flex-col gap-2">
+                          <div className="flex shrink-0 flex-wrap items-end justify-between gap-2 border-b border-base-300 pb-1.5">
                             <div className="min-w-0">
-                              <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                 Files in commit
                               </h2>
-                              <p className="mt-1 mb-0 font-mono text-[0.65rem] text-base-content/70">
+                              <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
                                 {commits.find((x) => x.hash === commitBrowseHash)?.subject ??
                                   commitBrowseHash.slice(0, 7)}
                               </p>
                             </div>
                             <button
                               type="button"
-                              className="btn shrink-0 btn-ghost btn-sm"
+                              className="btn shrink-0 btn-ghost btn-xs"
                               onClick={clearCommitBrowse}
                             >
                               Back to commits
                             </button>
                           </div>
                           {commitBrowseLoading ? (
-                            <div className="flex flex-col items-center justify-center gap-3 py-12">
+                            <div className="flex flex-col items-center justify-center gap-2 py-8">
                               <span className="loading loading-md loading-spinner text-primary" />
-                              <p className="m-0 text-sm text-base-content/70">Loading files…</p>
+                              <p className="m-0 text-xs text-base-content/70">Loading files…</p>
                             </div>
                           ) : commitBrowseError ? (
-                            <div role="alert" className="alert text-sm alert-error">
+                            <div role="alert" className="alert py-2 text-xs alert-error">
                               <span className="wrap-break-word">{commitBrowseError}</span>
                             </div>
                           ) : commitBrowseFiles.length === 0 ? (
-                            <p className="m-0 text-center text-sm text-base-content/60">
+                            <p className="m-0 text-center text-xs text-base-content/60">
                               No files changed in this commit
                             </p>
                           ) : (
-                            <ul className="m-0 max-h-[min(52vh,28rem)] list-none space-y-1 overflow-y-auto p-0">
+                            <ul className="m-0 max-h-[min(52vh,28rem)] list-none divide-y divide-base-300/50 overflow-y-auto p-0">
                               {commitBrowseFiles.map((fp) => (
                                 <li key={fp}>
                                   <button
                                     type="button"
-                                    className="w-full rounded-md border border-base-300 bg-base-200 px-2 py-2 text-left transition-colors hover:bg-base-300/50"
+                                    className="w-full px-1 py-0.5 text-left text-[0.6875rem] leading-tight transition-colors hover:bg-base-300/35"
                                     onClick={() =>
                                       void loadCommitFileDiff(fp, commitBrowseHash ?? "")
                                     }
                                   >
-                                    <code className="font-mono text-[0.75rem] wrap-break-word text-base-content">
+                                    <code className="font-mono wrap-break-word text-base-content/90">
                                       {fp}
                                     </code>
                                   </button>
@@ -942,51 +982,87 @@ export default function App({
                           )}
                         </div>
                       ) : (
-                        <div className="mb-6">
-                          <h2 className="m-0 mb-3 border-b border-base-300 pb-2 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
-                            {commitsSectionTitle}
+                        <div className="mb-4 min-w-0">
+                          <h2 className="m-0 mb-1.5 border-b border-base-300 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                            Commits
                           </h2>
                           {commits.length === 0 ? (
-                            <p className="m-0 text-center text-sm text-base-content/60">
+                            <p className="m-0 text-center text-xs text-base-content/60">
                               No commits to show
                             </p>
                           ) : (
-                            <ol className="m-0 list-none space-y-2 p-0">
-                              {commits.map((c) => {
-                                const isBrowsing = commitBrowseHash === c.hash;
-                                return (
-                                  <li key={c.hash}>
-                                    <button
-                                      type="button"
-                                      className={`w-full rounded-box border px-3 py-2 text-left transition-colors ${
-                                        isBrowsing
-                                          ? "border-primary bg-base-200 ring-1 ring-primary/40"
-                                          : "border-base-300 bg-base-200 hover:bg-base-300/40"
-                                      }`}
-                                      onClick={() => void selectCommit(c.hash)}
+                            <>
+                              <div className="mb-0.5 grid grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,3.5rem)] items-center gap-x-1.5 border-b border-base-300/80 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                <span className="truncate">Branch / tag</span>
+                                <span className="text-center">Graph</span>
+                                <span className="min-w-0 truncate">Commit message</span>
+                                <span className="text-right" />
+                              </div>
+                              <ol className="m-0 list-none p-0">
+                                {commits.map((c, idx) => {
+                                  const isBrowsing = commitBrowseHash === c.hash;
+                                  const branchCell =
+                                    idx === 0 ? (
+                                      <span
+                                        className="flex min-w-0 items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content"
+                                        title={commitsSectionTitle}
+                                      >
+                                        <span className="shrink-0 text-primary" aria-hidden>
+                                          ✓
+                                        </span>
+                                        <span className="min-w-0 truncate font-medium">
+                                          {commitsSectionTitle}
+                                        </span>
+                                      </span>
+                                    ) : (
+                                      <span />
+                                    );
+                                  const rel = formatRelativeShort(c.date);
+                                  const fullTitle = [
+                                    `${c.shortHash} — ${c.subject}`,
+                                    c.author,
+                                    formatDate(c.date) ?? undefined,
+                                  ]
+                                    .filter(Boolean)
+                                    .join("\n");
+                                  return (
+                                    <li
+                                      key={c.hash}
+                                      className="border-b border-base-300/40 last:border-b-0"
                                     >
-                                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                                        <code className="shrink-0 font-mono text-[0.75rem] text-base-content/80">
-                                          {c.shortHash}
-                                        </code>
-                                        <span className="min-w-0 flex-1 font-medium text-base-content">
+                                      <button
+                                        type="button"
+                                        title={fullTitle}
+                                        className={`grid w-full grid-cols-[minmax(0,5.5rem)_0.875rem_minmax(0,1fr)_minmax(0,3.5rem)] items-center gap-x-1.5 px-1 py-0.5 text-left text-[0.6875rem] leading-tight transition-colors ${
+                                          isBrowsing
+                                            ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
+                                            : "hover:bg-base-300/40"
+                                        }`}
+                                        onClick={() => void selectCommit(c.hash)}
+                                      >
+                                        <div className="min-w-0">{branchCell}</div>
+                                        <div
+                                          className="relative flex min-h-4.5 w-3.5 shrink-0 flex-col items-center justify-start pt-0.5"
+                                          aria-hidden
+                                        >
+                                          <span className="absolute top-0 bottom-0 left-1/2 w-px -translate-x-1/2 bg-primary/35" />
+                                          <span className="relative z-1 mt-px h-1.5 w-1.5 shrink-0 rounded-full border-base-100 bg-primary ring-1 ring-base-100" />
+                                        </div>
+                                        <span className="min-w-0 truncate text-base-content/90">
                                           {c.subject}
                                         </span>
-                                      </div>
-                                      <p className="mt-1 mb-0 text-xs text-base-content/70">
-                                        {c.author}
-                                        {formatDate(c.date) ? (
-                                          <span className="text-base-content/50">
-                                            {" "}
-                                            · {formatDate(c.date)}
-                                          </span>
-                                        ) : null}
-                                      </p>
-                                    </button>
-                                  </li>
-                                );
-                              })}
-                            </ol>
+                                        <span
+                                          className="shrink-0 text-right text-[0.6rem] text-base-content/45 tabular-nums"
+                                          title={formatDate(c.date) ?? undefined}
+                                        >
+                                          {rel ?? "—"}
+                                        </span>
+                                      </button>
+                                    </li>
+                                  );
+                                })}
+                              </ol>
+                            </>
                           )}
                         </div>
                       )}
