@@ -450,6 +450,18 @@ function buildLocalBranchTrie(branches: LocalBranchEntry[]): BranchTrieNode {
   return root;
 }
 
+/** All local branch names under this trie node (including `branchHere` and descendants). */
+function collectLocalBranchNamesInSubtree(node: BranchTrieNode): string[] {
+  const out: string[] = [];
+  if (node.branchHere) {
+    out.push(node.branchHere.name);
+  }
+  for (const child of node.children.values()) {
+    out.push(...collectLocalBranchNamesInSubtree(child));
+  }
+  return out;
+}
+
 type RemoteTrieNode = {
   refHere: string | null;
   children: Map<string, RemoteTrieNode>;
@@ -483,11 +495,27 @@ function buildRemoteBranchTrie(refs: RemoteBranchEntry[]): RemoteTrieNode {
   return root;
 }
 
+/** All remote ref strings under this trie node (including `refHere` and descendants). */
+function collectRemoteRefsInSubtree(node: RemoteTrieNode): string[] {
+  const out: string[] = [];
+  if (node.refHere) {
+    out.push(node.refHere);
+  }
+  for (const child of node.children.values()) {
+    out.push(...collectRemoteRefsInSubtree(child));
+  }
+  return out;
+}
+
 type BranchGraphControls = {
   graphVisibleLocal: (name: string) => boolean;
   toggleGraphLocal: (name: string) => void;
+  graphFolderAnyVisibleLocal: (node: BranchTrieNode) => boolean;
+  toggleGraphLocalFolder: (node: BranchTrieNode) => void;
   graphVisibleRemote: (name: string) => boolean;
   toggleGraphRemote: (name: string) => void;
+  graphFolderAnyVisibleRemote: (node: RemoteTrieNode) => boolean;
+  toggleGraphRemoteFolder: (node: RemoteTrieNode) => void;
 };
 
 function LocalBranchRow({
@@ -593,10 +621,35 @@ function renderLocalBranchTrieChildren(
         />
       );
     }
+    const folderGraphVisible = graph.graphFolderAnyVisibleLocal(child);
     return (
       <li key={segment}>
         <details open>
-          <summary className="font-mono text-[0.8125rem]">{segment}</summary>
+          <summary className="min-w-0 font-mono text-[0.8125rem]">
+            <span className="min-w-0 wrap-break-word">{segment}</span>
+            <button
+              type="button"
+              className="btn w-fit shrink-0 justify-self-end rounded-none px-2 opacity-90 btn-ghost btn-xs"
+              title={
+                folderGraphVisible
+                  ? "Hide all branches in this folder from commit graph"
+                  : "Show all branches in this folder in commit graph"
+              }
+              aria-label={folderGraphVisible ? "Hide folder from graph" : "Show folder in graph"}
+              aria-pressed={folderGraphVisible}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                graph.toggleGraphLocalFolder(child);
+              }}
+            >
+              {folderGraphVisible ? (
+                <IconEye className="opacity-90" />
+              ) : (
+                <IconEyeOff className="opacity-50" />
+              )}
+            </button>
+          </summary>
           <ul>
             {child.branchHere ? (
               <LocalBranchRow
@@ -695,10 +748,35 @@ function renderRemoteBranchTrieChildren(
         />
       );
     }
+    const folderGraphVisible = graph.graphFolderAnyVisibleRemote(child);
     return (
       <li key={segment}>
         <details open>
-          <summary className="font-mono text-[0.8125rem]">{segment}</summary>
+          <summary className="min-w-0 font-mono text-[0.8125rem]">
+            <span className="min-w-0 wrap-break-word">{segment}</span>
+            <button
+              type="button"
+              className="btn w-fit shrink-0 justify-self-end rounded-none px-2 opacity-90 btn-ghost btn-xs"
+              title={
+                folderGraphVisible
+                  ? "Hide all remote branches in this folder from commit graph"
+                  : "Show all remote branches in this folder in commit graph"
+              }
+              aria-label={folderGraphVisible ? "Hide folder from graph" : "Show folder in graph"}
+              aria-pressed={folderGraphVisible}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                graph.toggleGraphRemoteFolder(child);
+              }}
+            >
+              {folderGraphVisible ? (
+                <IconEye className="opacity-90" />
+              ) : (
+                <IconEyeOff className="opacity-50" />
+              )}
+            </button>
+          </summary>
           <ul>
             {child.refHere ? (
               <RemoteBranchRow
@@ -852,10 +930,44 @@ export default function App({
         const k = `local:${name}`;
         setGraphBranchVisible((prev) => ({ ...prev, [k]: !(prev[k] !== false) }));
       },
+      graphFolderAnyVisibleLocal: (node) => {
+        const names = collectLocalBranchNamesInSubtree(node);
+        return names.some((n) => graphBranchVisible[`local:${n}`] !== false);
+      },
+      toggleGraphLocalFolder: (node) => {
+        const names = collectLocalBranchNamesInSubtree(node);
+        if (names.length === 0) return;
+        const anyVisible = names.some((n) => graphBranchVisible[`local:${n}`] !== false);
+        const nextVal = !anyVisible;
+        setGraphBranchVisible((prev) => {
+          const next = { ...prev };
+          for (const n of names) {
+            next[`local:${n}`] = nextVal;
+          }
+          return next;
+        });
+      },
       graphVisibleRemote: (name) => graphBranchVisible[`remote:${name}`] !== false,
       toggleGraphRemote: (name) => {
         const k = `remote:${name}`;
         setGraphBranchVisible((prev) => ({ ...prev, [k]: !(prev[k] !== false) }));
+      },
+      graphFolderAnyVisibleRemote: (node) => {
+        const refs = collectRemoteRefsInSubtree(node);
+        return refs.some((r) => graphBranchVisible[`remote:${r}`] !== false);
+      },
+      toggleGraphRemoteFolder: (node) => {
+        const refs = collectRemoteRefsInSubtree(node);
+        if (refs.length === 0) return;
+        const anyVisible = refs.some((r) => graphBranchVisible[`remote:${r}`] !== false);
+        const nextVal = !anyVisible;
+        setGraphBranchVisible((prev) => {
+          const next = { ...prev };
+          for (const r of refs) {
+            next[`remote:${r}`] = nextVal;
+          }
+          return next;
+        });
       },
     }),
     [graphBranchVisible],
