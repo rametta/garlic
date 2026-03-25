@@ -2,6 +2,8 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
+use std::time::Duration;
 use tauri::AppHandle;
 
 #[derive(Debug, Clone, Serialize)]
@@ -19,8 +21,14 @@ pub struct CommitEntry {
     pub subject: String,
     pub author: String,
     pub date: String,
-    /// True when `git log` reports a good verified signature (`%G?` == `G`).
-    pub signature_good: bool,
+}
+
+/// Result of `git log -1 --format=%G?` for one commit (on-demand; not used in bulk log).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitSignatureStatus {
+    /// `Some(true)` when Git reports a good signature (`G`). `Some(false)` when Git answers and the commit is not good-signed (including `N` = no signature). `None` on timeout or failure.
+    pub verified: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -397,8 +405,9 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
             "HEAD",
             "-n",
             "100",
-            // %x1f (unit separator): subject last so it can contain delimiters
-            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%G?%x1f%s",
+            // Avoid `%G?` here: signature verification can block repo loading.
+            // %x1f (unit separator): subject last so it can contain delimiters.
+            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s",
         ],
     )?;
     let mut commits = Vec::new();
@@ -407,24 +416,21 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(6, '\x1f');
+        let mut parts = line.splitn(5, '\x1f');
         let hash = parts.next().map(String::from);
         let short_hash = parts.next().map(String::from);
         let author = parts.next().map(String::from);
         let date = parts.next().map(String::from);
-        let gpg_flag = parts.next().map(String::from);
         let subject = parts.next().map(String::from);
-        if let (Some(h), Some(sh), Some(auth), Some(dt), Some(gs), Some(sub)) =
-            (hash, short_hash, author, date, gpg_flag, subject)
+        if let (Some(h), Some(sh), Some(auth), Some(dt), Some(sub)) =
+            (hash, short_hash, author, date, subject)
         {
-            let signature_good = gs.trim() == "G";
             commits.push(CommitEntry {
                 hash: h,
                 short_hash: sh,
                 subject: sub,
                 author: auth,
                 date: dt,
-                signature_good,
             });
         }
     }
@@ -625,6 +631,49 @@ pub fn list_commit_files(path: String, commit_hash: String) -> Result<Vec<String
         &["diff-tree", "--no-commit-id", "--name-only", "-r", hash],
     )?;
     Ok(non_empty_lines(&out))
+}
+
+/// Good-signature check for a single commit using Git's `%G?` trust letter. Runs in a thread with a timeout so gpg/key lookup cannot block the app indefinitely.
+#[tauri::command]
+pub fn get_commit_signature_status(
+    path: String,
+    commit_hash: String,
+) -> Result<CommitSignatureStatus, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let hash = commit_hash.trim();
+    if hash.is_empty() {
+        return Err("Commit hash cannot be empty.".to_string());
+    }
+
+    let workdir = path_buf;
+    let hash_owned = hash.to_string();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let out = Command::new("git")
+            .current_dir(&workdir)
+            .args(["log", "-1", "--format=%G?", &hash_owned])
+            .output();
+        let _ = tx.send(out);
+    });
+
+    match rx.recv_timeout(Duration::from_secs(15)) {
+        Ok(Ok(output)) => {
+            if !output.status.success() {
+                return Ok(CommitSignatureStatus { verified: None });
+            }
+            let flag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if flag.is_empty() {
+                return Ok(CommitSignatureStatus { verified: None });
+            }
+            let ch = flag.chars().next().unwrap_or(' ');
+            let verified = if ch == 'G' { Some(true) } else { Some(false) };
+            Ok(CommitSignatureStatus { verified })
+        }
+        Ok(Err(e)) => Err(format!("Could not run git: {e}")),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err("Signature check failed.".to_string()),
+        Err(mpsc::RecvTimeoutError::Timeout) => Ok(CommitSignatureStatus { verified: None }),
+    }
 }
 
 /// Unified diff for one file in a given commit (`git show <hash> -- <path>`), patch only (no commit headers).

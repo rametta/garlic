@@ -33,7 +33,11 @@ interface CommitEntry {
   subject: string;
   author: string;
   date: string;
-  signatureGood: boolean;
+}
+
+/** From `get_commit_signature_status` (`git log -1 --format=%G?`). */
+interface CommitSignatureStatus {
+  verified: boolean | null;
 }
 
 /** Local branch row from `list_local_branches` / bootstrap. */
@@ -131,31 +135,6 @@ function formatAuthorDisplay(author: string): string {
   return t;
 }
 
-function SignedCommitIcon() {
-  return (
-    <span
-      className="inline-flex shrink-0 text-success"
-      aria-hidden
-      title="Signed commit (verified)"
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-        strokeWidth={1.5}
-        stroke="currentColor"
-        className="h-3 w-3"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"
-        />
-      </svg>
-    </span>
-  );
-}
-
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[8.5rem_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
@@ -232,6 +211,10 @@ export default function App({
   const [commitBrowseFiles, setCommitBrowseFiles] = useState<string[]>([]);
   const [commitBrowseLoading, setCommitBrowseLoading] = useState(false);
   const [commitBrowseError, setCommitBrowseError] = useState<string | null>(null);
+  const [commitSignature, setCommitSignature] = useState<{
+    loading: boolean;
+    verified: boolean | null;
+  }>({ loading: false, verified: null });
   const [commitDiffPath, setCommitDiffPath] = useState<string | null>(null);
   const [commitDiffText, setCommitDiffText] = useState<string | null>(null);
   const [commitDiffLoading, setCommitDiffLoading] = useState(false);
@@ -267,6 +250,7 @@ export default function App({
     setCommitBrowseFiles([]);
     setCommitBrowseLoading(false);
     setCommitBrowseError(null);
+    setCommitSignature({ loading: false, verified: null });
     setCommitDiffPath(null);
     setCommitDiffText(null);
     setCommitDiffLoading(false);
@@ -317,17 +301,35 @@ export default function App({
       setCommitDiffError(null);
       setCommitBrowseLoading(true);
       setCommitBrowseError(null);
-      try {
-        const files = await invoke<string[]>("list_commit_files", {
+      setCommitSignature({ loading: true, verified: null });
+      const [filesSettled, sigSettled] = await Promise.allSettled([
+        invoke<string[]>("list_commit_files", {
           path: repo.path,
           commitHash: hash,
-        });
-        setCommitBrowseFiles(files);
-      } catch (e) {
-        setCommitBrowseError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setCommitBrowseLoading(false);
+        }),
+        invoke<CommitSignatureStatus>("get_commit_signature_status", {
+          path: repo.path,
+          commitHash: hash,
+        }),
+      ]);
+
+      if (filesSettled.status === "fulfilled") {
+        setCommitBrowseFiles(filesSettled.value);
+      } else {
+        setCommitBrowseFiles([]);
+        setCommitBrowseError(
+          filesSettled.reason instanceof Error
+            ? filesSettled.reason.message
+            : String(filesSettled.reason),
+        );
       }
+
+      let verified: boolean | null = null;
+      if (sigSettled.status === "fulfilled") {
+        verified = sigSettled.value.verified ?? null;
+      }
+      setCommitSignature({ loading: false, verified });
+      setCommitBrowseLoading(false);
     },
     [repo],
   );
@@ -979,6 +981,22 @@ export default function App({
                                 {commits.find((x) => x.hash === commitBrowseHash)?.subject ??
                                   commitBrowseHash.slice(0, 7)}
                               </p>
+                              {commitSignature.loading ? (
+                                <p className="mt-1 mb-0 text-[0.6rem] text-base-content/50">
+                                  Signature: checking…
+                                </p>
+                              ) : (
+                                <p className="mt-1 mb-0 text-[0.6rem] text-base-content/60">
+                                  Signature:{" "}
+                                  {commitSignature.verified === true ? (
+                                    <span className="text-success">verified</span>
+                                  ) : commitSignature.verified === false ? (
+                                    <span className="text-base-content/70">not verified</span>
+                                  ) : (
+                                    <span className="text-base-content/50">unknown</span>
+                                  )}
+                                </p>
+                              )}
                             </div>
                             <button
                               type="button"
@@ -1063,7 +1081,6 @@ export default function App({
                                     `${c.shortHash} — ${c.subject}`,
                                     c.author,
                                     formatDate(c.date) ?? undefined,
-                                    c.signatureGood ? "Signature: verified" : undefined,
                                   ]
                                     .filter(Boolean)
                                     .join("\n");
@@ -1090,11 +1107,8 @@ export default function App({
                                           <span className="absolute top-0 bottom-0 left-1/2 w-px -translate-x-1/2 bg-primary/35" />
                                           <span className="relative z-1 mt-px h-1.5 w-1.5 shrink-0 rounded-full border-base-100 bg-primary ring-1 ring-base-100" />
                                         </div>
-                                        <span className="flex min-w-0 items-center gap-1">
-                                          {c.signatureGood ? <SignedCommitIcon /> : null}
-                                          <span className="min-w-0 flex-1 truncate text-base-content/90">
-                                            {c.subject}
-                                          </span>
+                                        <span className="min-w-0 truncate text-base-content/90">
+                                          {c.subject}
                                         </span>
                                         <span
                                           className="min-w-0 truncate text-[0.62rem] text-base-content/55"

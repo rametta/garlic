@@ -89,6 +89,7 @@ pub fn run() {
             git::get_staged_diff,
             git::get_unstaged_diff,
             git::list_commit_files,
+            git::get_commit_signature_status,
             git::get_commit_file_diff,
             git::push_to_origin,
             settings::restore_app_bootstrap,
