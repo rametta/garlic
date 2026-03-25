@@ -95,6 +95,7 @@ pub struct RestoreLastRepo {
     pub metadata: Option<git::RepoMetadata>,
     pub local_branches: Vec<git::LocalBranchEntry>,
     pub remote_branches: Vec<git::RemoteBranchEntry>,
+    pub stashes: Vec<git::StashEntry>,
     pub commits: Vec<git::CommitEntry>,
     /// True when the graph log has more commits than returned in `commits` (first page only).
     pub graph_commits_has_more: bool,
@@ -109,6 +110,7 @@ impl RestoreLastRepo {
             metadata: None,
             local_branches: Vec::new(),
             remote_branches: Vec::new(),
+            stashes: Vec::new(),
             commits: Vec::new(),
             graph_commits_has_more: false,
             working_tree_files: Vec::new(),
@@ -148,6 +150,7 @@ fn restore_repo_snapshot(
                 _ => git::list_branch_commits(path.clone()),
             };
             let working_tree = git::list_working_tree_files(path.clone());
+            let stashes = git::list_stashes(path.clone());
 
             let lists_error = locals
                 .as_ref()
@@ -155,7 +158,8 @@ fn restore_repo_snapshot(
                 .cloned()
                 .or(remotes.as_ref().err().cloned())
                 .or(commits_page.as_ref().err().cloned())
-                .or(working_tree.as_ref().err().cloned());
+                .or(working_tree.as_ref().err().cloned())
+                .or(stashes.as_ref().err().cloned());
 
             let (commits, graph_commits_has_more) = match commits_page {
                 Ok(p) => (p.commits, p.has_more),
@@ -167,6 +171,7 @@ fn restore_repo_snapshot(
                 metadata: Some(meta),
                 local_branches: locals.unwrap_or_default(),
                 remote_branches: remotes.unwrap_or_default(),
+                stashes: stashes.unwrap_or_default(),
                 commits,
                 graph_commits_has_more,
                 working_tree_files: working_tree.unwrap_or_default(),

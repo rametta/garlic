@@ -13,6 +13,9 @@ pub struct RemoteEntry {
     pub fetch_url: String,
 }
 
+/// `git log` line format for graph / commit list (`%P` = parents, `%aI` = ISO date).
+const COMMIT_LOG_FORMAT: &str = "%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitEntry {
@@ -24,6 +27,9 @@ pub struct CommitEntry {
     pub date: String,
     /// Parent commit hashes (first parent is mainline; merge commits have 2+).
     pub parent_hashes: Vec<String>,
+    /// When this commit is a stash WIP (`stash@{n}`), set for UI labels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stash_ref: Option<String>,
 }
 
 /// One page from `list_graph_commits` / `list_branch_commits`. `has_more` is true when Git returned a full page (there may be older commits).
@@ -85,6 +91,14 @@ pub struct WorkingTreeFile {
     pub staged_stats: Option<LineStat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unstaged_stats: Option<LineStat>,
+}
+
+/// One entry from `git stash list` (`stash@{n}: message`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    pub ref_name: String,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -538,6 +552,7 @@ fn parse_commit_log_lines(out: &str) -> Vec<CommitEntry> {
                 author_email: ae,
                 date: dt,
                 parent_hashes,
+                stash_ref: None,
             });
         }
     }
@@ -552,32 +567,93 @@ fn trim_graph_commits_page(mut commits: Vec<CommitEntry>) -> GraphCommitsPage {
     GraphCommitsPage { commits, has_more }
 }
 
+/// `stash@{0}`, `stash@{1}`, … from `git stash list` (for `git log` starting points).
+fn stash_ref_list(path: &Path) -> Result<Vec<String>, String> {
+    ensure_git_repo(path)?;
+    let text = git_output(path, &["stash", "list"])?;
+    let mut refs = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("stash@{") else {
+            continue;
+        };
+        let Some(end) = rest.find('}') else {
+            continue;
+        };
+        let idx_str = &rest[..end];
+        if idx_str.is_empty() || !idx_str.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        refs.push(format!("stash@{{{idx_str}}}"));
+    }
+    Ok(refs)
+}
+
+fn merge_stash_refs_into_log_refs(path: &Path, clean: &mut Vec<String>) {
+    let Ok(stash_refs) = stash_ref_list(path) else {
+        return;
+    };
+    for r in stash_refs {
+        if !clean.contains(&r) {
+            clean.push(r);
+        }
+    }
+    clean.sort();
+    clean.dedup();
+}
+
+fn annotate_stash_refs(path: &Path, commits: &mut [CommitEntry]) -> Result<(), String> {
+    let stash_refs = stash_ref_list(path)?;
+    if stash_refs.is_empty() {
+        return Ok(());
+    }
+    let mut hash_to_ref: HashMap<String, String> = HashMap::new();
+    for r in stash_refs {
+        let h = git_output(path, &["rev-parse", "--verify", &r])?;
+        let h = h.trim().to_string();
+        if !h.is_empty() {
+            hash_to_ref.insert(h, r);
+        }
+    }
+    for c in commits.iter_mut() {
+        if let Some(sr) = hash_to_ref.get(&c.hash) {
+            c.stash_ref = Some(sr.clone());
+        }
+    }
+    Ok(())
+}
+
 /// Commits reachable from any local branch (`--branches`), commit-date order, newest first.
 #[tauri::command]
 pub fn list_branch_commits(path: String) -> Result<GraphCommitsPage, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let fetch_n = (GRAPH_COMMITS_PAGE_SIZE + 1).to_string();
-    let out = git_output(
-        &path_buf,
-        &[
-            "log",
-            "--branches",
-            "--date-order",
-            "--skip",
-            "0",
-            "-n",
-            fetch_n.as_str(),
-            // Avoid `%G?` here: signature verification can block repo loading.
-            // %P: space-separated parents; %x1f: subject last so it can contain delimiters.
-            "--format=%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s",
-        ],
-    )?;
-    let commits = parse_commit_log_lines(&out);
+    let mut cmd_args: Vec<String> = vec![
+        "log".into(),
+        "--branches".into(),
+        "--date-order".into(),
+        "--skip".into(),
+        "0".into(),
+        "-n".into(),
+        fetch_n,
+        format!("--format={COMMIT_LOG_FORMAT}"),
+    ];
+    if let Ok(stash_refs) = stash_ref_list(&path_buf) {
+        cmd_args.extend(stash_refs);
+    }
+    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
+    let out = git_output(&path_buf, &args_ref)?;
+    let mut commits = parse_commit_log_lines(&out);
+    annotate_stash_refs(&path_buf, &mut commits)?;
     Ok(trim_graph_commits_page(commits))
 }
 
 /// Commits reachable from the given refs (branch names like `main` or `origin/main`), commit-date order, newest first.
+/// Stash entries (`stash@{n}`) are merged into the log so stashes appear by commit date with branch history.
 /// Use `skip` 0 for the first page, then `skip` = loaded count for "load more".
 #[tauri::command]
 pub fn list_graph_commits(path: String, refs: Vec<String>, skip: u32) -> Result<GraphCommitsPage, String> {
@@ -590,6 +666,7 @@ pub fn list_graph_commits(path: String, refs: Vec<String>, skip: u32) -> Result<
         .collect();
     clean.sort();
     clean.dedup();
+    merge_stash_refs_into_log_refs(&path_buf, &mut clean);
     if clean.is_empty() {
         return Ok(GraphCommitsPage {
             commits: Vec::new(),
@@ -605,12 +682,13 @@ pub fn list_graph_commits(path: String, refs: Vec<String>, skip: u32) -> Result<
         skip_s,
         "-n".into(),
         fetch_n,
-        "--format=%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s".into(),
+        format!("--format={COMMIT_LOG_FORMAT}"),
     ];
     cmd_args.extend(clean);
     let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
     let out = git_output(&path_buf, &args_ref)?;
-    let commits = parse_commit_log_lines(&out);
+    let mut commits = parse_commit_log_lines(&out);
+    annotate_stash_refs(&path_buf, &mut commits)?;
     Ok(trim_graph_commits_page(commits))
 }
 
@@ -919,7 +997,8 @@ pub struct CommitFileEntry {
     pub stats: LineStat,
 }
 
-/// Paths changed in a single commit with line stats (`git diff-tree --numstat`).
+/// Paths changed in a single commit with line stats (`git show --numstat`).
+/// Uses `git show` (not `diff-tree`) so **merge commits** (including stash WIPs) list files like `git show` in the CLI.
 #[tauri::command]
 pub fn list_commit_files(
     path: String,
@@ -933,7 +1012,7 @@ pub fn list_commit_files(
     }
     let out = git_output(
         &path_buf,
-        &["diff-tree", "--no-commit-id", "--numstat", "-r", hash],
+        &["show", "--numstat", "--format=", hash],
     )?;
     let stat_map = parse_numstat_output(&out);
     let mut paths: Vec<String> = stat_map.keys().cloned().collect();
@@ -994,7 +1073,8 @@ pub fn get_commit_signature_status(
     }
 }
 
-/// Unified diff for one file in a given commit (`git show <hash> -- <path>`), patch only (no commit headers).
+/// Unified diff for one file in a given commit (`git show -m …`), patch only (no commit headers).
+/// `-m` is required for **merge commits** (stash WIPs, merges); for single-parent commits output matches plain `git show`.
 #[tauri::command]
 pub fn get_commit_file_diff(
     path: String,
@@ -1011,8 +1091,92 @@ pub fn get_commit_file_diff(
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
     }
-    let raw = git_output(&path_buf, &["show", "-U1", hash, "--", rel])?;
+    let raw = git_output(&path_buf, &["show", "-m", "-U1", hash, "--", rel])?;
     Ok(unified_diff_patch_only(&raw))
+}
+
+fn is_valid_stash_ref(s: &str) -> bool {
+    let s = s.trim();
+    let Some(rest) = s.strip_prefix("stash@{") else {
+        return false;
+    };
+    let Some(end) = rest.find('}') else {
+        return false;
+    };
+    let idx = &rest[..end];
+    !idx.is_empty() && idx.chars().all(|c| c.is_ascii_digit())
+}
+
+/// All stashes in order (top = newest), from `git stash list`.
+#[tauri::command]
+pub fn list_stashes(path: String) -> Result<Vec<StashEntry>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let text = git_output(&path_buf, &["stash", "list"])?;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("stash@{") else {
+            continue;
+        };
+        let Some(end) = rest.find('}') else {
+            continue;
+        };
+        let idx_str = &rest[..end];
+        if idx_str.is_empty() || !idx_str.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let after = rest.get(end + 1..).unwrap_or("");
+        let message = if let Some(m) = after.strip_prefix(": ") {
+            m.to_string()
+        } else {
+            after.trim_start().to_string()
+        };
+        out.push(StashEntry {
+            ref_name: format!("stash@{{{idx_str}}}"),
+            message,
+        });
+    }
+    Ok(out)
+}
+
+/// Stash tracked + untracked changes (`git stash push`).
+#[tauri::command]
+pub fn stash_push(path: String, message: Option<String>) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let mut cmd = Command::new("git");
+    cmd.current_dir(&path_buf).arg("stash").arg("push");
+    if let Some(m) = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        cmd.arg("-m").arg(m);
+    }
+    let output = cmd.output().map_err(|e| format!("Could not run git: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            "git stash push failed".to_string()
+        } else {
+            stderr
+        };
+        return Err(msg);
+    }
+    Ok(())
+}
+
+/// Apply and remove a stash (`git stash pop stash@{n}`).
+#[tauri::command]
+pub fn stash_pop(path: String, stash_ref: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let s = stash_ref.trim();
+    if !is_valid_stash_ref(s) {
+        return Err("Invalid stash reference.".to_string());
+    }
+    git_output(&path_buf, &["stash", "pop", s])?;
+    Ok(())
 }
 
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).

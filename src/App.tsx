@@ -91,6 +91,8 @@ interface CommitEntry {
   authorEmail: string;
   date: string;
   parentHashes: string[];
+  /** Set when this row is a stash WIP commit (`stash@{n}`). */
+  stashRef?: string | null;
 }
 
 interface GraphCommitsPage {
@@ -122,6 +124,12 @@ export interface RemoteBranchEntry {
   tipHash: string;
 }
 
+/** One stash from `list_stashes` / bootstrap. */
+export interface StashEntry {
+  refName: string;
+  message: string;
+}
+
 /** Line counts from `git diff --numstat` / `--cached` (or file read for untracked). */
 export interface LineStat {
   additions: number;
@@ -150,6 +158,7 @@ export interface RestoreLastRepo {
   metadata: RepoMetadata | null;
   localBranches: LocalBranchEntry[];
   remoteBranches: RemoteBranchEntry[];
+  stashes: StashEntry[];
   commits: CommitEntry[];
   graphCommitsHasMore: boolean;
   workingTreeFiles: WorkingTreeFile[];
@@ -836,6 +845,7 @@ export default function App({
   const [remoteBranches, setRemoteBranches] = useState<RemoteBranchEntry[]>(
     () => startup.remoteBranches,
   );
+  const [stashes, setStashes] = useState<StashEntry[]>(() => startup.stashes);
   const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
   const [graphCommitsHasMore, setGraphCommitsHasMore] = useState(() => startup.graphCommitsHasMore);
   const [loadingMoreGraphCommits, setLoadingMoreGraphCommits] = useState(false);
@@ -845,6 +855,8 @@ export default function App({
     () => startup.workingTreeFiles,
   );
   const [branchBusy, setBranchBusy] = useState<string | null>(null);
+  /** `push` or `pop:<ref>` while a stash command runs. */
+  const [stashBusy, setStashBusy] = useState<string | null>(null);
   const [listsError, setListsError] = useState<string | null>(() => startup.listsError ?? null);
   const [commitMessage, setCommitMessage] = useState("");
   const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(null);
@@ -887,14 +899,16 @@ export default function App({
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
-      const [locals, remotes, worktree] = await Promise.all([
+      const [locals, remotes, worktree, stashList] = await Promise.all([
         invoke<LocalBranchEntry[]>("list_local_branches", { path: repoPath }),
         invoke<RemoteBranchEntry[]>("list_remote_branches", { path: repoPath }),
         invoke<WorkingTreeFile[]>("list_working_tree_files", { path: repoPath }),
+        invoke<StashEntry[]>("list_stashes", { path: repoPath }),
       ]);
       setLocalBranches(locals);
       setRemoteBranches(remotes);
       setWorkingTreeFiles(worktree);
+      setStashes(stashList);
       return worktree;
     } catch (e) {
       setListsError(invokeErrorMessage(e));
@@ -1230,6 +1244,7 @@ export default function App({
         } else {
           setLocalBranches([]);
           setRemoteBranches([]);
+          setStashes([]);
           setCommits([]);
           setGraphCommitsHasMore(false);
           setWorkingTreeFiles([]);
@@ -1238,6 +1253,7 @@ export default function App({
         setRepo(null);
         setLocalBranches([]);
         setRemoteBranches([]);
+        setStashes([]);
         setCommits([]);
         setGraphCommitsHasMore(false);
         setWorkingTreeFiles([]);
@@ -1282,10 +1298,14 @@ export default function App({
               files = await refreshLists(repo.path);
             } else {
               try {
-                const worktree = await invoke<WorkingTreeFile[]>("list_working_tree_files", {
-                  path: repo.path,
-                });
+                const [worktree, stashList] = await Promise.all([
+                  invoke<WorkingTreeFile[]>("list_working_tree_files", {
+                    path: repo.path,
+                  }),
+                  invoke<StashEntry[]>("list_stashes", { path: repo.path }),
+                ]);
                 setWorkingTreeFiles(worktree);
+                setStashes(stashList);
                 setListsError(null);
                 files = worktree;
               } catch (e) {
@@ -1494,6 +1514,39 @@ export default function App({
       setOperationError(invokeErrorMessage(e));
     } finally {
       setBranchBusy(null);
+    }
+  }
+
+  async function onStashPush() {
+    if (!repo?.path || repo.error) return;
+    setStashBusy("push");
+    setOperationError(null);
+    try {
+      await invoke("stash_push", { path: repo.path, message: null });
+      await refreshAfterMutation();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setStashBusy(null);
+    }
+  }
+
+  async function onStashPop(stashRef: string) {
+    if (!repo?.path || repo.error) return;
+    const ok = await ask(`Pop ${stashRef} and apply its changes to the working tree?`, {
+      title: "Garlic",
+      kind: "warning",
+    });
+    if (!ok) return;
+    setStashBusy(`pop:${stashRef}`);
+    setOperationError(null);
+    try {
+      await invoke("stash_pop", { path: repo.path, stash_ref: stashRef });
+      await refreshAfterMutation();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setStashBusy(null);
     }
   }
 
@@ -1811,6 +1864,62 @@ export default function App({
               </ul>
             ) : null}
           </BranchPanel>
+
+          <BranchPanel
+            title="Stashes"
+            empty={canShowBranches && stashes.length === 0}
+            emptyHint="No stashes"
+            headerRight={
+              canShowBranches ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  disabled={Boolean(branchBusy) || stashBusy !== null}
+                  onClick={() => {
+                    void onStashPush();
+                  }}
+                >
+                  {stashBusy === "push" ? "…" : "Stash"}
+                </button>
+              ) : null
+            }
+          >
+            {canShowBranches ? (
+              <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
+                {stashes.map((s) => {
+                  const popping = stashBusy === `pop:${s.refName}`;
+                  return (
+                    <li key={s.refName}>
+                      <div className="flex w-full min-w-0 items-stretch gap-0">
+                        <span
+                          className="flex min-h-0 min-w-0 flex-1 flex-col justify-center gap-0.5 py-2 pr-1 pl-2 text-left"
+                          title={`${s.refName}: ${s.message}`}
+                        >
+                          <span className="font-mono text-[0.65rem] leading-none opacity-70">
+                            {s.refName}
+                          </span>
+                          <span className="truncate text-[0.8125rem] leading-snug">
+                            {s.message}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          className="btn shrink-0 self-stretch rounded-none px-2 btn-ghost btn-xs"
+                          title="Pop stash"
+                          disabled={Boolean(branchBusy) || stashBusy !== null}
+                          onClick={() => {
+                            void onStashPop(s.refName);
+                          }}
+                        >
+                          {popping ? "…" : "Pop"}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </BranchPanel>
         </aside>
 
         <div
@@ -2103,6 +2212,7 @@ export default function App({
                                 }}
                               >
                                 {commits.map((c, idx) => {
+                                  const stashRef = c.stashRef?.trim() || null;
                                   const visibleLocalTips = localBranches.filter(
                                     (b) =>
                                       graphBranchVisible[`local:${b.name}`] !== false &&
@@ -2178,6 +2288,15 @@ export default function App({
                                         </span>
                                       ))}
                                     </span>
+                                  ) : stashRef ? (
+                                    <span
+                                      className="flex min-w-0 flex-wrap items-center gap-1 text-[0.62rem] leading-tight text-base-content"
+                                      title={`Stash ${stashRef}`}
+                                    >
+                                      <span className="badge shrink-0 font-mono badge-xs badge-warning">
+                                        {stashRef}
+                                      </span>
+                                    </span>
                                   ) : idx === 0 ? (
                                     <span
                                       className="flex min-w-0 items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content/85"
@@ -2194,7 +2313,9 @@ export default function App({
                                   const isBrowsing = commitBrowseHash === c.hash;
                                   const rel = formatRelativeShort(c.date);
                                   const fullTitle = [
-                                    `${c.shortHash} — ${c.subject}`,
+                                    stashRef
+                                      ? `${stashRef} — ${c.shortHash} — ${c.subject}`
+                                      : `${c.shortHash} — ${c.subject}`,
                                     c.author,
                                     formatDate(c.date) ?? undefined,
                                   ]
