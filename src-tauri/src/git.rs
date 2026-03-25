@@ -994,6 +994,95 @@ pub fn commit_staged(path: String, message: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Amend `HEAD` with staged changes. With a non-empty `message`, replaces the commit message (`git commit --amend -m`).
+/// With `None` or empty message, keeps the previous message (`git commit --amend --no-edit`).
+#[tauri::command]
+pub fn amend_last_commit(path: String, message: Option<String>) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let trimmed = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    match trimmed {
+        Some(m) => {
+            git_output(&path_buf, &["commit", "--amend", "-m", m])?;
+        }
+        None => {
+            git_output(&path_buf, &["commit", "--amend", "--no-edit"])?;
+        }
+    }
+    Ok(())
+}
+
+/// Merge `branch_or_ref` into the current branch (`git merge`).
+#[tauri::command]
+pub fn merge_branch(path: String, branch_or_ref: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let onto = branch_or_ref.trim();
+    if onto.is_empty() {
+        return Err("Branch or ref is empty.".to_string());
+    }
+    let verify_spec = format!("{onto}^{{commit}}");
+    git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+    git_output(&path_buf, &["merge", onto])?;
+    Ok(())
+}
+
+/// Cherry-pick a single commit onto the current branch.
+#[tauri::command]
+pub fn cherry_pick_commit(path: String, commit_hash: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let hash = commit_hash.trim();
+    if hash.is_empty() {
+        return Err("Commit hash cannot be empty.".to_string());
+    }
+    let verify_spec = format!("{hash}^{{commit}}");
+    git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+    git_output(&path_buf, &["cherry-pick", hash])?;
+    Ok(())
+}
+
+/// History of commits touching `file_path` (`git log --follow`), newest first.
+#[tauri::command]
+pub fn list_file_history(
+    path: String,
+    file_path: String,
+    limit: u32,
+) -> Result<Vec<CommitEntry>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    let n = limit.max(1).min(500).to_string();
+    let out = git_output(
+        &path_buf,
+        &[
+            "log",
+            "--follow",
+            "-n",
+            &n,
+            &format!("--format={COMMIT_LOG_FORMAT}"),
+            "--",
+            rel,
+        ],
+    )?;
+    Ok(parse_commit_log_lines(&out))
+}
+
+/// Porcelain blame output for display (`git blame -w`).
+#[tauri::command]
+pub fn get_file_blame(path: String, file_path: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["blame", "-w", "--", rel])
+}
+
 /// Staged diff for a path (`git diff --cached -- <path>`).
 #[tauri::command]
 pub fn get_staged_diff(path: String, file_path: String) -> Result<String, String> {

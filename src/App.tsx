@@ -313,6 +313,7 @@ function StagePanelFileRow({
   onSelect,
   onStage,
   onUnstage,
+  onFileContextMenu,
 }: {
   f: WorkingTreeFile;
   selected: boolean;
@@ -321,6 +322,8 @@ function StagePanelFileRow({
   onSelect: () => void;
   onStage: () => void;
   onUnstage: () => void;
+  /** Right-click: history / blame for this path. */
+  onFileContextMenu?: (path: string, clientX: number, clientY: number) => void;
 }) {
   const selectable = f.staged || f.unstaged;
   return (
@@ -345,6 +348,15 @@ function StagePanelFileRow({
           onSelect();
         }
       }}
+      onContextMenu={
+        onFileContextMenu
+          ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onFileContextMenu(f.path, e.clientX, e.clientY);
+            }
+          : undefined
+      }
     >
       <div className="flex min-h-7 items-center gap-2">
         <code className="min-w-0 flex-1 font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
@@ -903,6 +915,20 @@ export default function App({
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [commitPushBusy, setCommitPushBusy] = useState(false);
+  const [amendLastCommit, setAmendLastCommit] = useState(false);
+  const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null);
+  const [fileHistoryCommits, setFileHistoryCommits] = useState<CommitEntry[]>([]);
+  const [fileHistoryLoading, setFileHistoryLoading] = useState(false);
+  const [fileHistoryError, setFileHistoryError] = useState<string | null>(null);
+  const [fileBlamePath, setFileBlamePath] = useState<string | null>(null);
+  const [fileBlameText, setFileBlameText] = useState<string | null>(null);
+  const [fileBlameLoading, setFileBlameLoading] = useState(false);
+  const [fileBlameError, setFileBlameError] = useState<string | null>(null);
+  const [fileRowContextMenu, setFileRowContextMenu] = useState<{
+    path: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
@@ -960,22 +986,25 @@ export default function App({
     setBranchContextMenu(null);
     setStashContextMenu(null);
     setGraphCommitContextMenu(null);
+    setFileRowContextMenu(null);
   }, [repo?.path]);
 
   useEffect(() => {
-    if (!branchContextMenu && !stashContextMenu && !graphCommitContextMenu) return;
+    if (!branchContextMenu && !stashContextMenu && !graphCommitContextMenu && !fileRowContextMenu)
+      return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setBranchContextMenu(null);
         setStashContextMenu(null);
         setGraphCommitContextMenu(null);
+        setFileRowContextMenu(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [branchContextMenu, stashContextMenu, graphCommitContextMenu]);
+  }, [branchContextMenu, stashContextMenu, graphCommitContextMenu, fileRowContextMenu]);
 
   useEffect(() => {
     setGraphBranchVisible((prev) => {
@@ -1131,6 +1160,17 @@ export default function App({
     return tips;
   }, [localBranches, remoteBranches, graphBranchVisible]);
 
+  const clearFileToolView = useCallback(() => {
+    setFileHistoryPath(null);
+    setFileHistoryCommits([]);
+    setFileHistoryLoading(false);
+    setFileHistoryError(null);
+    setFileBlamePath(null);
+    setFileBlameText(null);
+    setFileBlameLoading(false);
+    setFileBlameError(null);
+  }, []);
+
   const clearCommitBrowse = useCallback(() => {
     setCommitBrowseHash(null);
     setCommitBrowseFiles([]);
@@ -1141,7 +1181,8 @@ export default function App({
     setCommitDiffText(null);
     setCommitDiffLoading(false);
     setCommitDiffError(null);
-  }, []);
+    clearFileToolView();
+  }, [clearFileToolView]);
 
   const loadDiffForFile = useCallback(
     async (f: WorkingTreeFile, side: "unstaged" | "staged") => {
@@ -1181,6 +1222,7 @@ export default function App({
   const selectCommit = useCallback(
     async (hash: string) => {
       if (!repo?.path || repo.error) return;
+      clearFileToolView();
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
       setDiffStagedText(null);
@@ -1219,7 +1261,7 @@ export default function App({
       setCommitSignature({ loading: false, verified });
       setCommitBrowseLoading(false);
     },
-    [repo],
+    [repo, clearFileToolView],
   );
 
   const loadCommitFileDiff = useCallback(
@@ -1259,7 +1301,8 @@ export default function App({
     setDiffUnstagedText(null);
     setDiffError(null);
     setDiffLoading(false);
-  }, []);
+    clearFileToolView();
+  }, [clearFileToolView]);
 
   const loadRepo = useCallback(
     async (selected: string) => {
@@ -1468,10 +1511,131 @@ export default function App({
     [repo, refreshAfterMutation],
   );
 
+  const mergeBranchIntoCurrent = useCallback(
+    async (onto: string) => {
+      if (!repo?.path || repo.error || repo.detached) return;
+      const ok = await ask(`Merge "${onto}" into the current branch?`, {
+        title: "Garlic",
+        kind: "warning",
+      });
+      if (!ok) return;
+      setBranchBusy(`merge:${onto}`);
+      setOperationError(null);
+      try {
+        await invoke("merge_branch", {
+          path: repo.path,
+          branchOrRef: onto,
+        });
+        setBranchContextMenu(null);
+        setGraphCommitContextMenu(null);
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, refreshAfterMutation],
+  );
+
+  const cherryPickCommit = useCallback(
+    async (hash: string) => {
+      if (!repo?.path || repo.error || repo.detached) return;
+      const short = commits.find((c) => c.hash === hash)?.shortHash ?? hash.slice(0, 7);
+      const ok = await ask(`Cherry-pick commit ${short} onto the current branch?`, {
+        title: "Garlic",
+        kind: "warning",
+      });
+      if (!ok) return;
+      setGraphCommitContextMenu(null);
+      setBranchBusy("cherry-pick");
+      setOperationError(null);
+      try {
+        await invoke("cherry_pick_commit", {
+          path: repo.path,
+          commitHash: hash,
+        });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, commits, refreshAfterMutation],
+  );
+
+  const openFileRowMenu = useCallback((path: string, clientX: number, clientY: number) => {
+    setBranchContextMenu(null);
+    setStashContextMenu(null);
+    setGraphCommitContextMenu(null);
+    setFileRowContextMenu({ path, x: clientX, y: clientY });
+  }, []);
+
+  const openFileHistory = useCallback(
+    async (filePath: string) => {
+      if (!repo?.path || repo.error) return;
+      setFileRowContextMenu(null);
+      clearDiffSelection();
+      setFileHistoryPath(filePath);
+      setFileHistoryLoading(true);
+      setFileHistoryError(null);
+      setFileHistoryCommits([]);
+      try {
+        const rows = await invoke<CommitEntry[]>("list_file_history", {
+          path: repo.path,
+          filePath,
+          limit: 200,
+        });
+        setFileHistoryCommits(rows);
+      } catch (e) {
+        setFileHistoryError(invokeErrorMessage(e));
+      } finally {
+        setFileHistoryLoading(false);
+      }
+    },
+    [repo, clearDiffSelection],
+  );
+
+  const openFileBlame = useCallback(
+    async (filePath: string) => {
+      if (!repo?.path || repo.error) return;
+      setFileRowContextMenu(null);
+      clearDiffSelection();
+      setFileBlamePath(filePath);
+      setFileBlameLoading(true);
+      setFileBlameError(null);
+      setFileBlameText(null);
+      try {
+        const text = await invoke<string>("get_file_blame", {
+          path: repo.path,
+          filePath,
+        });
+        setFileBlameText(text);
+      } catch (e) {
+        setFileBlameError(invokeErrorMessage(e));
+      } finally {
+        setFileBlameLoading(false);
+      }
+    },
+    [repo, clearDiffSelection],
+  );
+
+  const onPickFileHistoryCommit = useCallback(
+    async (hash: string) => {
+      const rel = fileHistoryPath;
+      if (!repo?.path || repo.error || !rel) return;
+      await selectCommit(hash);
+      await loadCommitFileDiff(rel, hash);
+    },
+    [repo, fileHistoryPath, selectCommit, loadCommitFileDiff],
+  );
+
   const openGraphBranchLocalMenu = useCallback(
     (branchName: string, clientX: number, clientY: number) => {
       setStashContextMenu(null);
       setGraphCommitContextMenu(null);
+      setFileRowContextMenu(null);
       setBranchContextMenu({
         kind: "local",
         branchName,
@@ -1486,6 +1650,7 @@ export default function App({
     (fullRef: string, clientX: number, clientY: number) => {
       setStashContextMenu(null);
       setGraphCommitContextMenu(null);
+      setFileRowContextMenu(null);
       setBranchContextMenu({
         kind: "remote",
         fullRef,
@@ -1499,12 +1664,14 @@ export default function App({
   const openGraphCommitMenu = useCallback((hash: string, clientX: number, clientY: number) => {
     setStashContextMenu(null);
     setBranchContextMenu(null);
+    setFileRowContextMenu(null);
     setGraphCommitContextMenu({ hash, x: clientX, y: clientY });
   }, []);
 
   const openGraphStashMenu = useCallback((stashRef: string, clientX: number, clientY: number) => {
     setBranchContextMenu(null);
     setGraphCommitContextMenu(null);
+    setFileRowContextMenu(null);
     setStashContextMenu({ stashRef, x: clientX, y: clientY });
   }, []);
 
@@ -1754,11 +1921,21 @@ export default function App({
   async function onCommit() {
     if (!repo?.path || repo.error) return;
     const msg = commitMessage.trim();
-    if (!msg) return;
+    if (!amendLastCommit && !msg) return;
+    if (amendLastCommit && msg.length === 0 && !hasStagedFiles) return;
     setStageCommitBusy(true);
     setOperationError(null);
     try {
-      await invoke("commit_staged", { path: repo.path, message: msg });
+      if (amendLastCommit) {
+        if (msg.length > 0) {
+          await invoke("amend_last_commit", { path: repo.path, message: msg });
+        } else {
+          await invoke("amend_last_commit", { path: repo.path, message: null });
+        }
+        setAmendLastCommit(false);
+      } else {
+        await invoke("commit_staged", { path: repo.path, message: msg });
+      }
       setCommitMessage("");
       await refreshAfterMutation();
     } catch (e) {
@@ -1817,10 +1994,12 @@ export default function App({
   const stagedFiles = workingTreeFiles.filter((f) => f.staged);
   const unstagedPaths = unstagedFiles.map((f) => f.path);
   const stagedPaths = stagedFiles.map((f) => f.path);
+  const commitMsgTrimmed = commitMessage.trim();
+  const canCommitAmend = amendLastCommit && (commitMsgTrimmed.length > 0 || hasStagedFiles);
+  const canCommitNormal = !amendLastCommit && hasStagedFiles && commitMsgTrimmed.length > 0;
   const canCommit =
     Boolean(repo?.path && !repo.error && !loading) &&
-    hasStagedFiles &&
-    commitMessage.trim().length > 0 &&
+    (canCommitAmend || canCommitNormal) &&
     !stageCommitBusy &&
     !commitPushBusy;
   const canPush =
@@ -1829,7 +2008,7 @@ export default function App({
     !stageCommitBusy &&
     !commitPushBusy &&
     !pushBusy;
-  const canCommitAndPush = canCommit && !repo?.detached && !pushBusy;
+  const canCommitAndPush = canCommit && !repo?.detached && !pushBusy && !amendLastCommit;
 
   const newBranchTrimmed = newBranchName.trim();
   const newBranchNameInvalid =
@@ -1843,7 +2022,9 @@ export default function App({
   }, [commits, createBranchStartCommit]);
 
   const showExpandedDiff =
-    Boolean(selectedDiffPath || commitDiffPath) && !listsError && Boolean(repo && !repo.error);
+    Boolean(selectedDiffPath || commitDiffPath || fileHistoryPath || fileBlamePath) &&
+    !listsError &&
+    Boolean(repo && !repo.error);
 
   const branchFilterNorm = branchListFilter.trim().toLowerCase();
   const filteredLocalBranches = useMemo(() => {
@@ -2260,6 +2441,109 @@ export default function App({
                             )}
                           </div>
                         </div>
+                      ) : !listsError && fileBlamePath ? (
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                            <div className="min-w-0">
+                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                Blame
+                              </h2>
+                              <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
+                                {fileBlamePath}
+                              </code>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn shrink-0 btn-sm btn-primary"
+                              onClick={() => {
+                                clearFileToolView();
+                              }}
+                            >
+                              Back to commits
+                            </button>
+                          </div>
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                            {fileBlameLoading ? (
+                              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                <span className="loading loading-md loading-spinner text-primary" />
+                                <p className="m-0 text-sm text-base-content/70">Loading blame…</p>
+                              </div>
+                            ) : fileBlameError ? (
+                              <div role="alert" className="alert text-sm alert-error">
+                                <span className="wrap-break-word">{fileBlameError}</span>
+                              </div>
+                            ) : (
+                              <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
+                                {fileBlameText ?? ""}
+                              </pre>
+                            )}
+                          </div>
+                        </div>
+                      ) : !listsError && fileHistoryPath ? (
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                            <div className="min-w-0">
+                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                File history
+                              </h2>
+                              <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
+                                {fileHistoryPath}
+                              </code>
+                              <p className="mt-1 mb-0 text-xs text-base-content/60">
+                                Commits that touched this path (newest first). Click a row to open
+                                the diff for that revision.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn shrink-0 btn-sm btn-primary"
+                              onClick={() => {
+                                clearFileToolView();
+                              }}
+                            >
+                              Back to commits
+                            </button>
+                          </div>
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                            {fileHistoryLoading ? (
+                              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                <span className="loading loading-md loading-spinner text-primary" />
+                                <p className="m-0 text-sm text-base-content/70">Loading history…</p>
+                              </div>
+                            ) : fileHistoryError ? (
+                              <div role="alert" className="alert text-sm alert-error">
+                                <span className="wrap-break-word">{fileHistoryError}</span>
+                              </div>
+                            ) : fileHistoryCommits.length === 0 ? (
+                              <p className="m-0 text-center text-sm text-base-content/60">
+                                No commits found for this file
+                              </p>
+                            ) : (
+                              <ul className="m-0 flex max-h-[min(60vh,32rem)] list-none flex-col gap-1.5 overflow-y-auto pr-0.5">
+                                {fileHistoryCommits.map((c) => (
+                                  <li key={c.hash}>
+                                    <button
+                                      type="button"
+                                      className="flex w-full flex-col gap-0.5 rounded-lg border border-base-300/50 bg-base-200/40 px-3 py-2 text-left transition-colors hover:border-base-300 hover:bg-base-300/35"
+                                      onClick={() => void onPickFileHistoryCommit(c.hash)}
+                                    >
+                                      <span className="font-mono text-[0.65rem] text-base-content/70">
+                                        {c.shortHash}
+                                      </span>
+                                      <span className="text-sm leading-snug text-base-content/95">
+                                        {c.subject}
+                                      </span>
+                                      <span className="text-[0.65rem] text-base-content/55">
+                                        {formatAuthorDisplay(c.author)} ·{" "}
+                                        {formatRelativeShort(c.date) ?? formatDate(c.date) ?? "—"}
+                                      </span>
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
                       ) : !listsError && commitDiffPath && commitBrowseHash ? (
                         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
                           <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-1.5">
@@ -2392,6 +2676,11 @@ export default function App({
                                     onClick={() =>
                                       void loadCommitFileDiff(entry.path, commitBrowseHash ?? "")
                                     }
+                                    onContextMenu={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      openFileRowMenu(entry.path, e.clientX, e.clientY);
+                                    }}
                                   >
                                     <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
                                       {entry.path}
@@ -2730,6 +3019,13 @@ export default function App({
                           onSelect={() => void loadDiffForFile(f, "unstaged")}
                           onStage={() => void onStagePaths([f.path])}
                           onUnstage={() => void onUnstagePaths([f.path])}
+                          onFileContextMenu={
+                            canShowBranches
+                              ? (path, x, y) => {
+                                  openFileRowMenu(path, x, y);
+                                }
+                              : undefined
+                          }
                         />
                       ))}
                     </ul>
@@ -2780,6 +3076,13 @@ export default function App({
                           onSelect={() => void loadDiffForFile(f, "staged")}
                           onStage={() => void onStagePaths([f.path])}
                           onUnstage={() => void onUnstagePaths([f.path])}
+                          onFileContextMenu={
+                            canShowBranches
+                              ? (path, x, y) => {
+                                  openFileRowMenu(path, x, y);
+                                }
+                              : undefined
+                          }
                         />
                       ))}
                     </ul>
@@ -2791,17 +3094,17 @@ export default function App({
                 className="shrink-0 border-t border-base-300 bg-base-100 p-3"
                 aria-labelledby="sidebar-commit-heading"
               >
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <h2
-                    id="sidebar-commit-heading"
-                    className="m-0 text-xs font-semibold tracking-wide uppercase opacity-80"
-                  >
-                    Commit
-                  </h2>
-                  <span className="ml-auto flex flex-wrap items-center gap-1.5">
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2
+                      id="sidebar-commit-heading"
+                      className="m-0 text-xs font-semibold tracking-wide uppercase opacity-80"
+                    >
+                      Commit
+                    </h2>
                     <button
                       type="button"
-                      className="btn gap-1 px-2 btn-ghost btn-xs"
+                      className="btn shrink-0 gap-1 px-2 btn-ghost btn-xs"
                       disabled={!canPush}
                       title="Push the current branch to origin"
                       onClick={() => void onPushToOrigin()}
@@ -2815,54 +3118,76 @@ export default function App({
                         </>
                       )}
                     </button>
-                  </span>
-                </div>
-                <label className="form-control w-full">
-                  <span className="label-text mb-1 text-xs font-medium">Message</span>
-                  <textarea
-                    className="textarea-bordered textarea min-h-18 w-full resize-y font-sans text-sm textarea-sm"
-                    placeholder="Describe your changes…"
-                    value={commitMessage}
-                    disabled={!canShowBranches || stageCommitBusy || commitPushBusy}
-                    onChange={(e) => {
-                      setCommitMessage(e.target.value);
-                    }}
-                    rows={3}
-                  />
-                </label>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-sm"
-                    disabled={!canCommitAndPush}
-                    title="Create the commit, then push the branch to origin"
-                    onClick={() => void onCommitAndPush()}
-                  >
-                    {commitPushBusy ? (
-                      <span className="loading loading-xs loading-spinner" />
-                    ) : (
-                      "Commit & Push"
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn ml-auto btn-sm btn-primary"
-                    disabled={!canCommit}
-                    onClick={() => void onCommit()}
-                  >
-                    {stageCommitBusy ? (
-                      <span className="loading loading-xs loading-spinner" />
-                    ) : (
-                      "Commit"
-                    )}
-                  </button>
+                  </div>
+                  <div className="flex cursor-pointer items-center gap-2.5">
+                    <input
+                      id="commit-amend-checkbox"
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={amendLastCommit}
+                      disabled={!canShowBranches || stageCommitBusy || commitPushBusy}
+                      onChange={(e) => {
+                        setAmendLastCommit(e.target.checked);
+                      }}
+                    />
+                    <label
+                      htmlFor="commit-amend-checkbox"
+                      className="cursor-pointer text-xs leading-snug text-base-content/90"
+                    >
+                      Amend last commit
+                    </label>
+                  </div>
+                  <label className="form-control w-full gap-1">
+                    <span className="label-text text-xs font-medium">Message</span>
+                    <textarea
+                      className="textarea-bordered textarea min-h-18 w-full resize-y font-sans text-sm textarea-sm"
+                      placeholder={
+                        amendLastCommit
+                          ? "New message, or leave empty to keep the previous message (requires staged changes)"
+                          : "Describe your changes…"
+                      }
+                      value={commitMessage}
+                      disabled={!canShowBranches || stageCommitBusy || commitPushBusy}
+                      onChange={(e) => {
+                        setCommitMessage(e.target.value);
+                      }}
+                      rows={3}
+                    />
+                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      disabled={!canCommitAndPush}
+                      title="Create the commit, then push the branch to origin"
+                      onClick={() => void onCommitAndPush()}
+                    >
+                      {commitPushBusy ? (
+                        <span className="loading loading-xs loading-spinner" />
+                      ) : (
+                        "Commit & Push"
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn ml-auto btn-sm btn-primary"
+                      disabled={!canCommit}
+                      onClick={() => void onCommit()}
+                    >
+                      {stageCommitBusy ? (
+                        <span className="loading loading-xs loading-spinner" />
+                      ) : (
+                        "Commit"
+                      )}
+                    </button>
+                  </div>
                 </div>
               </section>
             </div>
           </div>
         </aside>
       </div>
-      {branchContextMenu || stashContextMenu || graphCommitContextMenu ? (
+      {branchContextMenu || stashContextMenu || graphCommitContextMenu || fileRowContextMenu ? (
         <>
           <div
             className="fixed inset-0 z-[100]"
@@ -2871,6 +3196,7 @@ export default function App({
               setBranchContextMenu(null);
               setStashContextMenu(null);
               setGraphCommitContextMenu(null);
+              setFileRowContextMenu(null);
             }}
           />
           {branchContextMenu
@@ -2907,6 +3233,29 @@ export default function App({
                         </button>
                       </li>
                     ) : null}
+                    <li role="none">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="rounded"
+                        disabled={
+                          Boolean(branchBusy) || disableRebaseOnto || Boolean(repo?.detached)
+                        }
+                        title={
+                          repo?.detached
+                            ? "Check out a branch first"
+                            : disableRebaseOnto
+                              ? "Already on this branch"
+                              : "Merge this branch into the checked-out branch"
+                        }
+                        onClick={() => {
+                          setBranchContextMenu(null);
+                          void mergeBranchIntoCurrent(onto);
+                        }}
+                      >
+                        Merge into current branch
+                      </button>
+                    </li>
                     <li role="none">
                       <button
                         type="button"
@@ -3009,6 +3358,47 @@ export default function App({
               </li>
             </ul>
           ) : null}
+          {fileRowContextMenu ? (
+            <ul
+              role="menu"
+              className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
+              style={{
+                left: Math.min(Math.max(8, fileRowContextMenu.x), window.innerWidth - 228),
+                top: Math.min(Math.max(8, fileRowContextMenu.y), window.innerHeight - 120),
+              }}
+            >
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="rounded"
+                  disabled={Boolean(branchBusy)}
+                  onClick={() => {
+                    const p = fileRowContextMenu.path;
+                    setFileRowContextMenu(null);
+                    void openFileHistory(p);
+                  }}
+                >
+                  File history
+                </button>
+              </li>
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="rounded"
+                  disabled={Boolean(branchBusy)}
+                  onClick={() => {
+                    const p = fileRowContextMenu.path;
+                    setFileRowContextMenu(null);
+                    void openFileBlame(p);
+                  }}
+                >
+                  Blame
+                </button>
+              </li>
+            </ul>
+          ) : null}
           {graphCommitContextMenu
             ? (() => {
                 const m = graphCommitContextMenu;
@@ -3034,6 +3424,28 @@ export default function App({
                         }}
                       >
                         Browse commit
+                      </button>
+                    </li>
+                    <li role="none">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="rounded"
+                        disabled={
+                          Boolean(branchBusy) || Boolean(repo?.detached) || Boolean(entry?.stashRef)
+                        }
+                        title={
+                          repo?.detached
+                            ? "Check out a branch first"
+                            : entry?.stashRef
+                              ? "Not available for stash commits"
+                              : "Apply this commit on top of the current branch"
+                        }
+                        onClick={() => {
+                          void cherryPickCommit(m.hash);
+                        }}
+                      >
+                        Cherry-pick this commit
                       </button>
                     </li>
                     <li role="none">
