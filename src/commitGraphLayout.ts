@@ -33,12 +33,76 @@ function branchLaneHue(index: number): string {
 }
 
 /**
+ * Prefer `main` / `master` so the trunk stays left (GitKraken-style), not the oldest sibling at a fork.
+ */
+function pickMainlineTipHash(tips: BranchTip[], currentBranchName: string | null): string | null {
+  if (tips.length === 0) return null;
+  const byName = new Map(tips.map((t) => [t.name, t.tipHash] as const));
+
+  for (const name of ["main", "master", "trunk"]) {
+    const h = byName.get(name);
+    if (h !== undefined) return h;
+  }
+  for (const name of ["origin/main", "origin/master"]) {
+    const h = byName.get(name);
+    if (h !== undefined) return h;
+  }
+
+  if (currentBranchName) {
+    const h = byName.get(currentBranchName);
+    if (h !== undefined) return h;
+  }
+
+  const locals = tips.filter((t) => !t.name.includes("/"));
+  if (locals.length > 0) {
+    locals.sort((a, b) => a.name.localeCompare(b.name));
+    return locals[0].tipHash;
+  }
+
+  const sorted = [...tips].sort((a, b) => a.name.localeCompare(b.name));
+  return sorted[0].tipHash;
+}
+
+/** First-parent chain from a branch tip (Git mainline through merges). */
+function buildMainlineHashes(
+  commits: CommitGraphCommit[],
+  hashSet: Set<string>,
+  tipHash: string | null,
+): Set<string> {
+  const mainline = new Set<string>();
+  if (tipHash === null || !hashSet.has(tipHash)) {
+    return mainline;
+  }
+  const byHash = new Map(commits.map((c) => [c.hash, c] as const));
+  let h: string | undefined = tipHash;
+  while (h !== undefined && hashSet.has(h)) {
+    mainline.add(h);
+    const c = byHash.get(h);
+    if (!c || c.parentHashes.length === 0) break;
+    const fp = c.parentHashes[0];
+    if (hashSet.has(fp)) {
+      h = fp;
+    } else {
+      const fpInGraph = c.parentHashes.find((p) => hashSet.has(p));
+      if (fpInGraph === undefined) break;
+      h = fpInGraph;
+    }
+  }
+  return mainline;
+}
+
+/**
  * Assign a lane index to each commit from the DAG only (forks open new columns to the right;
  * merges connect lanes; first parent is the mainline through a merge).
  *
  * `commits` must be topo-ordered newest-first (row 0 = newest).
+ * `mainlineHashes`: commits on the first-parent path from the chosen trunk tip (`main`), so that
+ * path keeps lane 0 instead of the oldest sibling at each fork.
  */
-function assignLanesFromDag(commits: CommitGraphCommit[]): Map<string, number> {
+function assignLanesFromDag(
+  commits: CommitGraphCommit[],
+  mainlineHashes: Set<string>,
+): Map<string, number> {
   const hashSet = new Set(commits.map((c) => c.hash));
   const indexByHash = new Map(commits.map((c, i) => [c.hash, i] as const));
 
@@ -55,7 +119,7 @@ function assignLanesFromDag(commits: CommitGraphCommit[]): Map<string, number> {
     }
   }
 
-  // Oldest sibling first (larger row index in newest-first list) continues the parent's lane.
+  // Oldest sibling first (larger row index in newest-first list) — fallback when no mainline.
   for (const list of children.values()) {
     list.sort((a, b) => (indexByHash.get(b) ?? 0) - (indexByHash.get(a) ?? 0));
   }
@@ -72,9 +136,10 @@ function assignLanesFromDag(commits: CommitGraphCommit[]): Map<string, number> {
       continue;
     }
 
-    // Merge commit (2+ parents in Git): lane follows first parent that appears in this window.
+    // Merge commit (2+ parents in Git): lane follows first parent in this window.
     if (c.parentHashes.length >= 2) {
-      const firstParentInGraph = c.parentHashes.find((p) => hashSet.has(p));
+      const fp = c.parentHashes[0];
+      const firstParentInGraph = hashSet.has(fp) ? fp : c.parentHashes.find((p) => hashSet.has(p));
       if (firstParentInGraph !== undefined) {
         laneByHash.set(c.hash, laneByHash.get(firstParentInGraph) ?? 0);
       } else {
@@ -83,11 +148,16 @@ function assignLanesFromDag(commits: CommitGraphCommit[]): Map<string, number> {
       continue;
     }
 
-    // Single parent: fork if this is not the oldest child of that parent (side-by-side rails).
+    // Single parent: fork if this is not the child that continues the parent's lane.
     const p = parentsInGraph[0];
     const laneP = laneByHash.get(p) ?? 0;
     const sibs = children.get(p) ?? [];
-    const continuesParentLane = sibs.length === 0 || sibs[0] === c.hash;
+    const mainlineChild = sibs.find((h) => mainlineHashes.has(h));
+    const continuesParentLane =
+      sibs.length === 0 ||
+      (mainlineHashes.size > 0 && mainlineChild !== undefined
+        ? c.hash === mainlineChild
+        : sibs[0] === c.hash);
     if (continuesParentLane) {
       laneByHash.set(c.hash, laneP);
     } else {
@@ -199,13 +269,18 @@ function compactLogicalLanes(
 export function computeCommitGraphLayout(
   commits: CommitGraphCommit[],
   tips: BranchTip[],
-  _currentBranchName: string | null,
+  currentBranchName: string | null,
 ): CommitGraphLayout {
   const branchNamesSorted = [...new Set(tips.map((t) => t.name))].sort((a, b) =>
     a.localeCompare(b),
   );
 
-  const laneByHash = commits.length === 0 ? new Map<string, number>() : assignLanesFromDag(commits);
+  const hashSet = new Set(commits.map((c) => c.hash));
+  const mainlineTip = pickMainlineTipHash(tips, currentBranchName);
+  const mainlineHashes = buildMainlineHashes(commits, hashSet, mainlineTip);
+
+  const laneByHash =
+    commits.length === 0 ? new Map<string, number>() : assignLanesFromDag(commits, mainlineHashes);
 
   const logicalLanes: number[] = commits.map((c) => laneByHash.get(c.hash) ?? 0);
   const indexByHash = new Map(commits.map((c, i) => [c.hash, i] as const));
