@@ -79,6 +79,45 @@ function localBranchUpstreamLabel(
   return `↑${ahead} ↓${behind}${vs}`;
 }
 
+/** Rules aligned with `git check-ref-format --branch` for short branch names. */
+function branchNameValidationError(name: string): string | null {
+  if (name.length === 0) return null;
+  for (let i = 0; i < name.length; i++) {
+    const c = name.charCodeAt(i);
+    if (c <= 0x20 || c === 0x7f) {
+      return "Branch names cannot contain spaces or control characters.";
+    }
+  }
+  if (/[~^:?*[\]\\]/.test(name)) {
+    return "Branch names cannot contain ~ ^ : ? * [ ] \\.";
+  }
+  if (name.includes("..")) {
+    return 'Branch names cannot contain "..".';
+  }
+  if (name.includes("@{")) {
+    return 'Branch names cannot contain "@{".';
+  }
+  if (name.startsWith("/") || name.endsWith("/")) {
+    return 'Branch names cannot start or end with "/".';
+  }
+  if (name.includes("//")) {
+    return 'Branch names cannot contain "//".';
+  }
+  if (name.endsWith(".lock")) {
+    return 'Branch names cannot end with ".lock".';
+  }
+  if (name.endsWith(".")) {
+    return 'Branch names cannot end with ".".';
+  }
+  if (name.startsWith(".")) {
+    return 'Branch names cannot start with ".".';
+  }
+  if (name.startsWith("-")) {
+    return 'Branch names cannot start with "-".';
+  }
+  return null;
+}
+
 function formatDate(iso: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -525,6 +564,11 @@ export default function App({
       setCreateBranchFieldError("Enter a branch name.");
       return;
     }
+    const nameErr = branchNameValidationError(trimmed);
+    if (nameErr) {
+      setCreateBranchFieldError(nameErr);
+      return;
+    }
     setCreateBranchFieldError(null);
     setBranchBusy("create");
     setLoadError(null);
@@ -642,6 +686,12 @@ export default function App({
     !stageCommitBusy &&
     !pushBusy;
 
+  const newBranchTrimmed = newBranchName.trim();
+  const newBranchNameInvalid =
+    newBranchTrimmed.length > 0 && branchNameValidationError(newBranchTrimmed) !== null;
+  const canSubmitNewBranch =
+    newBranchTrimmed.length > 0 && !newBranchNameInvalid && branchBusy !== "create";
+
   const showExpandedDiff =
     Boolean(selectedDiffPath || commitDiffPath) && !listsError && Boolean(repo && !repo.error);
 
@@ -691,6 +741,9 @@ export default function App({
                     if (createBranchFieldError) setCreateBranchFieldError(null);
                   }}
                   onKeyDown={(e) => {
+                    if (e.key === " ") {
+                      e.preventDefault();
+                    }
                     if (e.key === "Enter") {
                       e.preventDefault();
                       void submitCreateBranch();
@@ -699,6 +752,10 @@ export default function App({
                 />
                 {createBranchFieldError ? (
                   <span className="label-text-alt text-error">{createBranchFieldError}</span>
+                ) : newBranchNameInvalid ? (
+                  <span className="label-text-alt text-error">
+                    {branchNameValidationError(newBranchTrimmed)}
+                  </span>
                 ) : null}
               </label>
               <div className="modal-action">
@@ -713,7 +770,7 @@ export default function App({
                 <button
                   type="button"
                   className="btn btn-primary"
-                  disabled={branchBusy === "create"}
+                  disabled={!canSubmitNewBranch}
                   onClick={() => void submitCreateBranch()}
                 >
                   {branchBusy === "create" ? (
