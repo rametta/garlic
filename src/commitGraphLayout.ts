@@ -99,6 +99,103 @@ function assignLanesFromDag(commits: CommitGraphCommit[]): Map<string, number> {
   return laneByHash;
 }
 
+/** Row span [min, max] inclusive where a logical lane draws a node or vertical segment. */
+function logicalLaneRowIntervals(
+  commits: CommitGraphCommit[],
+  logicalLanes: number[],
+  indexByHash: Map<string, number>,
+): Map<number, { min: number; max: number }> {
+  const intervals = new Map<number, { min: number; max: number }>();
+
+  const extend = (L: number, r0: number, r1: number) => {
+    const lo = Math.min(r0, r1);
+    const hi = Math.max(r0, r1);
+    const cur = intervals.get(L);
+    if (!cur) {
+      intervals.set(L, { min: lo, max: hi });
+    } else {
+      cur.min = Math.min(cur.min, lo);
+      cur.max = Math.max(cur.max, hi);
+    }
+  };
+
+  for (let i = 0; i < commits.length; i++) {
+    extend(logicalLanes[i] ?? 0, i, i);
+  }
+
+  for (let i = 0; i < commits.length; i++) {
+    const c = commits[i];
+    for (const ph of c.parentHashes) {
+      const j = indexByHash.get(ph);
+      if (j === undefined || j <= i) continue; // parent must be older (lower in list)
+      const mid = Math.floor((i + j) / 2);
+      const li = logicalLanes[i] ?? 0;
+      const lj = logicalLanes[j] ?? 0;
+      extend(li, i, mid);
+      extend(lj, mid, j);
+    }
+  }
+
+  return intervals;
+}
+
+function intervalsOverlap(
+  a: { min: number; max: number },
+  b: { min: number; max: number },
+): boolean {
+  return a.min <= b.max && b.min <= a.max;
+}
+
+/**
+ * Map logical lane ids (possibly many) to compact column indices so lanes whose row spans
+ * do not overlap can share the same horizontal column (reuse rails).
+ */
+function compactLogicalLanes(
+  logicalLanes: number[],
+  intervals: Map<number, { min: number; max: number }>,
+): { compact: number[]; columnCount: number } {
+  const n = logicalLanes.length;
+  if (n === 0) {
+    return { compact: [], columnCount: 1 };
+  }
+
+  const sortedByStart = [...new Set(logicalLanes)].sort((a, b) => {
+    const ia = intervals.get(a) ?? { min: 0, max: 0 };
+    const ib = intervals.get(b) ?? { min: 0, max: 0 };
+    if (ia.min !== ib.min) return ia.min - ib.min;
+    return ia.max - ib.max;
+  });
+
+  const logicalToCompact = new Map<number, number>();
+  const columns: { min: number; max: number }[][] = [];
+
+  for (const L of sortedByStart) {
+    const span = intervals.get(L) ?? { min: 0, max: 0 };
+    let placed = false;
+    for (let c = 0; c < columns.length; c++) {
+      const col = columns[c];
+      if (col === undefined) continue;
+      const clashes = col.some((s) => intervalsOverlap(s, span));
+      if (!clashes) {
+        col.push(span);
+        logicalToCompact.set(L, c);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      const c = columns.length;
+      columns.push([span]);
+      logicalToCompact.set(L, c);
+    }
+  }
+
+  const columnCount = Math.max(1, columns.length);
+  const compact = logicalLanes.map((L) => logicalToCompact.get(L) ?? 0);
+
+  return { compact, columnCount };
+}
+
 export function computeCommitGraphLayout(
   commits: CommitGraphCommit[],
   tips: BranchTip[],
@@ -110,13 +207,18 @@ export function computeCommitGraphLayout(
 
   const laneByHash = commits.length === 0 ? new Map<string, number>() : assignLanesFromDag(commits);
 
-  const lanes: number[] = commits.map((c) => laneByHash.get(c.hash) ?? 0);
-  const maxLane = lanes.length === 0 ? 0 : Math.max(...lanes);
-  const laneCount = Math.max(1, maxLane + 1);
+  const logicalLanes: number[] = commits.map((c) => laneByHash.get(c.hash) ?? 0);
+  const indexByHash = new Map(commits.map((c, i) => [c.hash, i] as const));
+
+  const intervals =
+    commits.length === 0
+      ? new Map<number, { min: number; max: number }>()
+      : logicalLaneRowIntervals(commits, logicalLanes, indexByHash);
+
+  const { compact: lanes, columnCount } = compactLogicalLanes(logicalLanes, intervals);
+  const laneCount = columnCount;
 
   const laneColors = Array.from({ length: laneCount }, (_, i) => branchLaneHue(i));
-
-  const indexByHash = new Map(commits.map((c, i) => [c.hash, i] as const));
 
   const rowH = COMMIT_GRAPH_ROW_HEIGHT;
   const laneW = COMMIT_GRAPH_LANE_WIDTH;
@@ -135,7 +237,7 @@ export function computeCommitGraphLayout(
     let pi = 0;
     for (const p of c.parentHashes) {
       const j = indexByHash.get(p);
-      if (j === undefined) continue;
+      if (j === undefined || j <= i) continue;
       const y2 = cy(j);
       const x2 = cx(lanes[j] ?? 0);
       const yMid = (y1 + y2) / 2;
