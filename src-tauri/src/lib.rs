@@ -6,6 +6,7 @@ mod window_title;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, Submenu};
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::WindowEvent;
 use tauri::Wry;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -140,6 +141,11 @@ pub fn run() {
                 }
             }
             let _ = app.emit("theme-changed", serde_json::json!({ "theme": theme }));
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::Focused(true) = event {
+                let _ = window.app_handle().emit("window-focused", ());
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

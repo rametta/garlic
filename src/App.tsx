@@ -229,6 +229,9 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
       listen<{ theme: string }>("theme-changed", (e) => {
         document.documentElement.setAttribute("data-theme", e.payload.theme);
       }),
+      listen("window-focused", () => {
+        void refreshAfterMutation();
+      }),
     ]);
 
     return () => {
@@ -238,7 +241,7 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
         }
       });
     };
-  }, [loadRepo]);
+  }, [loadRepo, refreshAfterMutation]);
 
   async function onCheckoutLocal(branch: string) {
     if (!repo?.path || repo.error) return;
@@ -369,6 +372,13 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
 
   const canShowBranches = Boolean(repo && !repo.error && !loading);
   const currentBranchName = repo?.detached ? null : (repo?.branch ?? null);
+  const commitsSectionTitle =
+    currentBranchName ??
+    (repo?.detached
+      ? repo.headShort
+        ? `Detached (${repo.headShort})`
+        : "Detached HEAD"
+      : (repo?.headShort ?? "Current branch"));
 
   const hasStagedFiles = workingTreeFiles.some((f) => f.staged);
   const unstagedPaths = workingTreeFiles.filter((f) => f.unstaged).map((f) => f.path);
@@ -380,7 +390,7 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
     !stageCommitBusy;
   const canPush =
     Boolean(repo?.path && !repo.error && !loading) &&
-    !repo.detached &&
+    !repo?.detached &&
     !stageCommitBusy &&
     !pushBusy;
 
@@ -595,8 +605,8 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
                       ) : null}
 
                       <div className="mb-6">
-                        <h2 className="m-0 mb-3 border-b border-base-300 pb-2 text-sm font-semibold tracking-wide uppercase opacity-70">
-                          Commits on current branch
+                        <h2 className="m-0 mb-3 border-b border-base-300 pb-2 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                          {commitsSectionTitle}
                         </h2>
                         {commits.length === 0 ? (
                           <p className="m-0 text-center text-sm text-base-content/60">
