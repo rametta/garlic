@@ -43,6 +43,8 @@ pub fn run() {
             git::commit_staged,
             git::get_staged_diff,
             git::get_unstaged_diff,
+            git::list_commit_files,
+            git::get_commit_file_diff,
             git::push_to_origin,
             settings::restore_app_bootstrap,
             settings::set_last_repo_path,

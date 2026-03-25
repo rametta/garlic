@@ -16,6 +16,8 @@ commands.allow = [
   "commit_staged",
   "get_staged_diff",
   "get_unstaged_diff",
+  "list_commit_files",
+  "get_commit_file_diff",
   "push_to_origin",
   "restore_app_bootstrap",
   "set_last_repo_path",

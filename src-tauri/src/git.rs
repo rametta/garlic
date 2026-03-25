@@ -584,9 +584,41 @@ pub fn get_unstaged_diff(path: String, file_path: String) -> Result<String, Stri
     let out = git_output(&path_buf, &["diff", "-U1", "--", rel]);
     match out {
         Ok(ref s) if !s.trim().is_empty() => out,
-        Ok(_) => git_output(&path_buf, &["diff", "-U1", "--no-index", "--", "/dev/null", rel]),
+        Ok(_) =>     git_output(&path_buf, &["diff", "-U1", "--no-index", "--", "/dev/null", rel]),
         Err(e) => Err(e),
     }
+}
+
+/// Paths changed in a single commit (`git diff-tree --name-only`).
+#[tauri::command]
+pub fn list_commit_files(path: String, commit_hash: String) -> Result<Vec<String>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let hash = commit_hash.trim();
+    if hash.is_empty() {
+        return Err("Commit hash cannot be empty.".to_string());
+    }
+    let out = git_output(
+        &path_buf,
+        &["diff-tree", "--no-commit-id", "--name-only", "-r", hash],
+    )?;
+    Ok(non_empty_lines(&out))
+}
+
+/// Unified diff for one file in a given commit (`git show <hash> -- <path>`).
+#[tauri::command]
+pub fn get_commit_file_diff(path: String, commit_hash: String, file_path: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let hash = commit_hash.trim();
+    let rel = file_path.trim();
+    if hash.is_empty() {
+        return Err("Commit hash cannot be empty.".to_string());
+    }
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["show", "-U1", hash, "--", rel])
 }
 
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).

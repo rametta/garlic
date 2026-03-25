@@ -156,6 +156,14 @@ export default function App({
   const [diffUnstagedText, setDiffUnstagedText] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const [commitBrowseHash, setCommitBrowseHash] = useState<string | null>(null);
+  const [commitBrowseFiles, setCommitBrowseFiles] = useState<string[]>([]);
+  const [commitBrowseLoading, setCommitBrowseLoading] = useState(false);
+  const [commitBrowseError, setCommitBrowseError] = useState<string | null>(null);
+  const [commitDiffPath, setCommitDiffPath] = useState<string | null>(null);
+  const [commitDiffText, setCommitDiffText] = useState<string | null>(null);
+  const [commitDiffLoading, setCommitDiffLoading] = useState(false);
+  const [commitDiffError, setCommitDiffError] = useState<string | null>(null);
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
@@ -182,10 +190,22 @@ export default function App({
     }
   }, []);
 
+  const clearCommitBrowse = useCallback(() => {
+    setCommitBrowseHash(null);
+    setCommitBrowseFiles([]);
+    setCommitBrowseLoading(false);
+    setCommitBrowseError(null);
+    setCommitDiffPath(null);
+    setCommitDiffText(null);
+    setCommitDiffLoading(false);
+    setCommitDiffError(null);
+  }, []);
+
   const loadDiffForFile = useCallback(
     async (f: WorkingTreeFile) => {
       if (!repo?.path || repo.error) return;
       if (!f.staged && !f.unstaged) return;
+      clearCommitBrowse();
       setSelectedDiffPath(f.path);
       setDiffLoading(true);
       setDiffError(null);
@@ -208,8 +228,67 @@ export default function App({
         setDiffLoading(false);
       }
     },
+    [repo, clearCommitBrowse],
+  );
+
+  const selectCommit = useCallback(
+    async (hash: string) => {
+      if (!repo?.path || repo.error) return;
+      setSelectedDiffPath(null);
+      setDiffStagedText(null);
+      setDiffUnstagedText(null);
+      setDiffError(null);
+      setCommitBrowseHash(hash);
+      setCommitBrowseFiles([]);
+      setCommitDiffPath(null);
+      setCommitDiffText(null);
+      setCommitDiffError(null);
+      setCommitBrowseLoading(true);
+      setCommitBrowseError(null);
+      try {
+        const files = await invoke<string[]>("list_commit_files", {
+          path: repo.path,
+          commitHash: hash,
+        });
+        setCommitBrowseFiles(files);
+      } catch (e) {
+        setCommitBrowseError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setCommitBrowseLoading(false);
+      }
+    },
     [repo],
   );
+
+  const loadCommitFileDiff = useCallback(
+    async (filePath: string, commitHash: string) => {
+      if (!repo?.path || repo.error || !commitHash.trim()) return;
+      setCommitDiffPath(filePath);
+      setCommitDiffLoading(true);
+      setCommitDiffError(null);
+      setCommitDiffText(null);
+      try {
+        const text = await invoke<string>("get_commit_file_diff", {
+          path: repo.path,
+          commitHash,
+          filePath,
+        });
+        setCommitDiffText(text);
+      } catch (e) {
+        setCommitDiffError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setCommitDiffLoading(false);
+      }
+    },
+    [repo],
+  );
+
+  const backFromCommitFileDiff = useCallback(() => {
+    setCommitDiffPath(null);
+    setCommitDiffText(null);
+    setCommitDiffError(null);
+    setCommitDiffLoading(false);
+  }, []);
 
   const clearDiffSelection = useCallback(() => {
     setSelectedDiffPath(null);
@@ -223,6 +302,7 @@ export default function App({
     async (selected: string) => {
       setLoading(true);
       setLoadError(null);
+      clearCommitBrowse();
       setSelectedDiffPath(null);
       setDiffStagedText(null);
       setDiffUnstagedText(null);
@@ -253,7 +333,7 @@ export default function App({
         setLoading(false);
       }
     },
-    [refreshLists],
+    [refreshLists, clearCommitBrowse],
   );
 
   const refreshAfterMutation = useCallback(async () => {
@@ -478,6 +558,9 @@ export default function App({
     !stageCommitBusy &&
     !pushBusy;
 
+  const showExpandedDiff =
+    Boolean(selectedDiffPath || commitDiffPath) && !listsError && Boolean(repo && !repo.error);
+
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
       <div
@@ -657,17 +740,17 @@ export default function App({
 
         <div
           className={`col-span-12 flex min-w-0 flex-col gap-4 lg:col-span-6 ${
-            selectedDiffPath && !listsError ? "min-h-0 min-w-0 lg:flex lg:h-full lg:flex-col" : ""
+            showExpandedDiff ? "min-h-0 min-w-0 lg:flex lg:h-full lg:flex-col" : ""
           }`}
         >
           <section
             className={`card w-full min-w-0 border-base-300 bg-base-100 shadow-md ${
-              selectedDiffPath && !listsError ? "flex min-h-0 min-w-0 flex-1 flex-col" : ""
+              showExpandedDiff ? "flex min-h-0 min-w-0 flex-1 flex-col" : ""
             }`}
           >
             <div
               className={`card-body px-6 py-5 ${
-                selectedDiffPath && !listsError ? "flex min-h-0 min-w-0 flex-1 flex-col gap-0" : ""
+                showExpandedDiff ? "flex min-h-0 min-w-0 flex-1 flex-col gap-0" : ""
               }`}
             >
               {loading ? (
@@ -757,6 +840,102 @@ export default function App({
                             )}
                           </div>
                         </div>
+                      ) : !listsError && commitDiffPath && commitBrowseHash ? (
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                            <div className="min-w-0">
+                              <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                                Commit diff
+                              </h2>
+                              <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
+                                {commitDiffPath}
+                              </code>
+                              <p className="mt-1 mb-0 font-mono text-[0.65rem] text-base-content/60">
+                                {commits.find((x) => x.hash === commitBrowseHash)?.shortHash ??
+                                  commitBrowseHash.slice(0, 7)}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn shrink-0 btn-ghost btn-sm"
+                              onClick={backFromCommitFileDiff}
+                            >
+                              Back to files
+                            </button>
+                          </div>
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                            {commitDiffLoading ? (
+                              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                <span className="loading loading-md loading-spinner text-primary" />
+                                <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
+                              </div>
+                            ) : commitDiffError ? (
+                              <div role="alert" className="alert text-sm alert-error">
+                                <span className="wrap-break-word">{commitDiffError}</span>
+                              </div>
+                            ) : (
+                              <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
+                                <UnifiedDiff
+                                  text={commitDiffText ?? ""}
+                                  emptyLabel="(no diff for this file)"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : !listsError && commitBrowseHash ? (
+                        <div className="mb-6 flex min-h-0 min-w-0 flex-col gap-3">
+                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-2">
+                            <div className="min-w-0">
+                              <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                                Files in commit
+                              </h2>
+                              <p className="mt-1 mb-0 font-mono text-[0.65rem] text-base-content/70">
+                                {commits.find((x) => x.hash === commitBrowseHash)?.subject ??
+                                  commitBrowseHash.slice(0, 7)}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn shrink-0 btn-ghost btn-sm"
+                              onClick={clearCommitBrowse}
+                            >
+                              Back to commits
+                            </button>
+                          </div>
+                          {commitBrowseLoading ? (
+                            <div className="flex flex-col items-center justify-center gap-3 py-12">
+                              <span className="loading loading-md loading-spinner text-primary" />
+                              <p className="m-0 text-sm text-base-content/70">Loading files…</p>
+                            </div>
+                          ) : commitBrowseError ? (
+                            <div role="alert" className="alert text-sm alert-error">
+                              <span className="wrap-break-word">{commitBrowseError}</span>
+                            </div>
+                          ) : commitBrowseFiles.length === 0 ? (
+                            <p className="m-0 text-center text-sm text-base-content/60">
+                              No files changed in this commit
+                            </p>
+                          ) : (
+                            <ul className="m-0 max-h-[min(52vh,28rem)] list-none space-y-1 overflow-y-auto p-0">
+                              {commitBrowseFiles.map((fp) => (
+                                <li key={fp}>
+                                  <button
+                                    type="button"
+                                    className="w-full rounded-md border border-base-300 bg-base-200 px-2 py-2 text-left transition-colors hover:bg-base-300/50"
+                                    onClick={() =>
+                                      void loadCommitFileDiff(fp, commitBrowseHash ?? "")
+                                    }
+                                  >
+                                    <code className="font-mono text-[0.75rem] wrap-break-word text-base-content">
+                                      {fp}
+                                    </code>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
                       ) : (
                         <div className="mb-6">
                           <h2 className="m-0 mb-3 border-b border-base-300 pb-2 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
@@ -768,30 +947,40 @@ export default function App({
                             </p>
                           ) : (
                             <ol className="m-0 list-none space-y-2 p-0">
-                              {commits.map((c) => (
-                                <li
-                                  key={c.hash}
-                                  className="rounded-box border border-base-300 bg-base-200 px-3 py-2"
-                                >
-                                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                                    <code className="shrink-0 font-mono text-[0.75rem] text-base-content/80">
-                                      {c.shortHash}
-                                    </code>
-                                    <span className="min-w-0 flex-1 font-medium text-base-content">
-                                      {c.subject}
-                                    </span>
-                                  </div>
-                                  <p className="mt-1 mb-0 text-xs text-base-content/70">
-                                    {c.author}
-                                    {formatDate(c.date) ? (
-                                      <span className="text-base-content/50">
-                                        {" "}
-                                        · {formatDate(c.date)}
-                                      </span>
-                                    ) : null}
-                                  </p>
-                                </li>
-                              ))}
+                              {commits.map((c) => {
+                                const isBrowsing = commitBrowseHash === c.hash;
+                                return (
+                                  <li key={c.hash}>
+                                    <button
+                                      type="button"
+                                      className={`w-full rounded-box border px-3 py-2 text-left transition-colors ${
+                                        isBrowsing
+                                          ? "border-primary bg-base-200 ring-1 ring-primary/40"
+                                          : "border-base-300 bg-base-200 hover:bg-base-300/40"
+                                      }`}
+                                      onClick={() => void selectCommit(c.hash)}
+                                    >
+                                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                                        <code className="shrink-0 font-mono text-[0.75rem] text-base-content/80">
+                                          {c.shortHash}
+                                        </code>
+                                        <span className="min-w-0 flex-1 font-medium text-base-content">
+                                          {c.subject}
+                                        </span>
+                                      </div>
+                                      <p className="mt-1 mb-0 text-xs text-base-content/70">
+                                        {c.author}
+                                        {formatDate(c.date) ? (
+                                          <span className="text-base-content/50">
+                                            {" "}
+                                            · {formatDate(c.date)}
+                                          </span>
+                                        ) : null}
+                                      </p>
+                                    </button>
+                                  </li>
+                                );
+                              })}
                             </ol>
                           )}
                         </div>
