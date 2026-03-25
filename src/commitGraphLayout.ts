@@ -95,7 +95,7 @@ function buildMainlineHashes(
  * Assign a lane index to each commit from the DAG only (forks open new columns to the right;
  * merges connect lanes; first parent is the mainline through a merge).
  *
- * `commits` must be topo-ordered newest-first (row 0 = newest).
+ * `commits` must be git-log–ordered newest-first (e.g. `--date-order`; row 0 = newest).
  * `mainlineHashes`: commits on the first-parent path from the chosen trunk tip (`main`), so that
  * path keeps lane 0 instead of the oldest sibling at each fork.
  */

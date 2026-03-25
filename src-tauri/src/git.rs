@@ -505,9 +505,15 @@ fn parse_commit_log_lines(out: &str) -> Vec<CommitEntry> {
         let author_email = parts.next().map(String::from);
         let date = parts.next().map(String::from);
         let subject = parts.next().map(String::from);
-        if let (Some(h), Some(pr), Some(sh), Some(auth), Some(ae), Some(dt), Some(sub)) =
-            (hash, parents_raw, short_hash, author, author_email, date, subject)
-        {
+        if let (Some(h), Some(pr), Some(sh), Some(auth), Some(ae), Some(dt), Some(sub)) = (
+            hash,
+            parents_raw,
+            short_hash,
+            author,
+            author_email,
+            date,
+            subject,
+        ) {
             let parent_hashes: Vec<String> = pr
                 .split_whitespace()
                 .map(String::from)
@@ -527,7 +533,7 @@ fn parse_commit_log_lines(out: &str) -> Vec<CommitEntry> {
     commits
 }
 
-/// Commits reachable from any local branch (`--branches`), topological order, newest first.
+/// Commits reachable from any local branch (`--branches`), commit-date order, newest first.
 #[tauri::command]
 pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
     let path_buf = PathBuf::from(&path);
@@ -537,7 +543,7 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
         &[
             "log",
             "--branches",
-            "--topo-order",
+            "--date-order",
             "-n",
             "500",
             // Avoid `%G?` here: signature verification can block repo loading.
@@ -548,7 +554,7 @@ pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
     Ok(parse_commit_log_lines(&out))
 }
 
-/// Commits reachable from the given refs (branch names like `main` or `origin/main`), topo order, newest first.
+/// Commits reachable from the given refs (branch names like `main` or `origin/main`), commit-date order, newest first.
 #[tauri::command]
 pub fn list_graph_commits(path: String, refs: Vec<String>) -> Result<Vec<CommitEntry>, String> {
     let path_buf = PathBuf::from(&path);
@@ -565,7 +571,7 @@ pub fn list_graph_commits(path: String, refs: Vec<String>) -> Result<Vec<CommitE
     }
     let mut cmd_args: Vec<String> = vec![
         "log".into(),
-        "--topo-order".into(),
+        "--date-order".into(),
         "-n".into(),
         "500".into(),
         "--format=%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s".into(),
