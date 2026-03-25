@@ -2081,8 +2081,15 @@ export default function App({
                         </div>
                       ) : !listsError && commitDiffPath && commitBrowseHash ? (
                         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-                          <div className="flex shrink-0 flex-wrap items-end justify-between gap-2 border-b border-base-300 pb-1.5">
-                            <div className="min-w-0">
+                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-1.5">
+                            <button
+                              type="button"
+                              className="btn shrink-0 btn-xs btn-primary"
+                              onClick={backFromCommitFileDiff}
+                            >
+                              Back to files
+                            </button>
+                            <div className="min-w-0 flex-1 text-right">
                               <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                 Commit diff
                               </h2>
@@ -2094,13 +2101,6 @@ export default function App({
                                   commitBrowseHash.slice(0, 7)}
                               </p>
                             </div>
-                            <button
-                              type="button"
-                              className="btn shrink-0 btn-ghost btn-xs"
-                              onClick={backFromCommitFileDiff}
-                            >
-                              Back to files
-                            </button>
                           </div>
                           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                             {commitDiffLoading ? (
