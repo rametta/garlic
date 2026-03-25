@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { resolveThemePreference } from "./theme";
 
 interface RemoteEntry {
   name: string;
@@ -126,7 +127,15 @@ function BranchPanel({
   );
 }
 
-export default function App({ startup }: { startup: RestoreLastRepo }) {
+export default function App({
+  startup,
+  themePreference: initialThemePreference,
+}: {
+  startup: RestoreLastRepo;
+  /** Persisted value: `auto` or a DaisyUI theme name. */
+  themePreference: string;
+}) {
+  const [themePreference, setThemePreference] = useState(initialThemePreference);
   const [repo, setRepo] = useState<RepoMetadata | null>(() => startup.metadata ?? null);
   const [loadError, setLoadError] = useState<string | null>(() => startup.loadError ?? null);
   const [loading, setLoading] = useState(false);
@@ -227,7 +236,9 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
         })();
       }),
       listen<{ theme: string }>("theme-changed", (e) => {
-        document.documentElement.setAttribute("data-theme", e.payload.theme);
+        const pref = e.payload.theme;
+        setThemePreference(pref);
+        document.documentElement.setAttribute("data-theme", resolveThemePreference(pref));
       }),
       listen("window-focused", () => {
         void refreshAfterMutation();
@@ -242,6 +253,19 @@ export default function App({ startup }: { startup: RestoreLastRepo }) {
       });
     };
   }, [loadRepo, refreshAfterMutation]);
+
+  useEffect(() => {
+    if (themePreference !== "auto") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      document.documentElement.setAttribute("data-theme", mq.matches ? "dark" : "light");
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => {
+      mq.removeEventListener("change", apply);
+    };
+  }, [themePreference]);
 
   async function onCheckoutLocal(branch: string) {
     if (!repo?.path || repo.error) return;

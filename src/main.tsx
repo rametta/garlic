@@ -3,6 +3,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App, { type RestoreLastRepo } from "./App";
 import "./index.css";
+import { resolveThemePreference } from "./theme";
 
 export interface AppBootstrap {
   repo: RestoreLastRepo;
@@ -30,11 +31,11 @@ async function bootstrap() {
     console.warn("Could not load 'restore_app_bootstrap'");
   }
 
-  document.documentElement.setAttribute("data-theme", data.theme ?? "light");
+  document.documentElement.setAttribute("data-theme", resolveThemePreference(data.theme));
 
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-      <App startup={data.repo} />
+      <App startup={data.repo} themePreference={data.theme ?? "light"} />
     </React.StrictMode>,
   );
 }

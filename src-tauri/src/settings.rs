@@ -5,7 +5,7 @@ use std::fs;
 use tauri::AppHandle;
 use tauri::Manager;
 
-/// DaisyUI theme names — keep in sync with `DAISY_THEMES` in `src/App.tsx`.
+/// DaisyUI theme names (excluding `auto`, handled in the frontend).
 pub const DAISY_THEMES: &[&str] = &[
     "light",
     "dark",
@@ -24,18 +24,22 @@ pub const DAISY_THEMES: &[&str] = &[
     "sunset",
 ];
 
-fn resolve_persisted_theme(theme: &Option<String>) -> String {
+fn is_valid_theme_preference(t: &str) -> bool {
+    t == "auto" || DAISY_THEMES.contains(&t)
+}
+
+fn resolve_persisted_theme_preference(theme: &Option<String>) -> String {
     const DEFAULT: &str = "light";
     match theme {
-        Some(t) if DAISY_THEMES.contains(&t.as_str()) => t.clone(),
+        Some(t) if is_valid_theme_preference(t) => t.clone(),
         _ => DEFAULT.to_string(),
     }
 }
 
-/// Current theme for native menus (matches `resolveDaisyTheme` in the frontend).
-pub fn persisted_theme(app: &AppHandle) -> String {
+/// Stored theme preference for native menus (`auto` or a DaisyUI theme name).
+pub fn persisted_theme_preference(app: &AppHandle) -> String {
     let s = load_settings(app).unwrap_or_default();
-    resolve_persisted_theme(&s.theme)
+    resolve_persisted_theme_preference(&s.theme)
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -177,9 +181,12 @@ pub fn set_last_repo_path(app: AppHandle, path: Option<String>) -> Result<(), St
     save_settings(&app, &s)
 }
 
-/// Persists the DaisyUI `data-theme` name (e.g. `light`, `dark`).
+/// Persists theme preference: `auto` (follow OS light/dark) or a DaisyUI `data-theme` name.
 #[tauri::command]
 pub fn set_theme(app: AppHandle, theme: String) -> Result<(), String> {
+    if !is_valid_theme_preference(&theme) {
+        return Err(format!("Invalid theme: {theme}"));
+    }
     let mut s = load_settings(&app)?;
     s.theme = Some(theme);
     save_settings(&app, &s)

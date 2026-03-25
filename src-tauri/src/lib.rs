@@ -61,8 +61,17 @@ pub fn run() {
             let repo_metadata = MenuItem::with_id(app, "repo_metadata", "Repo Metadata", true, None::<&str>)?;
             let repo_menu = Submenu::with_items(app, "Repository", true, &[&repo_metadata])?;
 
-            let current = settings::persisted_theme(&app.handle());
+            let current = settings::persisted_theme_preference(&app.handle());
             let mut checks = Vec::new();
+            let auto_item = CheckMenuItem::with_id(
+                app,
+                "theme_auto",
+                "Auto",
+                true,
+                current == "auto",
+                None::<&str>,
+            )?;
+            checks.push(auto_item);
             for name in settings::DAISY_THEMES {
                 let id = format!("theme_{name}");
                 let checked = *name == current.as_str();
@@ -134,8 +143,11 @@ pub fn run() {
                 return;
             }
             if let Some(state) = app.try_state::<ThemeMenuState>() {
+                if let Some(auto_check) = state.checks.first() {
+                    let _ = auto_check.set_checked(theme == "auto");
+                }
                 for (i, name) in settings::DAISY_THEMES.iter().enumerate() {
-                    if let Some(check) = state.checks.get(i) {
+                    if let Some(check) = state.checks.get(i + 1) {
                         let _ = check.set_checked(*name == theme);
                     }
                 }
