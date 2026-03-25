@@ -93,6 +93,11 @@ interface CommitEntry {
   parentHashes: string[];
 }
 
+interface GraphCommitsPage {
+  commits: CommitEntry[];
+  hasMore: boolean;
+}
+
 /** From `get_commit_signature_status` (`git log -1 --format=%G?`). */
 interface CommitSignatureStatus {
   verified: boolean | null;
@@ -146,6 +151,7 @@ export interface RestoreLastRepo {
   localBranches: LocalBranchEntry[];
   remoteBranches: RemoteBranchEntry[];
   commits: CommitEntry[];
+  graphCommitsHasMore: boolean;
   workingTreeFiles: WorkingTreeFile[];
   listsError: string | null;
 }
@@ -831,6 +837,8 @@ export default function App({
     () => startup.remoteBranches,
   );
   const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
+  const [graphCommitsHasMore, setGraphCommitsHasMore] = useState(() => startup.graphCommitsHasMore);
+  const [loadingMoreGraphCommits, setLoadingMoreGraphCommits] = useState(false);
   /** `local:name` / `remote:name` → visible in commit graph (default true when key missing). */
   const [graphBranchVisible, setGraphBranchVisible] = useState<Record<string, boolean>>({});
   const [workingTreeFiles, setWorkingTreeFiles] = useState<WorkingTreeFile[]>(
@@ -959,12 +967,14 @@ export default function App({
     let cancelled = false;
     void (async () => {
       try {
-        const log = await invoke<CommitEntry[]>("list_graph_commits", {
+        const page = await invoke<GraphCommitsPage>("list_graph_commits", {
           path: repo.path,
           refs: graphRefs,
+          skip: 0,
         });
         if (!cancelled) {
-          setCommits(log);
+          setCommits(page.commits);
+          setGraphCommitsHasMore(page.hasMore);
           setListsError(null);
         }
       } catch (e) {
@@ -975,6 +985,31 @@ export default function App({
       cancelled = true;
     };
   }, [repo?.path, repo?.error, graphRefsKey, graphRefs]);
+
+  const loadMoreGraphCommits = useCallback(async () => {
+    if (!repo?.path || repo.error || !graphCommitsHasMore || loadingMoreGraphCommits) return;
+    setLoadingMoreGraphCommits(true);
+    try {
+      const page = await invoke<GraphCommitsPage>("list_graph_commits", {
+        path: repo.path,
+        refs: graphRefs,
+        skip: commits.length,
+      });
+      setCommits((prev) => [...prev, ...page.commits]);
+      setGraphCommitsHasMore(page.hasMore);
+    } catch (e) {
+      setListsError(invokeErrorMessage(e));
+    } finally {
+      setLoadingMoreGraphCommits(false);
+    }
+  }, [
+    repo?.path,
+    repo?.error,
+    graphCommitsHasMore,
+    loadingMoreGraphCommits,
+    graphRefs,
+    commits.length,
+  ]);
 
   const branchGraphControls: BranchGraphControls = useMemo(
     () => ({
@@ -1196,6 +1231,7 @@ export default function App({
           setLocalBranches([]);
           setRemoteBranches([]);
           setCommits([]);
+          setGraphCommitsHasMore(false);
           setWorkingTreeFiles([]);
         }
       } catch (e) {
@@ -1203,6 +1239,7 @@ export default function App({
         setLocalBranches([]);
         setRemoteBranches([]);
         setCommits([]);
+        setGraphCommitsHasMore(false);
         setWorkingTreeFiles([]);
         setLoadError(invokeErrorMessage(e));
         void invoke("reset_main_window_title").catch(() => {});
@@ -2216,6 +2253,25 @@ export default function App({
                                   />
                                 </div>
                               </div>
+                              {graphCommitsHasMore ? (
+                                <div className="mt-2 flex justify-center border-t border-base-300/50 pt-2">
+                                  <button
+                                    type="button"
+                                    className="btn btn-outline btn-sm"
+                                    disabled={loadingMoreGraphCommits}
+                                    onClick={() => void loadMoreGraphCommits()}
+                                  >
+                                    {loadingMoreGraphCommits ? (
+                                      <>
+                                        <span className="loading loading-xs loading-spinner" />
+                                        Loading…
+                                      </>
+                                    ) : (
+                                      "Load more commits"
+                                    )}
+                                  </button>
+                                </div>
+                              ) : null}
                             </>
                           )}
                         </div>

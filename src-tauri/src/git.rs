@@ -26,6 +26,17 @@ pub struct CommitEntry {
     pub parent_hashes: Vec<String>,
 }
 
+/// One page from `list_graph_commits` / `list_branch_commits`. `has_more` is true when Git returned a full page (there may be older commits).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphCommitsPage {
+    pub commits: Vec<CommitEntry>,
+    pub has_more: bool,
+}
+
+/// `git log -n` cap per request. We fetch one extra row to know whether another page exists.
+const GRAPH_COMMITS_PAGE_SIZE: usize = 500;
+
 /// Result of `git log -1 --format=%G?` for one commit (on-demand; not used in bulk log).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -533,30 +544,43 @@ fn parse_commit_log_lines(out: &str) -> Vec<CommitEntry> {
     commits
 }
 
+fn trim_graph_commits_page(mut commits: Vec<CommitEntry>) -> GraphCommitsPage {
+    let has_more = commits.len() > GRAPH_COMMITS_PAGE_SIZE;
+    if has_more {
+        commits.truncate(GRAPH_COMMITS_PAGE_SIZE);
+    }
+    GraphCommitsPage { commits, has_more }
+}
+
 /// Commits reachable from any local branch (`--branches`), commit-date order, newest first.
 #[tauri::command]
-pub fn list_branch_commits(path: String) -> Result<Vec<CommitEntry>, String> {
+pub fn list_branch_commits(path: String) -> Result<GraphCommitsPage, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
+    let fetch_n = (GRAPH_COMMITS_PAGE_SIZE + 1).to_string();
     let out = git_output(
         &path_buf,
         &[
             "log",
             "--branches",
             "--date-order",
+            "--skip",
+            "0",
             "-n",
-            "500",
+            fetch_n.as_str(),
             // Avoid `%G?` here: signature verification can block repo loading.
             // %P: space-separated parents; %x1f: subject last so it can contain delimiters.
             "--format=%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s",
         ],
     )?;
-    Ok(parse_commit_log_lines(&out))
+    let commits = parse_commit_log_lines(&out);
+    Ok(trim_graph_commits_page(commits))
 }
 
 /// Commits reachable from the given refs (branch names like `main` or `origin/main`), commit-date order, newest first.
+/// Use `skip` 0 for the first page, then `skip` = loaded count for "load more".
 #[tauri::command]
-pub fn list_graph_commits(path: String, refs: Vec<String>) -> Result<Vec<CommitEntry>, String> {
+pub fn list_graph_commits(path: String, refs: Vec<String>, skip: u32) -> Result<GraphCommitsPage, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let mut clean: Vec<String> = refs
@@ -567,19 +591,27 @@ pub fn list_graph_commits(path: String, refs: Vec<String>) -> Result<Vec<CommitE
     clean.sort();
     clean.dedup();
     if clean.is_empty() {
-        return Ok(Vec::new());
+        return Ok(GraphCommitsPage {
+            commits: Vec::new(),
+            has_more: false,
+        });
     }
+    let fetch_n = (GRAPH_COMMITS_PAGE_SIZE + 1).to_string();
+    let skip_s = skip.to_string();
     let mut cmd_args: Vec<String> = vec![
         "log".into(),
         "--date-order".into(),
+        "--skip".into(),
+        skip_s,
         "-n".into(),
-        "500".into(),
+        fetch_n,
         "--format=%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s".into(),
     ];
     cmd_args.extend(clean);
     let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
     let out = git_output(&path_buf, &args_ref)?;
-    Ok(parse_commit_log_lines(&out))
+    let commits = parse_commit_log_lines(&out);
+    Ok(trim_graph_commits_page(commits))
 }
 
 #[tauri::command]

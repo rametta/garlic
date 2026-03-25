@@ -96,6 +96,8 @@ pub struct RestoreLastRepo {
     pub local_branches: Vec<git::LocalBranchEntry>,
     pub remote_branches: Vec<git::RemoteBranchEntry>,
     pub commits: Vec<git::CommitEntry>,
+    /// True when the graph log has more commits than returned in `commits` (first page only).
+    pub graph_commits_has_more: bool,
     pub working_tree_files: Vec<git::WorkingTreeFile>,
     pub lists_error: Option<String>,
 }
@@ -108,6 +110,7 @@ impl RestoreLastRepo {
             local_branches: Vec::new(),
             remote_branches: Vec::new(),
             commits: Vec::new(),
+            graph_commits_has_more: false,
             working_tree_files: Vec::new(),
             lists_error: None,
         }
@@ -134,13 +137,13 @@ fn restore_repo_snapshot(
 
             let locals = git::list_local_branches(path.clone());
             let remotes = git::list_remote_branches(path.clone());
-            let commits = match (&locals, &remotes) {
+            let commits_page = match (&locals, &remotes) {
                 (Ok(loc), Ok(rem)) => {
                     let mut refs: Vec<String> = loc.iter().map(|b| b.name.clone()).collect();
                     refs.extend(rem.iter().map(|r| r.name.clone()));
                     refs.sort();
                     refs.dedup();
-                    git::list_graph_commits(path.clone(), refs)
+                    git::list_graph_commits(path.clone(), refs, 0)
                 }
                 _ => git::list_branch_commits(path.clone()),
             };
@@ -151,15 +154,21 @@ fn restore_repo_snapshot(
                 .err()
                 .cloned()
                 .or(remotes.as_ref().err().cloned())
-                .or(commits.as_ref().err().cloned())
+                .or(commits_page.as_ref().err().cloned())
                 .or(working_tree.as_ref().err().cloned());
+
+            let (commits, graph_commits_has_more) = match commits_page {
+                Ok(p) => (p.commits, p.has_more),
+                Err(_) => (Vec::new(), false),
+            };
 
             Ok(RestoreLastRepo {
                 load_error: None,
                 metadata: Some(meta),
                 local_branches: locals.unwrap_or_default(),
                 remote_branches: remotes.unwrap_or_default(),
-                commits: commits.unwrap_or_default(),
+                commits,
+                graph_commits_has_more,
                 working_tree_files: working_tree.unwrap_or_default(),
                 lists_error,
             })
