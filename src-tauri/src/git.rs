@@ -569,7 +569,7 @@ pub fn get_staged_diff(path: String, file_path: String) -> Result<String, String
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
     }
-    git_output(&path_buf, &["diff", "--cached", "--", rel])
+    git_output(&path_buf, &["diff", "--cached", "-U1", "--", rel])
 }
 
 /// Unstaged diff for a path (`git diff -- <path>`), or full file vs empty for untracked paths.
@@ -581,10 +581,10 @@ pub fn get_unstaged_diff(path: String, file_path: String) -> Result<String, Stri
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
     }
-    let out = git_output(&path_buf, &["diff", "--", rel]);
+    let out = git_output(&path_buf, &["diff", "-U1", "--", rel]);
     match out {
         Ok(ref s) if !s.trim().is_empty() => out,
-        Ok(_) => git_output(&path_buf, &["diff", "--no-index", "--", "/dev/null", rel]),
+        Ok(_) => git_output(&path_buf, &["diff", "-U1", "--no-index", "--", "/dev/null", rel]),
         Err(e) => Err(e),
     }
 }

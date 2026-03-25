@@ -2,3 +2,62 @@
 @plugin "daisyui" {
   themes: all;
 }
+
+/* react-diff-view: theme-aware green / red line tints (DaisyUI success / error) */
+.unified-diff-panel {
+  --diff-background-color: transparent;
+  --diff-text-color: color-mix(in oklab, var(--color-base-content) 92%, transparent);
+  --diff-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --diff-selection-background-color: color-mix(in oklab, var(--color-primary) 35%, transparent);
+  --diff-gutter-insert-background-color: color-mix(in oklab, var(--color-success) 30%, transparent);
+  --diff-gutter-delete-background-color: color-mix(in oklab, var(--color-error) 28%, transparent);
+  --diff-gutter-selected-background-color: color-mix(
+    in oklab,
+    var(--color-warning) 25%,
+    transparent
+  );
+  --diff-code-insert-background-color: color-mix(in oklab, var(--color-success) 22%, transparent);
+  --diff-code-delete-background-color: color-mix(in oklab, var(--color-error) 22%, transparent);
+  --diff-code-insert-edit-background-color: color-mix(
+    in oklab,
+    var(--color-success) 42%,
+    transparent
+  );
+  --diff-code-delete-edit-background-color: color-mix(
+    in oklab,
+    var(--color-error) 40%,
+    transparent
+  );
+  --diff-code-selected-background-color: color-mix(in oklab, var(--color-warning) 22%, transparent);
+  --diff-omit-gutter-line-color: var(--color-primary);
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Custom grid diff (no <table>): line numbers + single code column using 1fr */
+.unified-diff-grid .diff-gutter {
+  cursor: default;
+  padding-block: 0;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.unified-diff-grid .diff-gutter-insert {
+  background-color: var(--diff-gutter-insert-background-color);
+}
+
+.unified-diff-grid .diff-gutter-delete {
+  background-color: var(--diff-gutter-delete-background-color);
+}
+
+.unified-diff-grid .diff-code-insert {
+  background-color: var(--diff-code-insert-background-color);
+}
+
+.unified-diff-grid .diff-code-delete {
+  background-color: var(--diff-code-delete-background-color);
+}
+
+.unified-diff-grid .diff-code-normal {
+  background-color: color-mix(in oklab, var(--color-base-content) 4%, transparent);
+}

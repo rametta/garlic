@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { UnifiedDiff } from "./components/UnifiedDiff";
 import { resolveThemePreference } from "./theme";
 
 interface RemoteEntry {
@@ -480,11 +481,11 @@ export default function App({
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
       <div
-        className="grid min-h-0 flex-1 grid-cols-12 gap-4 lg:min-h-[calc(100vh-5rem)] lg:items-stretch"
+        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 gap-4 lg:min-h-[calc(100vh-5rem)] lg:items-stretch"
         aria-live="polite"
         aria-busy={loading}
       >
-        <aside className="col-span-12 flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3">
+        <aside className="col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3">
           <dialog
             ref={createBranchDialogRef}
             className="modal"
@@ -656,17 +657,17 @@ export default function App({
 
         <div
           className={`col-span-12 flex min-w-0 flex-col gap-4 lg:col-span-6 ${
-            selectedDiffPath && !listsError ? "min-h-0 lg:flex lg:h-full lg:flex-col" : ""
+            selectedDiffPath && !listsError ? "min-h-0 min-w-0 lg:flex lg:h-full lg:flex-col" : ""
           }`}
         >
           <section
-            className={`card border-base-300 bg-base-100 shadow-md ${
-              selectedDiffPath && !listsError ? "flex min-h-0 flex-1 flex-col" : ""
+            className={`card w-full min-w-0 border-base-300 bg-base-100 shadow-md ${
+              selectedDiffPath && !listsError ? "flex min-h-0 min-w-0 flex-1 flex-col" : ""
             }`}
           >
             <div
               className={`card-body px-6 py-5 ${
-                selectedDiffPath && !listsError ? "flex min-h-0 flex-1 flex-col gap-0" : ""
+                selectedDiffPath && !listsError ? "flex min-h-0 min-w-0 flex-1 flex-col gap-0" : ""
               }`}
             >
               {loading ? (
@@ -700,7 +701,7 @@ export default function App({
                       ) : null}
 
                       {!listsError && selectedDiffPath ? (
-                        <div className="flex min-h-0 flex-1 flex-col gap-3">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
                           <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
                             <div className="min-w-0">
                               <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
@@ -718,7 +719,7 @@ export default function App({
                               Back to commits
                             </button>
                           </div>
-                          <div className="flex min-h-0 flex-1 flex-col">
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                             {diffLoading ? (
                               <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
                                 <span className="loading loading-md loading-spinner text-primary" />
@@ -729,33 +730,27 @@ export default function App({
                                 <span className="wrap-break-word">{diffError}</span>
                               </div>
                             ) : (
-                              <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
+                              <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
                                 {diffStagedText !== null ? (
                                   <div className="mb-8 last:mb-0">
-                                    <p className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                    <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
                                       Staged
-                                    </p>
-                                    <pre className="m-0 font-mono text-[0.8125rem] leading-relaxed wrap-break-word whitespace-pre-wrap text-base-content">
-                                      {diffStagedText || (
-                                        <span className="text-base-content/50">
-                                          (no staged diff)
-                                        </span>
-                                      )}
-                                    </pre>
+                                    </div>
+                                    <UnifiedDiff
+                                      text={diffStagedText}
+                                      emptyLabel="(no staged diff)"
+                                    />
                                   </div>
                                 ) : null}
                                 {diffUnstagedText !== null ? (
                                   <div>
-                                    <p className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                    <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
                                       Unstaged
-                                    </p>
-                                    <pre className="m-0 font-mono text-[0.8125rem] leading-relaxed wrap-break-word whitespace-pre-wrap text-base-content">
-                                      {diffUnstagedText || (
-                                        <span className="text-base-content/50">
-                                          (no unstaged diff)
-                                        </span>
-                                      )}
-                                    </pre>
+                                    </div>
+                                    <UnifiedDiff
+                                      text={diffUnstagedText}
+                                      emptyLabel="(no unstaged diff)"
+                                    />
                                   </div>
                                 ) : null}
                               </div>
@@ -813,7 +808,7 @@ export default function App({
           </section>
         </div>
 
-        <aside className="col-span-12 flex min-h-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3">
+        <aside className="col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3">
           <div className="card border-base-300 bg-base-100 shadow-sm">
             <div className="card-body min-h-0 gap-0 p-0">
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-3 py-2">
