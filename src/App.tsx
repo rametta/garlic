@@ -1541,7 +1541,7 @@ export default function App({
     setStashBusy(`pop:${stashRef}`);
     setOperationError(null);
     try {
-      await invoke("stash_pop", { path: repo.path, stash_ref: stashRef });
+      await invoke("stash_pop", { path: repo.path, stashRef });
       await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
