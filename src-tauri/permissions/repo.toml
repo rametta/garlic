@@ -47,4 +47,5 @@ commands.allow = [
   "set_last_repo_path",
   "set_theme",
   "set_openai_settings",
+  "write_export_text_file",
 ]

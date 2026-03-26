@@ -1,3 +1,13 @@
+/** Calendar-only label for exports (`YYYY-MM-DD`, local date). */
+export function formatShortDateOnly(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.replace(/\s+/g, " ").trim();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function formatDate(iso: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);

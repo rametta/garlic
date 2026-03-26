@@ -2,7 +2,7 @@ import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ask, open } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { formatAuthorDisplay, formatDate, formatRelativeShort } from "./appFormat";
 import { collectLocalBranchNamesInSubtree, collectRemoteRefsInSubtree } from "./branchTrie";
 import { BranchSidebar, type BranchGraphControls } from "./components/BranchSidebar";
@@ -20,6 +20,11 @@ import {
 import type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, StashEntry } from "./repoTypes";
 import { DEFAULT_OPENAI_MODEL, generateCommitTitleFromStagedDiff } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
+import {
+  buildGraphExportDefaultFilename,
+  filterGraphCommits,
+  formatCommitsExportTxt,
+} from "./graphCommitFilters";
 
 export type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, StashEntry } from "./repoTypes";
 
@@ -382,6 +387,10 @@ export default function App({
   const [loadingMoreGraphCommits, setLoadingMoreGraphCommits] = useState(false);
   /** `local:name` / `remote:name` → visible in commit graph (default true when key missing). */
   const [graphBranchVisible, setGraphBranchVisible] = useState<Record<string, boolean>>({});
+  /** Graph list filters (client-side; does not change loaded commit pages). */
+  const [graphAuthorFilter, setGraphAuthorFilter] = useState("");
+  const [graphDateFrom, setGraphDateFrom] = useState("");
+  const [graphDateTo, setGraphDateTo] = useState("");
   const [workingTreeFiles, setWorkingTreeFiles] = useState<WorkingTreeFile[]>(
     () => startup.workingTreeFiles,
   );
@@ -700,6 +709,16 @@ export default function App({
     return tips;
   }, [localBranches, remoteBranches, graphBranchVisible]);
 
+  const graphFilteredCommits = useMemo(
+    () => filterGraphCommits(commits, graphAuthorFilter, graphDateFrom, graphDateTo),
+    [commits, graphAuthorFilter, graphDateFrom, graphDateTo],
+  );
+
+  const graphCommitFiltersActive =
+    graphAuthorFilter.trim().length > 0 ||
+    graphDateFrom.trim().length > 0 ||
+    graphDateTo.trim().length > 0;
+
   const clearFileToolView = useCallback(() => {
     setFileHistoryPath(null);
     setFileHistoryCommits([]);
@@ -724,6 +743,36 @@ export default function App({
     setCommitDiffImagePreview(null);
     clearFileToolView();
   }, [clearFileToolView]);
+
+  useEffect(() => {
+    if (!commitBrowseHash) return;
+    if (!graphFilteredCommits.some((c) => c.hash === commitBrowseHash)) {
+      clearCommitBrowse();
+    }
+  }, [graphFilteredCommits, commitBrowseHash, clearCommitBrowse]);
+
+  const exportFilteredCommitsList = useCallback(async () => {
+    if (!repo?.path || repo.error) return;
+    if (graphFilteredCommits.length === 0) return;
+    setOperationError(null);
+    try {
+      const path = await save({
+        defaultPath: buildGraphExportDefaultFilename(graphAuthorFilter, graphDateFrom, graphDateTo),
+        filters: [{ name: "Text", extensions: ["txt"] }],
+      });
+      if (path == null) return;
+      const text = formatCommitsExportTxt(
+        graphFilteredCommits,
+        repo.name.trim() || repo.path,
+        graphAuthorFilter,
+        graphDateFrom,
+        graphDateTo,
+      );
+      await invoke("write_export_text_file", { path, contents: text });
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    }
+  }, [repo, graphFilteredCommits, graphAuthorFilter, graphDateFrom, graphDateTo]);
 
   const loadDiffForFile = useCallback(
     async (f: WorkingTreeFile, side: "unstaged" | "staged") => {
@@ -1830,11 +1879,11 @@ export default function App({
   const commitGraphLayout = useMemo(
     () =>
       computeCommitGraphLayout(
-        commits.map((c) => ({ hash: c.hash, parentHashes: c.parentHashes })),
+        graphFilteredCommits.map((c) => ({ hash: c.hash, parentHashes: c.parentHashes })),
         graphBranchTips,
         currentBranchName,
       ),
-    [commits, graphBranchTips, currentBranchName],
+    [graphFilteredCommits, graphBranchTips, currentBranchName],
   );
 
   /** Tip commit of the checked-out branch — used to highlight that row in the graph. */
@@ -2507,31 +2556,105 @@ export default function App({
                             </div>
                           </div>
                         ) : (
-                          <CommitGraphSection
-                            commits={commits}
-                            commitGraphLayout={commitGraphLayout}
-                            localBranches={localBranches}
-                            remoteBranches={remoteBranches}
-                            graphBranchVisible={graphBranchVisible}
-                            currentBranchName={currentBranchName}
-                            currentBranchTipHash={currentBranchTipHash}
-                            commitBrowseHash={commitBrowseHash}
-                            branchBusy={branchBusy}
-                            stashBusy={stashBusy}
-                            commitsSectionTitle={commitsSectionTitle}
-                            graphCommitsHasMore={graphCommitsHasMore}
-                            loadingMoreGraphCommits={loadingMoreGraphCommits}
-                            loadMoreGraphCommits={() => {
-                              void loadMoreGraphCommits();
-                            }}
-                            onRowCommitSelect={(hash) => {
-                              void selectCommit(hash);
-                            }}
-                            openGraphBranchLocalMenu={openGraphBranchLocalMenu}
-                            openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
-                            openGraphStashMenu={openGraphStashMenu}
-                            openGraphCommitMenu={openGraphCommitMenu}
-                          />
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                            <div className="flex shrink-0 flex-wrap items-end gap-2 border-b border-base-300/80 px-3 py-2">
+                              <label className="form-control max-w-full min-w-48 flex-1">
+                                <span className="label-text mb-0 text-[0.65rem] font-medium uppercase opacity-70">
+                                  Author
+                                </span>
+                                <input
+                                  type="text"
+                                  className="input-bordered input input-xs w-full font-mono text-xs"
+                                  placeholder="Name or email"
+                                  autoComplete="off"
+                                  spellCheck={false}
+                                  value={graphAuthorFilter}
+                                  onChange={(e) => {
+                                    setGraphAuthorFilter(e.target.value);
+                                  }}
+                                />
+                              </label>
+                              <label className="form-control w-38 min-w-0">
+                                <span className="label-text mb-0 text-[0.65rem] font-medium uppercase opacity-70">
+                                  From
+                                </span>
+                                <input
+                                  type="date"
+                                  className="input-bordered input input-xs w-full font-mono text-xs"
+                                  value={graphDateFrom}
+                                  onChange={(e) => {
+                                    setGraphDateFrom(e.target.value);
+                                  }}
+                                />
+                              </label>
+                              <label className="form-control w-38 min-w-0">
+                                <span className="label-text mb-0 text-[0.65rem] font-medium uppercase opacity-70">
+                                  To
+                                </span>
+                                <input
+                                  type="date"
+                                  className="input-bordered input input-xs w-full font-mono text-xs"
+                                  value={graphDateTo}
+                                  onChange={(e) => {
+                                    setGraphDateTo(e.target.value);
+                                  }}
+                                />
+                              </label>
+                              {graphCommitFiltersActive ? (
+                                <button
+                                  type="button"
+                                  className="btn shrink-0 btn-ghost btn-xs"
+                                  onClick={() => {
+                                    setGraphAuthorFilter("");
+                                    setGraphDateFrom("");
+                                    setGraphDateTo("");
+                                  }}
+                                >
+                                  Clear filters
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="btn ml-auto shrink-0 btn-outline btn-xs"
+                                disabled={graphFilteredCommits.length === 0}
+                                onClick={() => {
+                                  void exportFilteredCommitsList();
+                                }}
+                              >
+                                Export list…
+                              </button>
+                            </div>
+                            <CommitGraphSection
+                              commits={graphFilteredCommits}
+                              commitGraphLayout={commitGraphLayout}
+                              localBranches={localBranches}
+                              remoteBranches={remoteBranches}
+                              graphBranchVisible={graphBranchVisible}
+                              currentBranchName={currentBranchName}
+                              currentBranchTipHash={currentBranchTipHash}
+                              commitBrowseHash={commitBrowseHash}
+                              branchBusy={branchBusy}
+                              stashBusy={stashBusy}
+                              commitsSectionTitle={commitsSectionTitle}
+                              emptyMessage={
+                                commits.length === 0
+                                  ? "No commits to show"
+                                  : "No commits match the current filters"
+                              }
+                              graphCommitsHasMore={graphCommitsHasMore}
+                              loadingMoreGraphCommits={loadingMoreGraphCommits}
+                              loadMoreGraphCommits={() => {
+                                void loadMoreGraphCommits();
+                              }}
+                              onRowCommitSelect={(hash) => {
+                                void selectCommit(hash);
+                              }}
+                              openGraphBranchLocalMenu={openGraphBranchLocalMenu}
+                              openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
+                              openGraphStashMenu={openGraphStashMenu}
+                              openGraphCommitMenu={openGraphCommitMenu}
+                            />
+                          </div>
                         )}
                       </div>
                     </div>

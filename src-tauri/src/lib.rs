@@ -62,6 +62,16 @@ fn set_last_repo_path(app: tauri::AppHandle, path: Option<String>) -> Result<(),
     Ok(())
 }
 
+/// Writes the given UTF-8 text to a path chosen by the user (e.g. export list).
+#[tauri::command]
+fn write_export_text_file(path: String, contents: String) -> Result<(), String> {
+    let p = path.trim();
+    if p.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+    std::fs::write(p, contents.as_bytes()).map_err(|e| e.to_string())
+}
+
 fn format_theme_label(name: &str) -> String {
     let mut c = name.chars();
     match c.next() {
@@ -121,6 +131,7 @@ pub fn run() {
             set_last_repo_path,
             settings::set_theme,
             settings::set_openai_settings,
+            write_export_text_file,
         ])
         .setup(|app| {
             app.manage(active_repo::ActiveRepoPath::default());

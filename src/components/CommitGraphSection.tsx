@@ -21,6 +21,8 @@ export interface CommitGraphSectionProps {
   branchBusy: string | null;
   stashBusy: string | null;
   commitsSectionTitle: string;
+  /** Shown when `commits.length === 0` (e.g. filters excluded every row). */
+  emptyMessage?: string;
   graphCommitsHasMore: boolean;
   loadingMoreGraphCommits: boolean;
   loadMoreGraphCommits: () => void;
@@ -290,6 +292,7 @@ export function CommitGraphSection({
   branchBusy,
   stashBusy,
   commitsSectionTitle,
+  emptyMessage = "No commits to show",
   graphCommitsHasMore,
   loadingMoreGraphCommits,
   loadMoreGraphCommits,
@@ -324,7 +327,7 @@ export function CommitGraphSection({
   if (commits.length === 0) {
     return (
       <p className="m-0 flex flex-1 items-center justify-center px-3 text-center text-xs text-base-content/60">
-        No commits to show
+        {emptyMessage}
       </p>
     );
   }
