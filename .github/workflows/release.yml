@@ -1,0 +1,115 @@
+# Build Garlic for macOS (Apple Silicon + Intel), Windows, and Linux, then attach
+# bundles to a GitHub Release.
+#
+# How to release (recommended):
+#   1. Bump the version in package.json, src-tauri/tauri.conf.json, and src-tauri/Cargo.toml
+#      (keep them identical SemVer strings, e.g. 0.2.0).
+#   2. Commit and push.
+#   3. Create and push an annotated tag whose name is v + that version:
+#        git tag -a v0.2.0 -m "Release v0.2.0"
+#        git push origin v0.2.0
+#   The workflow strips the leading "v" and writes the version into the manifests
+#   before building so installers always match the tag, even if a step was missed locally.
+#
+# Tag push is the usual trigger for app releases: it is explicit, maps cleanly to SemVer,
+# and matches how GitHub Releases are tied to git tags.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish-tauri:
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+          - platform: windows-latest
+            args: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version from tag
+        run: |
+          if [[ "${GITHUB_REF_NAME}" != v* ]]; then
+            echo "Expected tag to start with v (e.g. v0.2.0), got: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Sync version into manifests
+        run: |
+          python <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+
+          ver = os.environ["VERSION"]
+          root = pathlib.Path(".")
+          for name in ("package.json", "src-tauri/tauri.conf.json"):
+              p = root / name
+              data = json.loads(p.read_text())
+              data["version"] = ver
+              p.write_text(json.dumps(data, indent=2) + "\n")
+          cargo_path = root / "src-tauri/Cargo.toml"
+          cargo = cargo_path.read_text()
+          cargo_new = re.sub(
+              r'^version = "[^"]*"',
+              f'version = "{ver}"',
+              cargo,
+              count=1,
+              flags=re.M,
+          )
+          cargo_path.write_text(cargo_new)
+          PY
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Garlic ${{ github.ref_name }}
+          releaseBody: "Installers and bundles for this version are attached below."
+          releaseDraft: false
+          prerelease: false
+          generateReleaseNotes: true
+          args: ${{ matrix.args }}
+          tauriScript: bun run tauri
