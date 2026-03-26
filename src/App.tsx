@@ -1,14 +1,17 @@
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask, open } from "@tauri-apps/plugin-dialog";
-import { CommitGraphColumn } from "./components/CommitGraphColumn";
-import { UnifiedDiff } from "./components/UnifiedDiff";
+import { formatAuthorDisplay, formatDate, formatRelativeShort } from "./appFormat";
 import {
-  COMMIT_GRAPH_ROW_HEIGHT,
-  computeCommitGraphLayout,
-  type BranchTip,
-} from "./commitGraphLayout";
+  BranchSidebar,
+  collectLocalBranchNamesInSubtree,
+  collectRemoteRefsInSubtree,
+  type BranchGraphControls,
+} from "./components/BranchSidebar";
+import { CommitGraphSection } from "./components/CommitGraphSection";
+import { UnifiedDiff } from "./components/UnifiedDiff";
+import { computeCommitGraphLayout, type BranchTip } from "./commitGraphLayout";
 import {
   nativeContextMenusAvailable,
   popupBranchContextMenu,
@@ -16,7 +19,10 @@ import {
   popupGraphCommitContextMenu,
   popupStashContextMenu,
 } from "./nativeContextMenu";
+import type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, StashEntry } from "./repoTypes";
 import { resolveThemePreference } from "./theme";
+
+export type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, StashEntry } from "./repoTypes";
 
 /** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
 const FOCUS_REFRESH_DEBOUNCE_MS = 350;
@@ -31,48 +37,6 @@ function remoteNameFromRemoteRef(fullRef: string): string | null {
   const i = fullRef.indexOf("/");
   if (i <= 0) return null;
   return fullRef.slice(0, i);
-}
-
-function IconEye({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-function IconEyeOff({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" />
-      <path d="M14.084 14.158a3 3 0 0 1-4.087-4.087" />
-      <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" />
-      <path d="m2 2 20 20" />
-    </svg>
-  );
 }
 
 interface RemoteEntry {
@@ -97,18 +61,6 @@ interface RepoMetadata {
   behind: number | null;
 }
 
-interface CommitEntry {
-  hash: string;
-  shortHash: string;
-  subject: string;
-  author: string;
-  authorEmail: string;
-  date: string;
-  parentHashes: string[];
-  /** Set when this row is a stash WIP commit (`stash@{n}`). */
-  stashRef?: string | null;
-}
-
 interface GraphCommitsPage {
   commits: CommitEntry[];
   hasMore: boolean;
@@ -117,31 +69,6 @@ interface GraphCommitsPage {
 /** From `get_commit_signature_status` (`git log -1 --format=%G?`). */
 interface CommitSignatureStatus {
   verified: boolean | null;
-}
-
-/** Local branch row from `list_local_branches` / bootstrap. */
-export interface LocalBranchEntry {
-  name: string;
-  /** Tip commit OID for this branch. */
-  tipHash: string;
-  /** Remote-tracking upstream ref (e.g. origin/main); null if not configured. */
-  upstreamName: string | null;
-  /** Commits on this branch not on upstream; null if no upstream. */
-  ahead: number | null;
-  /** Commits on upstream not on this branch; null if no upstream. */
-  behind: number | null;
-}
-
-/** Remote-tracking branch from `list_remote_branches`. */
-export interface RemoteBranchEntry {
-  name: string;
-  tipHash: string;
-}
-
-/** One stash from `list_stashes` / bootstrap. */
-export interface StashEntry {
-  refName: string;
-  message: string;
 }
 
 /** Line counts from `git diff --numstat` / `--cached` (or file read for untracked). */
@@ -177,11 +104,6 @@ export interface RestoreLastRepo {
   graphCommitsHasMore: boolean;
   workingTreeFiles: WorkingTreeFile[];
   listsError: string | null;
-}
-
-function localBranchUpstreamLabel(ahead: number | null, behind: number | null): string | null {
-  if (ahead === null || behind === null) return null;
-  return `↑${ahead} ↓${behind}`;
 }
 
 /** Rules aligned with `git check-ref-format --branch` for short branch names. */
@@ -221,62 +143,6 @@ function branchNameValidationError(name: string): string | null {
     return 'Branch names cannot start with "-".';
   }
   return null;
-}
-
-function formatDate(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-/** Short relative label for dense commit rows (e.g. `2h ago`, `3d ago`). */
-function formatRelativeShort(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  const t = d.getTime();
-  if (Number.isNaN(t)) return null;
-  const diffSec = Math.round((Date.now() - t) / 1000);
-  if (diffSec < 0) {
-    return formatDate(iso);
-  }
-  if (diffSec < 45) {
-    return "now";
-  }
-  const diffMin = Math.round(diffSec / 60);
-  if (diffMin < 60) {
-    return `${diffMin}m ago`;
-  }
-  const diffH = Math.round(diffMin / 60);
-  if (diffH < 24) {
-    return `${diffH}h ago`;
-  }
-  const diffD = Math.round(diffH / 24);
-  if (diffD < 7) {
-    return `${diffD}d ago`;
-  }
-  const diffW = Math.round(diffD / 7);
-  if (diffW < 8) {
-    return `${diffW}w ago`;
-  }
-  return d.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: d.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined,
-  });
-}
-
-/** Prefer `Name` from Git's `Name <email>` for dense rows. */
-function formatAuthorDisplay(author: string): string {
-  const t = author.trim();
-  const lt = t.indexOf("<");
-  if (lt > 0) {
-    return t.slice(0, lt).trim();
-  }
-  return t;
 }
 
 /** Tauri `invoke` may reject with a string or a non-Error object; normalize for display. */
@@ -319,7 +185,7 @@ function StagePanelLineStats({
   return <DiffLineStatBadge stat={s} />;
 }
 
-function StagePanelFileRow({
+const StagePanelFileRow = memo(function StagePanelFileRow({
   f,
   selected,
   busy,
@@ -418,7 +284,7 @@ function StagePanelFileRow({
       </div>
     </li>
   );
-}
+});
 
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -427,474 +293,6 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
       <dd className="m-0 min-w-0 wrap-break-word text-base-content">{children}</dd>
     </div>
   );
-}
-
-function BranchPanel({
-  title,
-  empty,
-  emptyHint,
-  headerRight,
-  belowHeader,
-  children,
-  isLastSection,
-}: {
-  title: string;
-  empty: boolean;
-  emptyHint: string;
-  /** Optional control (e.g. action button) aligned with the panel title. */
-  headerRight?: ReactNode;
-  /** Optional row below the title (e.g. list filter). */
-  belowHeader?: ReactNode;
-  children: ReactNode;
-  /** When grouped in one card, omit bottom border on the final section. */
-  isLastSection: boolean;
-}) {
-  return (
-    <section
-      className={`flex min-h-0 min-w-0 flex-[1_1_0%] flex-col ${
-        isLastSection ? "" : "border-b border-base-300"
-      }`}
-    >
-      <div className="flex min-h-0 flex-1 flex-col gap-0">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
-          <h2 className="m-0 card-title min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-70">
-            {title}
-          </h2>
-          {headerRight ? <div className="shrink-0">{headerRight}</div> : null}
-        </div>
-        {belowHeader ? (
-          <div className="shrink-0 border-b border-base-300">{belowHeader}</div>
-        ) : null}
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          {empty ? (
-            <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
-          ) : (
-            children
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/**
- * Path segments → nested folders (supports `a` + `a/b` as in Git).
- * UI: DaisyUI [collapsible submenu](https://daisyui.com/components/menu/#collapsible-submenu) (`li` → `details` → `summary` + `ul`).
- */
-type BranchTrieNode = {
-  branchHere: LocalBranchEntry | null;
-  children: Map<string, BranchTrieNode>;
-};
-
-function emptyBranchTrieNode(): BranchTrieNode {
-  return { branchHere: null, children: new Map() };
-}
-
-function insertLocalBranchIntoTrie(root: BranchTrieNode, branch: LocalBranchEntry) {
-  const parts = branch.name.split("/").filter((p) => p.length > 0);
-  if (parts.length === 0) return;
-  let node = root;
-  for (let i = 0; i < parts.length; i++) {
-    const seg = parts[i];
-    if (!node.children.has(seg)) {
-      node.children.set(seg, emptyBranchTrieNode());
-    }
-    node = node.children.get(seg)!;
-    if (i === parts.length - 1) {
-      node.branchHere = branch;
-    }
-  }
-}
-
-function buildLocalBranchTrie(branches: LocalBranchEntry[]): BranchTrieNode {
-  const root = emptyBranchTrieNode();
-  for (const b of branches) {
-    insertLocalBranchIntoTrie(root, b);
-  }
-  return root;
-}
-
-/** All local branch names under this trie node (including `branchHere` and descendants). */
-function collectLocalBranchNamesInSubtree(node: BranchTrieNode): string[] {
-  const out: string[] = [];
-  if (node.branchHere) {
-    out.push(node.branchHere.name);
-  }
-  for (const child of node.children.values()) {
-    out.push(...collectLocalBranchNamesInSubtree(child));
-  }
-  return out;
-}
-
-type RemoteTrieNode = {
-  refHere: string | null;
-  children: Map<string, RemoteTrieNode>;
-};
-
-function emptyRemoteTrieNode(): RemoteTrieNode {
-  return { refHere: null, children: new Map() };
-}
-
-function insertRemoteRefIntoTrie(root: RemoteTrieNode, fullRef: string) {
-  const parts = fullRef.split("/").filter((p) => p.length > 0);
-  if (parts.length === 0) return;
-  let node = root;
-  for (let i = 0; i < parts.length; i++) {
-    const seg = parts[i];
-    if (!node.children.has(seg)) {
-      node.children.set(seg, emptyRemoteTrieNode());
-    }
-    node = node.children.get(seg)!;
-    if (i === parts.length - 1) {
-      node.refHere = fullRef;
-    }
-  }
-}
-
-function buildRemoteBranchTrie(refs: RemoteBranchEntry[]): RemoteTrieNode {
-  const root = emptyRemoteTrieNode();
-  for (const r of refs) {
-    insertRemoteRefIntoTrie(root, r.name);
-  }
-  return root;
-}
-
-/** All remote ref strings under this trie node (including `refHere` and descendants). */
-function collectRemoteRefsInSubtree(node: RemoteTrieNode): string[] {
-  const out: string[] = [];
-  if (node.refHere) {
-    out.push(node.refHere);
-  }
-  for (const child of node.children.values()) {
-    out.push(...collectRemoteRefsInSubtree(child));
-  }
-  return out;
-}
-
-type BranchGraphControls = {
-  graphVisibleLocal: (name: string) => boolean;
-  toggleGraphLocal: (name: string) => void;
-  graphFolderAnyVisibleLocal: (node: BranchTrieNode) => boolean;
-  toggleGraphLocalFolder: (node: BranchTrieNode) => void;
-  graphVisibleRemote: (name: string) => boolean;
-  toggleGraphRemote: (name: string) => void;
-  graphFolderAnyVisibleRemote: (node: RemoteTrieNode) => boolean;
-  toggleGraphRemoteFolder: (node: RemoteTrieNode) => void;
-};
-
-function LocalBranchRow({
-  branch,
-  currentBranchName,
-  branchBusy,
-  onCheckoutLocal,
-  onLocalBranchContextMenu,
-  graph,
-}: {
-  branch: LocalBranchEntry;
-  currentBranchName: string | null;
-  branchBusy: string | null;
-  onCheckoutLocal: (name: string) => void;
-  onLocalBranchContextMenu: (branchName: string, clientX: number, clientY: number) => void;
-  graph: BranchGraphControls;
-}) {
-  const isCurrent = currentBranchName === branch.name;
-  const busy =
-    branchBusy === `local:${branch.name}` ||
-    branchBusy === `delete:${branch.name}` ||
-    branchBusy === `pull:${branch.name}` ||
-    branchBusy === "rebase";
-  const upstreamLabel = localBranchUpstreamLabel(branch.ahead, branch.behind);
-  const graphVisible = graph.graphVisibleLocal(branch.name);
-
-  return (
-    <li className={isCurrent ? "menu-active" : ""}>
-      <div
-        className="flex w-full min-w-0 items-center gap-0"
-        onContextMenu={(e) => {
-          if (busy) return;
-          if (!nativeContextMenusAvailable()) return;
-          e.preventDefault();
-          onLocalBranchContextMenu(branch.name, e.clientX, e.clientY);
-        }}
-      >
-        <button
-          type="button"
-          className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
-          title={graphVisible ? "Hide branch from commit graph" : "Show branch in commit graph"}
-          aria-label={graphVisible ? "Hide from graph" : "Show in graph"}
-          aria-pressed={graphVisible}
-          disabled={busy}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            graph.toggleGraphLocal(branch.name);
-          }}
-        >
-          {graphVisible ? (
-            <IconEye className="text-success opacity-95" />
-          ) : (
-            <IconEyeOff className="text-success/45" />
-          )}
-        </button>
-        <button
-          type="button"
-          disabled={busy || isCurrent}
-          onClick={() => {
-            onCheckoutLocal(branch.name);
-          }}
-          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 py-2 pr-2 pl-1 text-left ${busy ? "opacity-60" : ""}`}
-        >
-          <span
-            className="min-w-0 flex-1 truncate text-[0.8125rem] leading-snug"
-            title={busy ? undefined : branch.name}
-          >
-            {busy ? "Switching…" : branch.name}
-            {isCurrent && !busy ? (
-              <span className="ml-1.5 text-xs font-normal opacity-70">(current)</span>
-            ) : null}
-          </span>
-          {upstreamLabel && !busy ? (
-            <span
-              className={`shrink-0 font-mono text-[0.65rem] leading-none tracking-tight ${
-                isCurrent ? "text-inherit opacity-90" : "text-base-content/60"
-              }`}
-              title={
-                branch.upstreamName
-                  ? `Ahead of ${branch.upstreamName}: ${branch.ahead ?? 0}; behind: ${branch.behind ?? 0}`
-                  : "Commits ahead / behind configured upstream"
-              }
-            >
-              {upstreamLabel}
-            </span>
-          ) : null}
-        </button>
-      </div>
-    </li>
-  );
-}
-
-function renderLocalBranchTrieChildren(
-  node: BranchTrieNode,
-  currentBranchName: string | null,
-  branchBusy: string | null,
-  onCheckoutLocal: (name: string) => void,
-  onLocalBranchContextMenu: (branchName: string, clientX: number, clientY: number) => void,
-  graph: BranchGraphControls,
-): ReactNode {
-  const sorted = [...node.children.entries()].sort((a, b) =>
-    a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
-  );
-  return sorted.map(([segment, child]) => {
-    const leafOnly = child.children.size === 0 && child.branchHere !== null;
-    if (leafOnly) {
-      const b = child.branchHere!;
-      return (
-        <LocalBranchRow
-          key={b.name}
-          branch={b}
-          currentBranchName={currentBranchName}
-          branchBusy={branchBusy}
-          onCheckoutLocal={onCheckoutLocal}
-          onLocalBranchContextMenu={onLocalBranchContextMenu}
-          graph={graph}
-        />
-      );
-    }
-    const folderGraphVisible = graph.graphFolderAnyVisibleLocal(child);
-    return (
-      <li key={segment}>
-        <details open>
-          <summary className="grid min-w-0 cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-0 font-mono text-[0.8125rem]">
-            <button
-              type="button"
-              className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center self-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
-              title={
-                folderGraphVisible
-                  ? "Hide all branches in this folder from commit graph"
-                  : "Show all branches in this folder in commit graph"
-              }
-              aria-label={folderGraphVisible ? "Hide folder from graph" : "Show folder in graph"}
-              aria-pressed={folderGraphVisible}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                graph.toggleGraphLocalFolder(child);
-              }}
-            >
-              {folderGraphVisible ? (
-                <IconEye className="text-success opacity-95" />
-              ) : (
-                <IconEyeOff className="text-success/45" />
-              )}
-            </button>
-            <span className="min-w-0 py-2 pr-2 pl-1 wrap-break-word">{segment}</span>
-          </summary>
-          <ul>
-            {child.branchHere ? (
-              <LocalBranchRow
-                branch={child.branchHere}
-                currentBranchName={currentBranchName}
-                branchBusy={branchBusy}
-                onCheckoutLocal={onCheckoutLocal}
-                onLocalBranchContextMenu={onLocalBranchContextMenu}
-                graph={graph}
-              />
-            ) : null}
-            {renderLocalBranchTrieChildren(
-              child,
-              currentBranchName,
-              branchBusy,
-              onCheckoutLocal,
-              onLocalBranchContextMenu,
-              graph,
-            )}
-          </ul>
-        </details>
-      </li>
-    );
-  });
-}
-
-function RemoteBranchRow({
-  fullRef,
-  branchBusy,
-  onCreateFromRemote,
-  onRemoteBranchContextMenu,
-  graph,
-}: {
-  fullRef: string;
-  branchBusy: string | null;
-  onCreateFromRemote: (remoteRef: string) => void;
-  onRemoteBranchContextMenu: (remoteRef: string, clientX: number, clientY: number) => void;
-  graph: BranchGraphControls;
-}) {
-  const busy =
-    branchBusy === `remote:${fullRef}` ||
-    branchBusy === `delete-remote:${fullRef}` ||
-    branchBusy === "rebase";
-  const graphVisible = graph.graphVisibleRemote(fullRef);
-
-  return (
-    <li>
-      <div
-        className="flex w-full min-w-0 items-center gap-0"
-        onContextMenu={(e) => {
-          if (busy) return;
-          if (!nativeContextMenusAvailable()) return;
-          e.preventDefault();
-          onRemoteBranchContextMenu(fullRef, e.clientX, e.clientY);
-        }}
-      >
-        <button
-          type="button"
-          className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
-          title={graphVisible ? "Hide remote from commit graph" : "Show remote in commit graph"}
-          aria-label={graphVisible ? "Hide from graph" : "Show in graph"}
-          aria-pressed={graphVisible}
-          disabled={busy}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            graph.toggleGraphRemote(fullRef);
-          }}
-        >
-          {graphVisible ? (
-            <IconEye className="text-success opacity-95" />
-          ) : (
-            <IconEyeOff className="text-success/45" />
-          )}
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            onCreateFromRemote(fullRef);
-          }}
-          className={`flex h-auto min-h-0 min-w-0 flex-1 justify-start py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
-        >
-          {busy ? "Creating…" : fullRef}
-        </button>
-      </div>
-    </li>
-  );
-}
-
-function renderRemoteBranchTrieChildren(
-  node: RemoteTrieNode,
-  branchBusy: string | null,
-  onCreateFromRemote: (remoteRef: string) => void,
-  graph: BranchGraphControls,
-  onRemoteBranchContextMenu: (remoteRef: string, clientX: number, clientY: number) => void,
-): ReactNode {
-  const sorted = [...node.children.entries()].sort((a, b) =>
-    a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
-  );
-  return sorted.map(([segment, child]) => {
-    const leafOnly = child.children.size === 0 && child.refHere !== null;
-    if (leafOnly) {
-      const r = child.refHere!;
-      return (
-        <RemoteBranchRow
-          key={r}
-          fullRef={r}
-          branchBusy={branchBusy}
-          onCreateFromRemote={onCreateFromRemote}
-          onRemoteBranchContextMenu={onRemoteBranchContextMenu}
-          graph={graph}
-        />
-      );
-    }
-    const folderGraphVisible = graph.graphFolderAnyVisibleRemote(child);
-    return (
-      <li key={segment}>
-        <details open>
-          <summary className="grid min-w-0 cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-0 font-mono text-[0.8125rem]">
-            <button
-              type="button"
-              className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center self-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
-              title={
-                folderGraphVisible
-                  ? "Hide all remote branches in this folder from commit graph"
-                  : "Show all remote branches in this folder in commit graph"
-              }
-              aria-label={folderGraphVisible ? "Hide folder from graph" : "Show folder in graph"}
-              aria-pressed={folderGraphVisible}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                graph.toggleGraphRemoteFolder(child);
-              }}
-            >
-              {folderGraphVisible ? (
-                <IconEye className="text-success opacity-95" />
-              ) : (
-                <IconEyeOff className="text-success/45" />
-              )}
-            </button>
-            <span className="min-w-0 py-2 pr-2 pl-1 wrap-break-word">{segment}</span>
-          </summary>
-          <ul>
-            {child.refHere ? (
-              <RemoteBranchRow
-                fullRef={child.refHere}
-                branchBusy={branchBusy}
-                onCreateFromRemote={onCreateFromRemote}
-                onRemoteBranchContextMenu={onRemoteBranchContextMenu}
-                graph={graph}
-              />
-            ) : null}
-            {renderRemoteBranchTrieChildren(
-              child,
-              branchBusy,
-              onCreateFromRemote,
-              graph,
-              onRemoteBranchContextMenu,
-            )}
-          </ul>
-        </details>
-      </li>
-    );
-  });
 }
 
 export default function App({
@@ -974,10 +372,6 @@ export default function App({
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
   /** When set, the create-branch dialog starts the branch at this commit instead of HEAD. */
   const [createBranchStartCommit, setCreateBranchStartCommit] = useState<string | null>(null);
-  /** Case-insensitive substring filters for each sidebar list (independent). */
-  const [localBranchListFilter, setLocalBranchListFilter] = useState("");
-  const [remoteBranchListFilter, setRemoteBranchListFilter] = useState("");
-  const [stashListFilter, setStashListFilter] = useState("");
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
@@ -997,12 +391,6 @@ export default function App({
       return null;
     }
   }, []);
-
-  useEffect(() => {
-    setLocalBranchListFilter("");
-    setRemoteBranchListFilter("");
-    setStashListFilter("");
-  }, [repo?.path]);
 
   useEffect(() => {
     setGraphBranchVisible((prev) => {
@@ -2201,44 +1589,6 @@ export default function App({
     !listsError &&
     Boolean(repo && !repo.error);
 
-  const localBranchFilterNorm = localBranchListFilter.trim().toLowerCase();
-  const remoteBranchFilterNorm = remoteBranchListFilter.trim().toLowerCase();
-  const stashFilterNorm = stashListFilter.trim().toLowerCase();
-
-  const filteredLocalBranches = useMemo(() => {
-    if (!localBranchFilterNorm) return localBranches;
-    return localBranches.filter((b) => b.name.toLowerCase().includes(localBranchFilterNorm));
-  }, [localBranches, localBranchFilterNorm]);
-
-  const filteredRemoteBranches = useMemo(() => {
-    if (!remoteBranchFilterNorm) return remoteBranches;
-    return remoteBranches.filter((r) => r.name.toLowerCase().includes(remoteBranchFilterNorm));
-  }, [remoteBranches, remoteBranchFilterNorm]);
-
-  const filteredStashes = useMemo(() => {
-    if (!stashFilterNorm) return stashes;
-    return stashes.filter(
-      (s) =>
-        s.refName.toLowerCase().includes(stashFilterNorm) ||
-        s.message.toLowerCase().includes(stashFilterNorm),
-    );
-  }, [stashes, stashFilterNorm]);
-
-  const localBranchTrieRoot = useMemo(
-    () => buildLocalBranchTrie(filteredLocalBranches),
-    [filteredLocalBranches],
-  );
-  const remoteBranchTrieRoot = useMemo(
-    () => buildRemoteBranchTrie(filteredRemoteBranches),
-    [filteredRemoteBranches],
-  );
-
-  const localBranchesEmptyHint =
-    localBranches.length === 0 ? "No local branches" : "No branches match filter";
-  const remoteBranchesEmptyHint =
-    remoteBranches.length === 0 ? "No remote-tracking branches" : "No branches match filter";
-  const stashesEmptyHint = stashes.length === 0 ? "No stashes" : "No stashes match filter";
-
   const commitGraphLayout = useMemo(
     () =>
       computeCommitGraphLayout(
@@ -2429,172 +1779,29 @@ export default function App({
             </div>
           </dialog>
 
-          <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm lg:min-h-0">
-            <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
-              <BranchPanel
-                title="Local branches"
-                empty={canShowBranches && filteredLocalBranches.length === 0}
-                emptyHint={localBranchesEmptyHint}
-                isLastSection={false}
-                belowHeader={
-                  canShowBranches ? (
-                    <input
-                      type="search"
-                      className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
-                      value={localBranchListFilter}
-                      onChange={(e) => {
-                        setLocalBranchListFilter(e.target.value);
-                      }}
-                      placeholder="Filter local branches…"
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-label="Filter local branches by name"
-                    />
-                  ) : null
-                }
-                headerRight={
-                  canShowBranches ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      disabled={Boolean(branchBusy)}
-                      onClick={() => {
-                        openCreateBranchDialog();
-                      }}
-                    >
-                      New branch
-                    </button>
-                  ) : null
-                }
-              >
-                {canShowBranches ? (
-                  <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                    {renderLocalBranchTrieChildren(
-                      localBranchTrieRoot,
-                      currentBranchName,
-                      branchBusy,
-                      (name) => {
-                        void onCheckoutLocal(name);
-                      },
-                      (branchName, clientX, clientY) => {
-                        runBranchSidebarContextMenu(
-                          { kind: "local", branchName },
-                          clientX,
-                          clientY,
-                        );
-                      },
-                      branchGraphControls,
-                    )}
-                  </ul>
-                ) : null}
-              </BranchPanel>
-
-              <BranchPanel
-                title="Remote branches"
-                empty={canShowBranches && filteredRemoteBranches.length === 0}
-                emptyHint={remoteBranchesEmptyHint}
-                isLastSection={false}
-                belowHeader={
-                  canShowBranches ? (
-                    <input
-                      type="search"
-                      className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
-                      value={remoteBranchListFilter}
-                      onChange={(e) => {
-                        setRemoteBranchListFilter(e.target.value);
-                      }}
-                      placeholder="Filter remote branches…"
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-label="Filter remote-tracking branches by name"
-                    />
-                  ) : null
-                }
-              >
-                {canShowBranches ? (
-                  <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                    {renderRemoteBranchTrieChildren(
-                      remoteBranchTrieRoot,
-                      branchBusy,
-                      (remoteRef) => {
-                        void onCreateFromRemote(remoteRef);
-                      },
-                      branchGraphControls,
-                      (fullRef, clientX, clientY) => {
-                        runBranchSidebarContextMenu({ kind: "remote", fullRef }, clientX, clientY);
-                      },
-                    )}
-                  </ul>
-                ) : null}
-              </BranchPanel>
-
-              <BranchPanel
-                title="Stashes"
-                empty={canShowBranches && filteredStashes.length === 0}
-                emptyHint={stashesEmptyHint}
-                isLastSection
-                belowHeader={
-                  canShowBranches ? (
-                    <input
-                      type="search"
-                      className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
-                      value={stashListFilter}
-                      onChange={(e) => {
-                        setStashListFilter(e.target.value);
-                      }}
-                      placeholder="Filter by ref or message…"
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-label="Filter stashes by ref name or message"
-                    />
-                  ) : null
-                }
-                headerRight={
-                  canShowBranches ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      disabled={Boolean(branchBusy) || stashBusy !== null}
-                      onClick={() => {
-                        void onStashPush();
-                      }}
-                    >
-                      {stashBusy === "push" ? "…" : "Stash"}
-                    </button>
-                  ) : null
-                }
-              >
-                {canShowBranches ? (
-                  <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
-                    {filteredStashes.map((s) => {
-                      const stashRowBusy = Boolean(branchBusy) || stashBusy !== null;
-                      return (
-                        <li key={s.refName} className="min-w-0">
-                          <div
-                            className="flex w-full min-w-0 flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
-                            title={`${s.refName}: ${s.message}`}
-                            onContextMenu={(e) => {
-                              if (stashRowBusy) return;
-                              if (!nativeContextMenusAvailable()) return;
-                              e.preventDefault();
-                              openGraphStashMenu(s.refName, e.clientX, e.clientY);
-                            }}
-                          >
-                            <span className="font-mono text-[0.65rem] leading-snug break-all opacity-70">
-                              {s.refName}
-                            </span>
-                            <span className="text-[0.8125rem] leading-snug wrap-break-word">
-                              {s.message}
-                            </span>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : null}
-              </BranchPanel>
-            </div>
-          </div>
+          <BranchSidebar
+            repoPath={repo?.path ?? null}
+            canShowBranches={canShowBranches}
+            localBranches={localBranches}
+            remoteBranches={remoteBranches}
+            stashes={stashes}
+            branchBusy={branchBusy}
+            stashBusy={stashBusy}
+            branchGraphControls={branchGraphControls}
+            currentBranchName={currentBranchName}
+            onCheckoutLocal={(name) => {
+              void onCheckoutLocal(name);
+            }}
+            onCreateFromRemote={(remoteRef) => {
+              void onCreateFromRemote(remoteRef);
+            }}
+            runBranchSidebarContextMenu={runBranchSidebarContextMenu}
+            onStashPush={() => {
+              void onStashPush();
+            }}
+            openGraphStashMenu={openGraphStashMenu}
+            openCreateBranchDialog={openCreateBranchDialog}
+          />
         </aside>
 
         <div
@@ -2972,313 +2179,31 @@ export default function App({
                             </div>
                           </div>
                         ) : (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                            <h2 className="m-0 mb-1.5 flex shrink-0 flex-wrap items-baseline gap-x-2 gap-y-0 border-b border-base-300 px-3 pt-2 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                              <span>Commits</span>
-                              <span className="font-mono text-[0.6rem] font-normal tracking-normal text-base-content/55 normal-case">
-                                {commits.length}
-                                {graphCommitsHasMore ? "+" : ""}
-                              </span>
-                            </h2>
-                            {commits.length === 0 ? (
-                              <p className="m-0 flex flex-1 items-center justify-center px-3 text-center text-xs text-base-content/60">
-                                No commits to show
-                              </p>
-                            ) : (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                                <div
-                                  className="sticky top-0 z-10 mb-0.5 grid shrink-0 items-center gap-x-1.5 border-b border-base-300/80 bg-base-100 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase"
-                                  style={{
-                                    gridTemplateColumns: `minmax(0, 6.75rem) ${commitGraphLayout.graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`,
-                                  }}
-                                >
-                                  <span className="truncate pl-3">Branch</span>
-                                  <span className="min-w-0 truncate">Graph</span>
-                                  <span className="min-w-0 truncate">Commit message</span>
-                                  <span className="min-w-0 truncate">Author</span>
-                                  <span className="pr-3 text-right">When</span>
-                                </div>
-                                <div className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto">
-                                  <div
-                                    className="grid w-full min-w-0 gap-x-1.5"
-                                    style={{
-                                      gridTemplateColumns: `minmax(0, 6.75rem) ${commitGraphLayout.graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`,
-                                      gridTemplateRows: `repeat(${commits.length}, ${COMMIT_GRAPH_ROW_HEIGHT}px)`,
-                                    }}
-                                  >
-                                    {commits.map((c, idx) => {
-                                      const stashRef = c.stashRef?.trim() || null;
-                                      const visibleLocalTips = localBranches.filter(
-                                        (b) =>
-                                          graphBranchVisible[`local:${b.name}`] !== false &&
-                                          b.tipHash === c.hash,
-                                      );
-                                      const visibleRemoteTips = remoteBranches.filter(
-                                        (r) =>
-                                          graphBranchVisible[`remote:${r.name}`] !== false &&
-                                          r.tipHash === c.hash,
-                                      );
-                                      const sortedNames = commitGraphLayout.branchNamesSorted;
-                                      const tipsHereNames = [
-                                        ...visibleLocalTips.map((b) => b.name),
-                                        ...visibleRemoteTips.map((r) => r.name),
-                                      ];
-                                      const firstTipName = sortedNames.find((n) =>
-                                        tipsHereNames.includes(n),
-                                      );
-                                      const laneIdx = firstTipName
-                                        ? sortedNames.indexOf(firstTipName)
-                                        : -1;
-                                      const laneColor =
-                                        laneIdx >= 0
-                                          ? commitGraphLayout.laneColors[
-                                              laneIdx % commitGraphLayout.laneColors.length
-                                            ]
-                                          : undefined;
-                                      const hasBranchTips =
-                                        visibleLocalTips.length > 0 || visibleRemoteTips.length > 0;
-                                      const branchCell = hasBranchTips ? (
-                                        <span
-                                          className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[0.62rem] leading-tight text-base-content"
-                                          title={tipsHereNames.join(", ")}
-                                          style={
-                                            laneColor
-                                              ? {
-                                                  borderLeft: `2px solid ${laneColor}`,
-                                                  paddingLeft: 4,
-                                                }
-                                              : undefined
-                                          }
-                                        >
-                                          {visibleLocalTips.some(
-                                            (b) => b.name === currentBranchName,
-                                          ) ? (
-                                            <span className="shrink-0 text-primary" aria-hidden>
-                                              ✓
-                                            </span>
-                                          ) : null}
-                                          {visibleLocalTips.map((b) => (
-                                            <span
-                                              key={`l:${b.name}`}
-                                              className="max-w-full min-w-0 cursor-context-menu truncate font-medium"
-                                              onContextMenu={(e) => {
-                                                if (branchBusy) return;
-                                                if (!nativeContextMenusAvailable()) return;
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                openGraphBranchLocalMenu(
-                                                  b.name,
-                                                  e.clientX,
-                                                  e.clientY,
-                                                );
-                                              }}
-                                            >
-                                              {b.name}
-                                            </span>
-                                          ))}
-                                          {visibleLocalTips.length > 0 &&
-                                          visibleRemoteTips.length > 0 ? (
-                                            <span
-                                              className="shrink-0 text-[0.55rem] text-base-content/45"
-                                              aria-hidden
-                                            >
-                                              ·
-                                            </span>
-                                          ) : null}
-                                          {visibleRemoteTips.map((r) => (
-                                            <span
-                                              key={`r:${r.name}`}
-                                              className="max-w-full min-w-0 cursor-context-menu truncate font-medium text-secondary"
-                                              onContextMenu={(e) => {
-                                                if (branchBusy) return;
-                                                if (!nativeContextMenusAvailable()) return;
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                openGraphBranchRemoteMenu(
-                                                  r.name,
-                                                  e.clientX,
-                                                  e.clientY,
-                                                );
-                                              }}
-                                            >
-                                              {r.name}
-                                            </span>
-                                          ))}
-                                        </span>
-                                      ) : stashRef ? (
-                                        <span
-                                          className="flex min-w-0 cursor-context-menu flex-wrap items-center gap-1 text-[0.62rem] leading-tight text-base-content"
-                                          title={`Stash ${stashRef}`}
-                                          onContextMenu={(e) => {
-                                            if (branchBusy || stashBusy !== null) return;
-                                            if (!nativeContextMenusAvailable()) return;
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            openGraphStashMenu(stashRef, e.clientX, e.clientY);
-                                          }}
-                                        >
-                                          <span className="badge shrink-0 font-mono badge-xs badge-warning">
-                                            {stashRef}
-                                          </span>
-                                        </span>
-                                      ) : idx === 0 ? (
-                                        <span
-                                          className="flex min-w-0 cursor-context-menu items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content/85"
-                                          title={commitsSectionTitle}
-                                          onContextMenu={(e) => {
-                                            if (branchBusy || !currentBranchName) return;
-                                            if (!nativeContextMenusAvailable()) return;
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            openGraphBranchLocalMenu(
-                                              currentBranchName,
-                                              e.clientX,
-                                              e.clientY,
-                                            );
-                                          }}
-                                        >
-                                          <span className="shrink-0 text-primary" aria-hidden>
-                                            ✓
-                                          </span>
-                                          <span className="min-w-0 truncate font-medium">
-                                            {commitsSectionTitle}
-                                          </span>
-                                        </span>
-                                      ) : null;
-                                      const isBrowsing = commitBrowseHash === c.hash;
-                                      const isHeadBranchTipRow =
-                                        currentBranchTipHash !== null &&
-                                        c.hash === currentBranchTipHash;
-                                      const rel = formatRelativeShort(c.date);
-                                      const fullTitle = [
-                                        stashRef
-                                          ? `${stashRef} — ${c.shortHash} — ${c.subject}`
-                                          : `${c.shortHash} — ${c.subject}`,
-                                        c.author,
-                                        formatDate(c.date) ?? undefined,
-                                      ]
-                                        .filter(Boolean)
-                                        .join("\n");
-                                      const rowRule =
-                                        idx < commits.length - 1
-                                          ? "border-b border-base-300/40"
-                                          : "";
-                                      return (
-                                        <Fragment key={c.hash}>
-                                          <div
-                                            className={`flex min-h-0 min-w-0 items-center px-0.5 ${rowRule} ${
-                                              isHeadBranchTipRow ? "bg-primary/12" : ""
-                                            }`}
-                                            style={{ gridColumn: 1, gridRow: idx + 1 }}
-                                          >
-                                            {branchCell}
-                                          </div>
-                                          <button
-                                            type="button"
-                                            title={fullTitle}
-                                            className={`grid h-full min-h-0 w-full grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left text-[0.6875rem] leading-tight transition-colors ${rowRule} ${
-                                              isBrowsing
-                                                ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
-                                                : isHeadBranchTipRow
-                                                  ? "bg-primary/12 hover:bg-primary/18"
-                                                  : "hover:bg-base-300/40"
-                                            }`}
-                                            style={{ gridColumn: "3 / 6", gridRow: idx + 1 }}
-                                            onClick={() => void selectCommit(c.hash)}
-                                            onContextMenu={(e) => {
-                                              if (!nativeContextMenusAvailable()) return;
-                                              e.preventDefault();
-                                              e.stopPropagation();
-                                              openGraphCommitMenu(c.hash, e.clientX, e.clientY);
-                                            }}
-                                          >
-                                            <span className="min-w-0 truncate text-base-content/90">
-                                              {c.subject}
-                                            </span>
-                                            <span
-                                              className="min-w-0 truncate text-[0.62rem] text-base-content/55"
-                                              title={c.author.trim() || undefined}
-                                            >
-                                              {formatAuthorDisplay(c.author) || "—"}
-                                            </span>
-                                            <span
-                                              className="shrink-0 text-right text-[0.6rem] text-base-content/45 tabular-nums"
-                                              title={formatDate(c.date) ?? undefined}
-                                            >
-                                              {rel ?? "—"}
-                                            </span>
-                                          </button>
-                                        </Fragment>
-                                      );
-                                    })}
-                                    <div
-                                      className="relative flex min-h-0 shrink-0 items-start justify-center self-stretch"
-                                      style={{
-                                        gridColumn: 2,
-                                        gridRow: `1 / span ${commits.length}`,
-                                      }}
-                                    >
-                                      {commits.map((c, rowIdx) => (
-                                        <div
-                                          key={`graph-row-bg-${c.hash}`}
-                                          className={`pointer-events-none absolute inset-x-0 z-0 ${
-                                            currentBranchTipHash === c.hash ? "bg-primary/12" : ""
-                                          }`}
-                                          style={{
-                                            top: rowIdx * COMMIT_GRAPH_ROW_HEIGHT,
-                                            height: COMMIT_GRAPH_ROW_HEIGHT,
-                                          }}
-                                          aria-hidden
-                                        />
-                                      ))}
-                                      <div className="relative z-[1]">
-                                        <CommitGraphColumn
-                                          layout={commitGraphLayout}
-                                          commitCount={commits.length}
-                                        />
-                                      </div>
-                                      {commits.map((c, rowIdx) => (
-                                        <div
-                                          key={`graph-ctx-${c.hash}`}
-                                          role="presentation"
-                                          className="absolute left-0 z-[2] w-full cursor-context-menu"
-                                          style={{
-                                            top: rowIdx * COMMIT_GRAPH_ROW_HEIGHT,
-                                            height: COMMIT_GRAPH_ROW_HEIGHT,
-                                          }}
-                                          onContextMenu={(e) => {
-                                            if (!nativeContextMenusAvailable()) return;
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            openGraphCommitMenu(c.hash, e.clientX, e.clientY);
-                                          }}
-                                        />
-                                      ))}
-                                    </div>
-                                  </div>
-                                  {graphCommitsHasMore ? (
-                                    <div className="mt-2 flex justify-center border-t border-base-300/50 pt-2">
-                                      <button
-                                        type="button"
-                                        className="btn btn-outline btn-sm"
-                                        disabled={loadingMoreGraphCommits}
-                                        onClick={() => void loadMoreGraphCommits()}
-                                      >
-                                        {loadingMoreGraphCommits ? (
-                                          <>
-                                            <span className="loading loading-xs loading-spinner" />
-                                            Loading…
-                                          </>
-                                        ) : (
-                                          "Load more commits"
-                                        )}
-                                      </button>
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          <CommitGraphSection
+                            commits={commits}
+                            commitGraphLayout={commitGraphLayout}
+                            localBranches={localBranches}
+                            remoteBranches={remoteBranches}
+                            graphBranchVisible={graphBranchVisible}
+                            currentBranchName={currentBranchName}
+                            currentBranchTipHash={currentBranchTipHash}
+                            commitBrowseHash={commitBrowseHash}
+                            branchBusy={branchBusy}
+                            stashBusy={stashBusy}
+                            commitsSectionTitle={commitsSectionTitle}
+                            graphCommitsHasMore={graphCommitsHasMore}
+                            loadingMoreGraphCommits={loadingMoreGraphCommits}
+                            loadMoreGraphCommits={() => {
+                              void loadMoreGraphCommits();
+                            }}
+                            onRowCommitSelect={(hash) => {
+                              void selectCommit(hash);
+                            }}
+                            openGraphBranchLocalMenu={openGraphBranchLocalMenu}
+                            openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
+                            openGraphStashMenu={openGraphStashMenu}
+                            openGraphCommitMenu={openGraphCommitMenu}
+                          />
                         )}
                       </div>
                     </div>
