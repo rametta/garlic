@@ -1544,7 +1544,14 @@ export default function App({
         },
       });
     },
-    [repo, branchBusy, pullLocalBranch, mergeBranchIntoCurrent, rebaseCurrentBranchOnto, deleteLocalBranch],
+    [
+      repo,
+      branchBusy,
+      pullLocalBranch,
+      mergeBranchIntoCurrent,
+      rebaseCurrentBranchOnto,
+      deleteLocalBranch,
+    ],
   );
 
   const cherryPickCommit = useCallback(
@@ -2073,8 +2080,11 @@ export default function App({
     return commits.find((c) => c.hash === createBranchStartCommit) ?? null;
   }, [commits, createBranchStartCommit]);
 
+  /** Branch/stash sidebar hidden; main column spans 9 — when viewing a commit, file diff, history, or blame. */
   const showExpandedDiff =
-    Boolean(selectedDiffPath || commitDiffPath || fileHistoryPath || fileBlamePath) &&
+    Boolean(
+      commitBrowseHash || selectedDiffPath || commitDiffPath || fileHistoryPath || fileBlamePath,
+    ) &&
     !listsError &&
     Boolean(repo && !repo.error);
 
@@ -2135,7 +2145,11 @@ export default function App({
         aria-live="polite"
         aria-busy={loading}
       >
-        <aside className="col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3">
+        <aside
+          className={`col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3 ${
+            showExpandedDiff ? "hidden" : ""
+          }`}
+        >
           <dialog
             ref={createBranchDialogRef}
             className="modal"
@@ -2359,9 +2373,9 @@ export default function App({
         </aside>
 
         <div
-          className={`col-span-12 flex min-w-0 flex-col gap-4 lg:col-span-6 ${
-            showExpandedDiff ? "min-h-0 min-w-0 lg:flex lg:h-full lg:flex-col" : ""
-          }`}
+          className={`col-span-12 flex min-w-0 flex-col gap-4 ${
+            showExpandedDiff ? "lg:col-span-9" : "lg:col-span-6"
+          } ${showExpandedDiff ? "min-h-0 min-w-0 lg:flex lg:h-full lg:flex-col" : ""}`}
         >
           <section
             className={`card w-full min-w-0 border-base-300 bg-base-100 shadow-md ${
