@@ -1,5 +1,6 @@
 mod active_repo;
 mod git;
+mod open_in_cursor;
 mod settings;
 mod window_title;
 
@@ -132,6 +133,7 @@ pub fn run() {
             settings::set_theme,
             settings::set_openai_settings,
             write_export_text_file,
+            open_in_cursor::open_in_cursor,
         ])
         .setup(|app| {
             app.manage(active_repo::ActiveRepoPath::default());

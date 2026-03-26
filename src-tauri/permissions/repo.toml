@@ -48,4 +48,5 @@ commands.allow = [
   "set_theme",
   "set_openai_settings",
   "write_export_text_file",
+  "open_in_cursor",
 ]

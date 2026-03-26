@@ -182,6 +182,7 @@ export async function popupFileRowContextMenu(
         discardLabel: string;
         onHistory: () => void;
         onBlame: () => void;
+        onOpenInCursor: () => void;
         onDiscard: () => void;
       }
     | {
@@ -212,6 +213,14 @@ export async function popupFileRowContextMenu(
   ];
 
   if (args.source === "worktree") {
+    items.push({
+      id: "file_open_cursor",
+      text: "Open in Cursor",
+      enabled: true,
+      action: () => {
+        args.onOpenInCursor();
+      },
+    });
     items.push({
       id: "file_discard",
       text: args.discardLabel,

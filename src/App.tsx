@@ -1436,6 +1436,16 @@ export default function App({
             source.variant === "unstaged" ? "Discard unstaged changes…" : "Discard staged changes…",
           onHistory: () => void openFileHistory(path),
           onBlame: () => void openFileBlame(path),
+          onOpenInCursor: () => {
+            void (async () => {
+              if (!repo?.path || repo.error) return;
+              try {
+                await invoke("open_in_cursor", { path: repo.path, filePath: path });
+              } catch (e) {
+                setOperationError(invokeErrorMessage(e));
+              }
+            })();
+          },
           onDiscard: () => void discardPathChanges(path, source.variant === "unstaged"),
         });
       } else {
@@ -1447,7 +1457,7 @@ export default function App({
         });
       }
     },
-    [branchBusy, stageCommitBusy, openFileHistory, openFileBlame, discardPathChanges],
+    [branchBusy, stageCommitBusy, openFileHistory, openFileBlame, discardPathChanges, repo],
   );
 
   const onPickFileHistoryCommit = useCallback(
