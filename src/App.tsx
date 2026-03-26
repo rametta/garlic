@@ -1472,13 +1472,20 @@ export default function App({
   const deleteLocalBranch = useCallback(
     async (branchName: string, force: boolean) => {
       if (!repo?.path || repo.error) return;
-      const ok = await ask(
-        force
-          ? `Force-delete local branch "${branchName}"? Unmerged work on this branch will be lost.`
-          : `Delete local branch "${branchName}"?`,
-        { title: "Garlic", kind: "warning" },
-      );
+      let ok = false;
+      try {
+        ok = await ask(
+          force
+            ? `Force-delete local branch "${branchName}"? Unmerged work on this branch will be lost.`
+            : `Delete local branch "${branchName}"?`,
+          { title: "Garlic", kind: "warning" },
+        );
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+        return;
+      }
       if (!ok) return;
+      setBranchContextMenu(null);
       setBranchBusy(`delete:${branchName}`);
       setOperationError(null);
       try {
@@ -2348,13 +2355,14 @@ export default function App({
             }
           >
             {canShowBranches ? (
-              <ul className="menu w-full min-w-0 menu-sm rounded-md bg-transparent p-0">
+              <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
                 {filteredStashes.map((s) => {
                   const stashRowBusy = Boolean(branchBusy) || stashBusy !== null;
                   return (
                     <li key={s.refName} className="min-w-0">
                       <div
-                        className="w-full min-w-0 overflow-x-hidden px-2 py-2"
+                        className="flex w-full min-w-0 flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
+                        title={`${s.refName}: ${s.message}`}
                         onContextMenu={(e) => {
                           if (stashRowBusy) return;
                           e.preventDefault();
@@ -2367,17 +2375,12 @@ export default function App({
                           });
                         }}
                       >
-                        <div
-                          className="flex min-h-0 min-w-0 flex-col gap-0.5 text-left wrap-break-word"
-                          title={`${s.refName}: ${s.message}`}
-                        >
-                          <span className="font-mono text-[0.65rem] leading-snug break-all opacity-70">
-                            {s.refName}
-                          </span>
-                          <span className="text-[0.8125rem] leading-snug wrap-break-word">
-                            {s.message}
-                          </span>
-                        </div>
+                        <span className="font-mono text-[0.65rem] leading-snug break-all opacity-70">
+                          {s.refName}
+                        </span>
+                        <span className="text-[0.8125rem] leading-snug wrap-break-word">
+                          {s.message}
+                        </span>
                       </div>
                     </li>
                   );
@@ -3386,9 +3389,10 @@ export default function App({
                             role="menuitem"
                             className="rounded"
                             disabled={Boolean(branchBusy) || isCurrentLocalBranch}
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
                               const name = m.branchName;
-                              setBranchContextMenu(null);
                               void deleteLocalBranch(name, false);
                             }}
                           >
@@ -3401,9 +3405,10 @@ export default function App({
                             role="menuitem"
                             className="rounded text-error"
                             disabled={Boolean(branchBusy) || isCurrentLocalBranch}
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
                               const name = m.branchName;
-                              setBranchContextMenu(null);
                               void deleteLocalBranch(name, true);
                             }}
                           >

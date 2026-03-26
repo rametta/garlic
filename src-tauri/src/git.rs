@@ -769,7 +769,7 @@ pub fn delete_local_branch(path: String, branch: String, force: bool) -> Result<
         return Err("Branch name cannot be empty.".to_string());
     }
     let flag = if force { "-D" } else { "-d" };
-    git_output(&path_buf, &["branch", flag, name])?;
+    git_output(&path_buf, &["branch", flag, "--", name])?;
     Ok(())
 }
 
