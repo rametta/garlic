@@ -1819,6 +1819,13 @@ export default function App({
   const stagedFiles = workingTreeFiles.filter((f) => f.staged);
   const unstagedPaths = unstagedFiles.map((f) => f.path);
   const stagedPaths = stagedFiles.map((f) => f.path);
+  const wipChangedFileCount = useMemo(() => {
+    const paths = new Set<string>();
+    for (const f of workingTreeFiles) {
+      if (f.staged || f.unstaged) paths.add(f.path);
+    }
+    return paths.size;
+  }, [workingTreeFiles]);
   const commitMsgTrimmed = commitMessage.trim();
   const canCommitAmend = amendLastCommit && (commitMsgTrimmed.length > 0 || hasStagedFiles);
   const canCommitNormal = !amendLastCommit && hasStagedFiles && commitMsgTrimmed.length > 0;
@@ -2620,6 +2627,7 @@ export default function App({
                               void exportFilteredCommitsList();
                             }}
                             exportGraphCommitsDisabled={graphExportCommits.length === 0}
+                            wipChangedFileCount={wipChangedFileCount}
                           />
                         )}
                       </div>
@@ -2756,53 +2764,55 @@ export default function App({
                 className="flex min-h-0 min-w-0 flex-[1_1_0%] flex-col border-t border-base-300 bg-base-100"
                 aria-labelledby="sidebar-commit-heading"
               >
-                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2
-                      id="sidebar-commit-heading"
-                      className="m-0 text-xs font-semibold tracking-wide uppercase opacity-80"
-                    >
-                      Commit
-                    </h2>
-                    <button
-                      type="button"
-                      className="btn shrink-0 gap-1 px-2 btn-ghost btn-xs"
-                      disabled={!canPush}
-                      title="Push the current branch to origin"
-                      onClick={() => void onPushToOrigin()}
-                    >
-                      {pushBusy ? (
-                        <span className="loading loading-xs loading-spinner" />
-                      ) : (
-                        <>
-                          <span aria-hidden>↑</span>
-                          <span className="hidden sm:inline">Push</span>
-                        </>
-                      )}
-                    </button>
+                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
+                  <div className="flex shrink-0 flex-col gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h2
+                        id="sidebar-commit-heading"
+                        className="m-0 text-xs font-semibold tracking-wide uppercase opacity-80"
+                      >
+                        Commit
+                      </h2>
+                      <button
+                        type="button"
+                        className="btn shrink-0 gap-1 px-2 btn-ghost btn-xs"
+                        disabled={!canPush}
+                        title="Push the current branch to origin"
+                        onClick={() => void onPushToOrigin()}
+                      >
+                        {pushBusy ? (
+                          <span className="loading loading-xs loading-spinner" />
+                        ) : (
+                          <>
+                            <span aria-hidden>↑</span>
+                            <span className="hidden sm:inline">Push</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <div className="flex cursor-pointer items-center gap-2.5">
+                      <input
+                        id="commit-amend-checkbox"
+                        type="checkbox"
+                        className="checkbox checkbox-sm"
+                        checked={amendLastCommit}
+                        disabled={!canShowBranches || stageCommitBusy || commitPushBusy}
+                        onChange={(e) => {
+                          setAmendLastCommit(e.target.checked);
+                        }}
+                      />
+                      <label
+                        htmlFor="commit-amend-checkbox"
+                        className="cursor-pointer text-xs leading-snug text-base-content/90"
+                      >
+                        Amend last commit
+                      </label>
+                    </div>
                   </div>
-                  <div className="flex cursor-pointer items-center gap-2.5">
-                    <input
-                      id="commit-amend-checkbox"
-                      type="checkbox"
-                      className="checkbox checkbox-sm"
-                      checked={amendLastCommit}
-                      disabled={!canShowBranches || stageCommitBusy || commitPushBusy}
-                      onChange={(e) => {
-                        setAmendLastCommit(e.target.checked);
-                      }}
-                    />
-                    <label
-                      htmlFor="commit-amend-checkbox"
-                      className="cursor-pointer text-xs leading-snug text-base-content/90"
-                    >
-                      Amend last commit
-                    </label>
-                  </div>
-                  <label className="form-control w-full gap-1">
-                    <span className="label-text text-xs font-medium">Message</span>
+                  <label className="form-control flex min-h-0 min-w-0 flex-1 flex-col gap-1">
+                    <span className="label-text shrink-0 text-xs font-medium">Message</span>
                     <textarea
-                      className="textarea-bordered textarea min-h-18 w-full resize-y font-sans text-sm textarea-sm"
+                      className="textarea-bordered textarea min-h-0 w-full flex-1 resize-none overflow-y-auto font-sans text-sm textarea-sm"
                       placeholder={
                         amendLastCommit
                           ? "New message, or leave empty to keep the previous message (requires staged changes)"
@@ -2813,10 +2823,9 @@ export default function App({
                       onChange={(e) => {
                         setCommitMessage(e.target.value);
                       }}
-                      rows={3}
                     />
                   </label>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
                     <button
                       type="button"
                       className="btn btn-outline btn-sm"

@@ -41,6 +41,8 @@ export interface CommitGraphSectionProps {
   onClearGraphFilters: () => void;
   onExportGraphCommits: () => void;
   exportGraphCommitsDisabled: boolean;
+  /** Count of paths with staged or unstaged changes; when &gt; 0, a WIP row is shown above the graph. */
+  wipChangedFileCount: number;
 }
 
 type TipsAtHash = { locals: LocalBranchEntry[]; remotes: RemoteBranchEntry[] };
@@ -290,6 +292,53 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
 
 const VIRTUAL_OVERSCAN = 12;
 
+const WipGraphRow = memo(function WipGraphRow({
+  changedFileCount,
+  graphWidthPx,
+}: {
+  changedFileCount: number;
+  graphWidthPx: number;
+}) {
+  const rowRule = "border-b border-base-300/40";
+  return (
+    <>
+      <div
+        className={`flex min-h-0 min-w-0 shrink-0 items-center px-0.5 ${rowRule}`}
+        style={{ width: BRANCH_COL, maxWidth: BRANCH_COL }}
+        aria-hidden
+      />
+      <div className="shrink-0" style={{ width: graphWidthPx }} aria-hidden />
+      <div
+        className={`grid h-full min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left text-[0.6875rem] leading-tight ${rowRule} text-base-content/80`}
+      >
+        <span
+          className="min-w-0 truncate font-mono text-base-content/90"
+          title="Uncommitted changes"
+        >
+          // WIP
+        </span>
+        <span className="min-w-0 truncate text-[0.62rem] text-base-content/45">—</span>
+        <span className="flex shrink-0 items-center justify-end gap-1 text-right text-[0.6rem] text-base-content/55 tabular-nums">
+          <svg
+            className="h-3.5 w-3.5 shrink-0 opacity-80"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+          </svg>
+          <span>{changedFileCount}</span>
+        </span>
+      </div>
+    </>
+  );
+});
+
 export function CommitGraphSection({
   commits,
   commitGraphLayout,
@@ -321,6 +370,7 @@ export function CommitGraphSection({
   onClearGraphFilters,
   onExportGraphCommits,
   exportGraphCommitsDisabled,
+  wipChangedFileCount,
 }: CommitGraphSectionProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const authorFilterWrapRef = useRef<HTMLDivElement>(null);
@@ -352,8 +402,12 @@ export function CommitGraphSection({
     return commits.map((c) => computeRowLaneMeta(commitGraphLayout, tipsByHash.get(c.hash)));
   }, [commits, commitGraphLayout, tipsByHash]);
 
+  const showWipRow = wipChangedFileCount > 0;
+  const wipOffset = showWipRow ? 1 : 0;
+  const virtualRowCount = commits.length + wipOffset;
+
   const rowVirtualizer = useVirtualizer({
-    count: commits.length,
+    count: virtualRowCount,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => COMMIT_GRAPH_ROW_HEIGHT,
     overscan: VIRTUAL_OVERSCAN,
@@ -531,7 +585,7 @@ export function CommitGraphSection({
         </div>
       </div>
       <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto">
-        {commits.length === 0 ? (
+        {commits.length === 0 && !showWipRow ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-40 flex-1 flex-col items-center justify-center px-3 py-8">
               <p className="m-0 max-w-md text-center text-xs text-base-content/60">
@@ -559,7 +613,19 @@ export function CommitGraphSection({
                 }}
               >
                 {virtualRows.map((v) => {
-                  const c = commits[v.index];
+                  if (showWipRow && v.index === 0) {
+                    return (
+                      <div
+                        key="graph-bg-wip"
+                        className="absolute right-0 left-0 z-0"
+                        style={{ top: v.start, height: v.size }}
+                        aria-hidden
+                      />
+                    );
+                  }
+                  const commitIdx = v.index - wipOffset;
+                  const c = commits[commitIdx];
+                  if (!c) return null;
                   return (
                     <div
                       key={`graph-bg-${c.hash}`}
@@ -572,11 +638,32 @@ export function CommitGraphSection({
                   );
                 })}
                 <div className="relative z-1">
-                  <CommitGraphColumn layout={commitGraphLayout} commitCount={commits.length} />
+                  <CommitGraphColumn
+                    layout={commitGraphLayout}
+                    commitCount={commits.length}
+                    wipRowAbove={showWipRow}
+                  />
                 </div>
               </div>
               {virtualRows.map((v) => {
-                const c = commits[v.index];
+                if (showWipRow && v.index === 0) {
+                  return (
+                    <div
+                      key="graph-ctx-wip"
+                      role="presentation"
+                      className="absolute z-2"
+                      style={{
+                        left: graphLeft,
+                        width: graphWidthPx,
+                        top: v.start,
+                        height: v.size,
+                      }}
+                    />
+                  );
+                }
+                const commitIdx = v.index - wipOffset;
+                const c = commits[commitIdx];
+                if (!c) return null;
                 return (
                   <div
                     key={`graph-ctx-${c.hash}`}
@@ -598,8 +685,26 @@ export function CommitGraphSection({
                 );
               })}
               {virtualRows.map((v) => {
-                const idx = v.index;
-                const c = commits[idx];
+                if (showWipRow && v.index === 0) {
+                  return (
+                    <div
+                      key="graph-row-wip"
+                      className="absolute top-0 right-0 left-0 flex gap-x-1.5 px-0.5"
+                      style={{
+                        top: v.start,
+                        height: v.size,
+                      }}
+                    >
+                      <WipGraphRow
+                        changedFileCount={wipChangedFileCount}
+                        graphWidthPx={graphWidthPx}
+                      />
+                    </div>
+                  );
+                }
+                const commitIdx = v.index - wipOffset;
+                const c = commits[commitIdx];
+                if (!c) return null;
                 return (
                   <div
                     key={v.key}
@@ -611,10 +716,10 @@ export function CommitGraphSection({
                   >
                     <CommitGraphVirtualRow
                       c={c}
-                      idx={idx}
+                      idx={commitIdx}
                       commitsLength={commits.length}
                       graphWidthPx={graphWidthPx}
-                      laneMeta={rowLaneMetas[idx]}
+                      laneMeta={rowLaneMetas[commitIdx]}
                       commitBrowseHash={commitBrowseHash}
                       currentBranchTipHash={currentBranchTipHash}
                       currentBranchName={currentBranchName}
