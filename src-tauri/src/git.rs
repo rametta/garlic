@@ -390,16 +390,23 @@ fn branch_upstream_abbrev(workdir: &Path, branch: &str) -> Option<String> {
     Some(s.to_string())
 }
 
-/// Ahead/behind for a local branch vs its configured upstream (two-dot ranges).
-fn branch_upstream_ahead_behind(workdir: &Path, branch: &str) -> Option<(u32, u32)> {
-    let up = format!("{branch}@{{upstream}}");
-    git_output_allow_fail(workdir, &["rev-parse", "--verify", &up])?;
-    let ahead_range = format!("{branch}@{{upstream}}..{branch}");
-    let behind_range = format!("{branch}..{branch}@{{upstream}}");
-    let ahead_s = git_output_allow_fail(workdir, &["rev-list", "--count", &ahead_range])?;
-    let behind_s = git_output_allow_fail(workdir, &["rev-list", "--count", &behind_range])?;
-    let ahead = ahead_s.trim().parse().ok()?;
-    let behind = behind_s.trim().parse().ok()?;
+/// Parses `%(upstream:track)` from `git for-each-ref` (`[ahead N]`, `[behind N]`, both, empty = in sync, `[gone]`).
+fn parse_upstream_track(s: &str) -> Option<(u32, u32)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Some((0, 0));
+    }
+    if s.contains("gone") {
+        return None;
+    }
+    fn num_after(s: &str, key: &str) -> Option<u32> {
+        let i = s.find(key)?;
+        let rest = s[i + key.len()..].trim_start();
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().ok()
+    }
+    let ahead = num_after(s, "ahead").unwrap_or(0);
+    let behind = num_after(s, "behind").unwrap_or(0);
     Some((ahead, behind))
 }
 
@@ -417,51 +424,47 @@ fn ensure_git_repo(workdir: &Path) -> Result<(), String> {
 }
 
 /// Local branches with ahead/behind counts vs configured upstream (if any).
+/// One `git for-each-ref` call (upstream + track via `%(upstream:track)`); no per-branch subprocesses.
 #[tauri::command]
 pub fn list_local_branches(path: String) -> Result<Vec<LocalBranchEntry>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    // `for-each-ref` does not expand `%x1f` (it prints the literal); use a real tab.
     let out = git_output(
         &path_buf,
         &[
             "for-each-ref",
-            "--format=%(objectname)\t%(refname:short)",
+            "--format=%(objectname)\t%(refname:short)\t%(upstream:short)\t%(upstream:track)",
             "refs/heads/",
         ],
     )?;
-    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut entries = Vec::new();
     for line in out.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let (tip_hash, name) = if let Some((a, b)) = line.split_once('\t') {
-            (a.trim().to_string(), b.trim().to_string())
-        } else {
-            // Fallback: first token is object id, rest is ref short name.
-            let mut it = line.split_whitespace();
-            let Some(oid) = it.next() else {
-                continue;
-            };
-            let rest: String = it.collect::<Vec<_>>().join(" ");
-            if rest.is_empty() {
-                continue;
-            }
-            (oid.to_string(), rest)
+        let mut parts = line.splitn(4, '\t');
+        let Some(tip_hash) = parts.next().map(str::trim) else {
+            continue;
         };
-        if !name.is_empty() && !tip_hash.is_empty() {
-            pairs.push((name, tip_hash));
+        let Some(name) = parts.next().map(str::trim) else {
+            continue;
+        };
+        let upstream_raw = parts.next().unwrap_or("").trim();
+        let track_raw = parts.next().unwrap_or("").trim();
+        if name.is_empty() || tip_hash.is_empty() {
+            continue;
         }
-    }
-    pairs.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let mut entries = Vec::with_capacity(pairs.len());
-    for (name, tip_hash) in pairs {
-        let upstream_name = branch_upstream_abbrev(&path_buf, &name);
-        let (ahead, behind) = match branch_upstream_ahead_behind(&path_buf, &name) {
-            Some((a, b)) => (Some(a), Some(b)),
-            None => (None, None),
+        let tip_hash = tip_hash.to_string();
+        let name = name.to_string();
+        let (upstream_name, ahead, behind) = if upstream_raw.is_empty() {
+            (None, None, None)
+        } else {
+            let upstream_name = Some(upstream_raw.to_string());
+            match parse_upstream_track(track_raw) {
+                None => (upstream_name, None, None),
+                Some((a, b)) => (upstream_name, Some(a), Some(b)),
+            }
         };
         entries.push(LocalBranchEntry {
             name,
@@ -471,6 +474,7 @@ pub fn list_local_branches(path: String) -> Result<Vec<LocalBranchEntry>, String
             behind,
         });
     }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)
 }
 
@@ -656,7 +660,11 @@ pub fn list_branch_commits(path: String) -> Result<GraphCommitsPage, String> {
 /// Stash entries (`stash@{n}`) are merged into the log so stashes appear by commit date with branch history.
 /// Use `skip` 0 for the first page, then `skip` = loaded count for "load more".
 #[tauri::command]
-pub fn list_graph_commits(path: String, refs: Vec<String>, skip: u32) -> Result<GraphCommitsPage, String> {
+pub fn list_graph_commits(
+    path: String,
+    refs: Vec<String>,
+    skip: u32,
+) -> Result<GraphCommitsPage, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let mut clean: Vec<String> = refs
@@ -895,15 +903,27 @@ fn line_stat_untracked_file(workdir: &Path, rel: &str) -> LineStat {
 pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let staged_set = staged_paths(&path_buf)?.into_iter().collect::<HashSet<_>>();
-    let unstaged_set = unstaged_paths(&path_buf)?
-        .into_iter()
-        .collect::<HashSet<_>>();
-    let untracked = untracked_paths(&path_buf)?
-        .into_iter()
-        .collect::<HashSet<_>>();
-    let staged_map = numstat_line_stats(&path_buf, &["diff", "--cached", "--numstat"])?;
-    let unstaged_map = numstat_line_stats(&path_buf, &["diff", "--numstat"])?;
+    let (staged_set, unstaged_set, untracked, staged_map, unstaged_map) =
+        std::thread::scope(|s| {
+            let p = &path_buf;
+            let h1 = s.spawn(|| staged_paths(p).map(|v| v.into_iter().collect::<HashSet<_>>()));
+            let h2 = s.spawn(|| unstaged_paths(p).map(|v| v.into_iter().collect::<HashSet<_>>()));
+            let h3 = s.spawn(|| untracked_paths(p).map(|v| v.into_iter().collect::<HashSet<_>>()));
+            let h4 = s.spawn(|| numstat_line_stats(p, &["diff", "--cached", "--numstat"]));
+            let h5 = s.spawn(|| numstat_line_stats(p, &["diff", "--numstat"]));
+            let staged_set = h1.join().unwrap()?;
+            let unstaged_set = h2.join().unwrap()?;
+            let untracked = h3.join().unwrap()?;
+            let staged_map = h4.join().unwrap()?;
+            let unstaged_map = h5.join().unwrap()?;
+            Ok::<_, String>((
+                staged_set,
+                unstaged_set,
+                untracked,
+                staged_map,
+                unstaged_map,
+            ))
+        })?;
     let mut paths: HashSet<String> = HashSet::new();
     paths.extend(staged_set.iter().cloned());
     paths.extend(unstaged_set.iter().cloned());
@@ -1007,7 +1027,14 @@ pub fn discard_path_changes(
     } else {
         git_output(
             &path_buf,
-            &["restore", "--source=HEAD", "--staged", "--worktree", "--", rel],
+            &[
+                "restore",
+                "--source=HEAD",
+                "--staged",
+                "--worktree",
+                "--",
+                rel,
+            ],
         )?;
     }
     Ok(())
@@ -1173,10 +1200,7 @@ pub fn list_commit_files(
     if hash.is_empty() {
         return Err("Commit hash cannot be empty.".to_string());
     }
-    let out = git_output(
-        &path_buf,
-        &["show", "--numstat", "--format=", hash],
-    )?;
+    let out = git_output(&path_buf, &["show", "--numstat", "--format=", hash])?;
     let stat_map = parse_numstat_output(&out);
     let mut paths: Vec<String> = stat_map.keys().cloned().collect();
     paths.sort();
@@ -1238,11 +1262,7 @@ pub fn get_commit_signature_status(
 
 /// True when `rev` has at least two parents (merge commit, including stash WIPs).
 fn merge_commit_has_second_parent(workdir: &Path, rev: &str) -> bool {
-    git_output(
-        workdir,
-        &["rev-parse", "--verify", &format!("{rev}^2")],
-    )
-    .is_ok()
+    git_output(workdir, &["rev-parse", "--verify", &format!("{rev}^2")]).is_ok()
 }
 
 /// Unified diff for one file in a given commit, patch only (no commit headers).
@@ -1334,7 +1354,9 @@ pub fn stash_push(path: String, message: Option<String>) -> Result<(), String> {
     if let Some(m) = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         cmd.arg("-m").arg(m);
     }
-    let output = cmd.output().map_err(|e| format!("Could not run git: {e}"))?;
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Could not run git: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
@@ -1405,8 +1427,7 @@ pub fn pull_local_branch(path: String, branch: String) -> Result<(), String> {
         return Ok(());
     }
     git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
-        "No upstream configured for this branch and no remote named \"origin\"."
-            .to_string()
+        "No upstream configured for this branch and no remote named \"origin\".".to_string()
     })?;
     git_output(&path_buf, &["fetch", "origin", &format!("{name}:{name}")])?;
     Ok(())

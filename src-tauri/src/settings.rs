@@ -137,8 +137,30 @@ fn restore_repo_snapshot(
                 });
             }
 
-            let locals = git::list_local_branches(path.clone());
-            let remotes = git::list_remote_branches(path.clone());
+            let (locals, remotes, working_tree, stashes) = std::thread::scope(|s| {
+                let h1 = s.spawn({
+                    let p = path.clone();
+                    move || git::list_local_branches(p)
+                });
+                let h2 = s.spawn({
+                    let p = path.clone();
+                    move || git::list_remote_branches(p)
+                });
+                let h3 = s.spawn({
+                    let p = path.clone();
+                    move || git::list_working_tree_files(p)
+                });
+                let h4 = s.spawn({
+                    let p = path.clone();
+                    move || git::list_stashes(p)
+                });
+                (
+                    h1.join().unwrap(),
+                    h2.join().unwrap(),
+                    h3.join().unwrap(),
+                    h4.join().unwrap(),
+                )
+            });
             let commits_page = match (&locals, &remotes) {
                 (Ok(loc), Ok(rem)) => {
                     let mut refs: Vec<String> = loc.iter().map(|b| b.name.clone()).collect();
@@ -149,8 +171,6 @@ fn restore_repo_snapshot(
                 }
                 _ => git::list_branch_commits(path.clone()),
             };
-            let working_tree = git::list_working_tree_files(path.clone());
-            let stashes = git::list_stashes(path.clone());
 
             let lists_error = locals
                 .as_ref()
