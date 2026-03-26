@@ -16,6 +16,8 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
+    // Tauri loads the UI in the native webview; do not open a browser tab.
+    open: false,
     host: host || false,
     hmr: host
       ? {
