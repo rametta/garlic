@@ -437,15 +437,15 @@ function BranchPanel({
   children: ReactNode;
 }) {
   return (
-    <div className="card border-base-300 bg-base-100 shadow-sm">
-      <div className="card-body min-h-0 gap-0 p-0">
+    <div className="card flex min-h-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm">
+      <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-3 py-2">
           <h2 className="m-0 card-title min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-70">
             {title}
           </h2>
           {headerRight ? <div className="shrink-0">{headerRight}</div> : null}
         </div>
-        <div className="max-h-[40vh] min-h-16 overflow-y-auto p-2">
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {empty ? (
             <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
           ) : (
@@ -2139,14 +2139,14 @@ export default function App({
   }, [currentBranchName, localBranches]);
 
   return (
-    <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
+    <main className="box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 px-4 pt-4 pb-4 text-base-content antialiased [font-synthesis:none]">
       <div
-        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 gap-4 lg:min-h-[calc(100vh-5rem)] lg:items-stretch"
+        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 gap-4 lg:min-h-0 lg:grid-rows-1 lg:items-stretch"
         aria-live="polite"
         aria-busy={loading}
       >
         <aside
-          className={`col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3 ${
+          className={`col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:col-span-3 lg:h-full lg:min-h-0 ${
             showExpandedDiff ? "hidden" : ""
           }`}
         >
@@ -2263,132 +2263,126 @@ export default function App({
             </label>
           ) : null}
 
-          <BranchPanel
-            title="Local branches"
-            empty={canShowBranches && filteredLocalBranches.length === 0}
-            emptyHint={localBranchesEmptyHint}
-            headerRight={
-              canShowBranches ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs"
-                  disabled={Boolean(branchBusy)}
-                  onClick={() => {
-                    openCreateBranchDialog();
-                  }}
-                >
-                  New branch
-                </button>
-              ) : null
-            }
-          >
-            {canShowBranches ? (
-              <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                {renderLocalBranchTrieChildren(
-                  localBranchTrieRoot,
-                  currentBranchName,
-                  branchBusy,
-                  (name) => {
-                    void onCheckoutLocal(name);
-                  },
-                  (branchName, clientX, clientY) => {
-                    runBranchSidebarContextMenu({ kind: "local", branchName }, clientX, clientY);
-                  },
-                  branchGraphControls,
-                )}
-              </ul>
-            ) : null}
-          </BranchPanel>
+          <div className="flex min-h-0 flex-1 flex-col gap-3 lg:min-h-0">
+            <BranchPanel
+              title="Local branches"
+              empty={canShowBranches && filteredLocalBranches.length === 0}
+              emptyHint={localBranchesEmptyHint}
+              headerRight={
+                canShowBranches ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    disabled={Boolean(branchBusy)}
+                    onClick={() => {
+                      openCreateBranchDialog();
+                    }}
+                  >
+                    New branch
+                  </button>
+                ) : null
+              }
+            >
+              {canShowBranches ? (
+                <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
+                  {renderLocalBranchTrieChildren(
+                    localBranchTrieRoot,
+                    currentBranchName,
+                    branchBusy,
+                    (name) => {
+                      void onCheckoutLocal(name);
+                    },
+                    (branchName, clientX, clientY) => {
+                      runBranchSidebarContextMenu({ kind: "local", branchName }, clientX, clientY);
+                    },
+                    branchGraphControls,
+                  )}
+                </ul>
+              ) : null}
+            </BranchPanel>
 
-          <BranchPanel
-            title="Remote branches"
-            empty={canShowBranches && filteredRemoteBranches.length === 0}
-            emptyHint={remoteBranchesEmptyHint}
-          >
-            {canShowBranches ? (
-              <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                {renderRemoteBranchTrieChildren(
-                  remoteBranchTrieRoot,
-                  branchBusy,
-                  (remoteRef) => {
-                    void onCreateFromRemote(remoteRef);
-                  },
-                  branchGraphControls,
-                  (fullRef, clientX, clientY) => {
-                    runBranchSidebarContextMenu({ kind: "remote", fullRef }, clientX, clientY);
-                  },
-                )}
-              </ul>
-            ) : null}
-          </BranchPanel>
+            <BranchPanel
+              title="Remote branches"
+              empty={canShowBranches && filteredRemoteBranches.length === 0}
+              emptyHint={remoteBranchesEmptyHint}
+            >
+              {canShowBranches ? (
+                <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
+                  {renderRemoteBranchTrieChildren(
+                    remoteBranchTrieRoot,
+                    branchBusy,
+                    (remoteRef) => {
+                      void onCreateFromRemote(remoteRef);
+                    },
+                    branchGraphControls,
+                    (fullRef, clientX, clientY) => {
+                      runBranchSidebarContextMenu({ kind: "remote", fullRef }, clientX, clientY);
+                    },
+                  )}
+                </ul>
+              ) : null}
+            </BranchPanel>
 
-          <BranchPanel
-            title="Stashes"
-            empty={canShowBranches && filteredStashes.length === 0}
-            emptyHint={stashesEmptyHint}
-            headerRight={
-              canShowBranches ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs"
-                  disabled={Boolean(branchBusy) || stashBusy !== null}
-                  onClick={() => {
-                    void onStashPush();
-                  }}
-                >
-                  {stashBusy === "push" ? "…" : "Stash"}
-                </button>
-              ) : null
-            }
-          >
-            {canShowBranches ? (
-              <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
-                {filteredStashes.map((s) => {
-                  const stashRowBusy = Boolean(branchBusy) || stashBusy !== null;
-                  return (
-                    <li key={s.refName} className="min-w-0">
-                      <div
-                        className="flex w-full min-w-0 flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
-                        title={`${s.refName}: ${s.message}`}
-                        onContextMenu={(e) => {
-                          if (stashRowBusy) return;
-                          if (!nativeContextMenusAvailable()) return;
-                          e.preventDefault();
-                          openGraphStashMenu(s.refName, e.clientX, e.clientY);
-                        }}
-                      >
-                        <span className="font-mono text-[0.65rem] leading-snug break-all opacity-70">
-                          {s.refName}
-                        </span>
-                        <span className="text-[0.8125rem] leading-snug wrap-break-word">
-                          {s.message}
-                        </span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : null}
-          </BranchPanel>
+            <BranchPanel
+              title="Stashes"
+              empty={canShowBranches && filteredStashes.length === 0}
+              emptyHint={stashesEmptyHint}
+              headerRight={
+                canShowBranches ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    disabled={Boolean(branchBusy) || stashBusy !== null}
+                    onClick={() => {
+                      void onStashPush();
+                    }}
+                  >
+                    {stashBusy === "push" ? "…" : "Stash"}
+                  </button>
+                ) : null
+              }
+            >
+              {canShowBranches ? (
+                <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
+                  {filteredStashes.map((s) => {
+                    const stashRowBusy = Boolean(branchBusy) || stashBusy !== null;
+                    return (
+                      <li key={s.refName} className="min-w-0">
+                        <div
+                          className="flex w-full min-w-0 flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
+                          title={`${s.refName}: ${s.message}`}
+                          onContextMenu={(e) => {
+                            if (stashRowBusy) return;
+                            if (!nativeContextMenusAvailable()) return;
+                            e.preventDefault();
+                            openGraphStashMenu(s.refName, e.clientX, e.clientY);
+                          }}
+                        >
+                          <span className="font-mono text-[0.65rem] leading-snug break-all opacity-70">
+                            {s.refName}
+                          </span>
+                          <span className="text-[0.8125rem] leading-snug wrap-break-word">
+                            {s.message}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </BranchPanel>
+          </div>
         </aside>
 
         <div
-          className={`col-span-12 flex min-w-0 flex-col gap-4 ${
+          className={`col-span-12 flex min-h-0 min-w-0 flex-col gap-4 lg:h-full lg:min-h-0 ${
             showExpandedDiff ? "lg:col-span-9" : "lg:col-span-6"
-          } ${showExpandedDiff ? "min-h-0 min-w-0 lg:flex lg:h-full lg:flex-col" : ""}`}
+          }`}
         >
-          <section
-            className={`card w-full min-w-0 border-base-300 bg-base-100 shadow-md ${
-              showExpandedDiff ? "flex min-h-0 min-w-0 flex-1 flex-col" : ""
-            }`}
-          >
-            <div
-              className={`card-body px-6 py-5 ${
-                showExpandedDiff ? "flex min-h-0 min-w-0 flex-1 flex-col gap-0" : ""
-              }`}
-            >
+          <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-md">
+            <div className="card-body flex min-h-0 flex-1 flex-col gap-0 px-6 py-5">
               {loading ? (
-                <div className="flex flex-col items-center justify-center gap-3 py-4">
+                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 py-4">
                   <span className="loading loading-md loading-spinner text-primary" />
                   <p className="m-0 text-center text-[0.9375rem] text-base-content/80">
                     Loading repository…
@@ -2410,638 +2404,659 @@ export default function App({
                       </dl>
                     </>
                   ) : (
-                    <>
+                    <div className="flex min-h-0 flex-1 flex-col">
                       {listsError ? (
-                        <div role="alert" className="mb-3 alert text-sm alert-error">
+                        <div role="alert" className="mb-3 alert shrink-0 text-sm alert-error">
                           <span>{listsError}</span>
                         </div>
                       ) : null}
                       {operationError ? (
-                        <div role="alert" className="mb-3 alert text-sm alert-error">
+                        <div role="alert" className="mb-3 alert shrink-0 text-sm alert-error">
                           <span className="wrap-break-word whitespace-pre-wrap">
                             {operationError}
                           </span>
                         </div>
                       ) : null}
 
-                      {!listsError && selectedDiffPath ? (
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
-                            <div className="min-w-0">
-                              <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
-                                Diff
-                              </h2>
-                              <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
-                                {selectedDiffPath}
-                              </code>
-                              {selectedDiffSide ? (
-                                <p className="mt-1 mb-0 text-xs text-base-content/65">
-                                  {selectedDiffSide === "staged"
-                                    ? "Staged changes"
-                                    : "Unstaged changes"}
-                                </p>
-                              ) : null}
-                            </div>
-                            <button
-                              type="button"
-                              className="btn shrink-0 btn-sm btn-primary"
-                              onClick={clearDiffSelection}
-                            >
-                              Back to commits
-                            </button>
-                          </div>
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                            {diffLoading ? (
-                              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
-                                <span className="loading loading-md loading-spinner text-primary" />
-                                <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
-                              </div>
-                            ) : diffError ? (
-                              <div role="alert" className="alert text-sm alert-error">
-                                <span className="wrap-break-word">{diffError}</span>
-                              </div>
-                            ) : (
-                              <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
-                                {diffStagedText !== null ? (
-                                  <div className="mb-8 last:mb-0">
-                                    <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                                      Staged
-                                    </div>
-                                    <UnifiedDiff
-                                      text={diffStagedText}
-                                      emptyLabel="(no staged diff)"
-                                    />
-                                  </div>
-                                ) : null}
-                                {diffUnstagedText !== null ? (
-                                  <div>
-                                    <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                                      Unstaged
-                                    </div>
-                                    <UnifiedDiff
-                                      text={diffUnstagedText}
-                                      emptyLabel="(no unstaged diff)"
-                                    />
-                                  </div>
-                                ) : null}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ) : !listsError && fileBlamePath ? (
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
-                            <div className="min-w-0">
-                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                Blame
-                              </h2>
-                              <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
-                                {fileBlamePath}
-                              </code>
-                            </div>
-                            <button
-                              type="button"
-                              className="btn shrink-0 btn-sm btn-primary"
-                              onClick={() => {
-                                clearFileToolView();
-                              }}
-                            >
-                              Back to commits
-                            </button>
-                          </div>
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                            {fileBlameLoading ? (
-                              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
-                                <span className="loading loading-md loading-spinner text-primary" />
-                                <p className="m-0 text-sm text-base-content/70">Loading blame…</p>
-                              </div>
-                            ) : fileBlameError ? (
-                              <div role="alert" className="alert text-sm alert-error">
-                                <span className="wrap-break-word">{fileBlameError}</span>
-                              </div>
-                            ) : (
-                              <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
-                                {fileBlameText ?? ""}
-                              </pre>
-                            )}
-                          </div>
-                        </div>
-                      ) : !listsError && fileHistoryPath ? (
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
-                            <div className="min-w-0">
-                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                File history
-                              </h2>
-                              <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
-                                {fileHistoryPath}
-                              </code>
-                              <p className="mt-1 mb-0 text-xs text-base-content/60">
-                                Commits that touched this path (newest first). Click a row to open
-                                the diff for that revision.
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              className="btn shrink-0 btn-sm btn-primary"
-                              onClick={() => {
-                                clearFileToolView();
-                              }}
-                            >
-                              Back to commits
-                            </button>
-                          </div>
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                            {fileHistoryLoading ? (
-                              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
-                                <span className="loading loading-md loading-spinner text-primary" />
-                                <p className="m-0 text-sm text-base-content/70">Loading history…</p>
-                              </div>
-                            ) : fileHistoryError ? (
-                              <div role="alert" className="alert text-sm alert-error">
-                                <span className="wrap-break-word">{fileHistoryError}</span>
-                              </div>
-                            ) : fileHistoryCommits.length === 0 ? (
-                              <p className="m-0 text-center text-sm text-base-content/60">
-                                No commits found for this file
-                              </p>
-                            ) : (
-                              <ul className="m-0 flex max-h-[min(60vh,32rem)] list-none flex-col gap-1.5 overflow-y-auto pr-0.5">
-                                {fileHistoryCommits.map((c) => (
-                                  <li key={c.hash}>
-                                    <button
-                                      type="button"
-                                      className="flex w-full flex-col gap-0.5 rounded-lg border border-base-300/50 bg-base-200/40 px-3 py-2 text-left transition-colors hover:border-base-300 hover:bg-base-300/35"
-                                      onClick={() => void onPickFileHistoryCommit(c.hash)}
-                                    >
-                                      <span className="font-mono text-[0.65rem] text-base-content/70">
-                                        {c.shortHash}
-                                      </span>
-                                      <span className="text-sm leading-snug text-base-content/95">
-                                        {c.subject}
-                                      </span>
-                                      <span className="text-[0.65rem] text-base-content/55">
-                                        {formatAuthorDisplay(c.author)} ·{" "}
-                                        {formatRelativeShort(c.date) ?? formatDate(c.date) ?? "—"}
-                                      </span>
-                                    </button>
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                          </div>
-                        </div>
-                      ) : !listsError && commitDiffPath && commitBrowseHash ? (
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-1.5">
-                            <button
-                              type="button"
-                              className="btn shrink-0 btn-xs btn-primary"
-                              onClick={backFromCommitFileDiff}
-                            >
-                              Back to files
-                            </button>
-                            <div className="min-w-0 flex-1 text-right">
-                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                Commit diff
-                              </h2>
-                              <code className="mt-0.5 block font-mono text-[0.65rem] leading-tight wrap-break-word text-base-content/85">
-                                {commitDiffPath}
-                              </code>
-                              <p className="mt-0.5 mb-0 font-mono text-[0.6rem] text-base-content/50">
-                                {commits.find((x) => x.hash === commitBrowseHash)?.shortHash ??
-                                  commitBrowseHash.slice(0, 7)}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                            {commitDiffLoading ? (
-                              <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
-                                <span className="loading loading-md loading-spinner text-primary" />
-                                <p className="m-0 text-xs text-base-content/70">Loading diff…</p>
-                              </div>
-                            ) : commitDiffError ? (
-                              <div role="alert" className="alert py-2 text-xs alert-error">
-                                <span className="wrap-break-word">{commitDiffError}</span>
-                              </div>
-                            ) : (
-                              <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
-                                <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
-                                  Patch
-                                </div>
-                                <UnifiedDiff
-                                  text={commitDiffText ?? ""}
-                                  emptyLabel="(no diff for this file)"
-                                />
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ) : !listsError && commitBrowseHash ? (
-                        <div className="mb-4 flex min-h-0 min-w-0 flex-col gap-2">
-                          <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
-                            <button
-                              type="button"
-                              className="btn shrink-0 btn-xs btn-primary"
-                              onClick={clearCommitBrowse}
-                            >
-                              Back to commits
-                            </button>
-                            <div className="max-w-[min(100%,20rem)] min-w-0 flex-1 text-right">
-                              {commitBrowseMeta?.author.trim() ? (
-                                <p className="m-0 text-[0.7rem] leading-snug font-medium text-base-content/90">
-                                  {commitBrowseMeta.author.trim()}
-                                </p>
-                              ) : null}
-                              {commitBrowseMeta?.authorEmail.trim() ? (
-                                <code className="mt-0.5 block font-mono text-[0.6rem] leading-snug wrap-break-word text-base-content/65">
-                                  {commitBrowseMeta.authorEmail.trim()}
+                      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                        {!listsError && selectedDiffPath ? (
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                              <div className="min-w-0">
+                                <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                                  Diff
+                                </h2>
+                                <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
+                                  {selectedDiffPath}
                                 </code>
-                              ) : null}
-                              {commitSignature.loading ? (
-                                <p
-                                  className={`mb-0 text-[0.6rem] text-base-content/50 ${
-                                    commitBrowseMeta?.author.trim() ||
-                                    commitBrowseMeta?.authorEmail.trim()
-                                      ? "mt-1"
-                                      : "mt-0"
-                                  }`}
-                                >
-                                  Signature: checking…
-                                </p>
+                                {selectedDiffSide ? (
+                                  <p className="mt-1 mb-0 text-xs text-base-content/65">
+                                    {selectedDiffSide === "staged"
+                                      ? "Staged changes"
+                                      : "Unstaged changes"}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <button
+                                type="button"
+                                className="btn shrink-0 btn-sm btn-primary"
+                                onClick={clearDiffSelection}
+                              >
+                                Back to commits
+                              </button>
+                            </div>
+                            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                              {diffLoading ? (
+                                <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                  <span className="loading loading-md loading-spinner text-primary" />
+                                  <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
+                                </div>
+                              ) : diffError ? (
+                                <div role="alert" className="alert text-sm alert-error">
+                                  <span className="wrap-break-word">{diffError}</span>
+                                </div>
                               ) : (
-                                <p
-                                  className={`mb-0 text-[0.6rem] text-base-content/60 ${
-                                    commitBrowseMeta?.author.trim() ||
-                                    commitBrowseMeta?.authorEmail.trim()
-                                      ? "mt-1"
-                                      : "mt-0"
-                                  }`}
-                                >
-                                  Signature:{" "}
-                                  {commitSignature.verified === true ? (
-                                    <span className="text-success">verified</span>
-                                  ) : commitSignature.verified === false ? (
-                                    <span className="text-base-content/70">not verified</span>
-                                  ) : (
-                                    <span className="text-base-content/50">unknown</span>
-                                  )}
-                                </p>
+                                <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
+                                  {diffStagedText !== null ? (
+                                    <div className="mb-8 last:mb-0">
+                                      <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                        Staged
+                                      </div>
+                                      <UnifiedDiff
+                                        text={diffStagedText}
+                                        emptyLabel="(no staged diff)"
+                                      />
+                                    </div>
+                                  ) : null}
+                                  {diffUnstagedText !== null ? (
+                                    <div>
+                                      <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                        Unstaged
+                                      </div>
+                                      <UnifiedDiff
+                                        text={diffUnstagedText}
+                                        emptyLabel="(no unstaged diff)"
+                                      />
+                                    </div>
+                                  ) : null}
+                                </div>
                               )}
                             </div>
                           </div>
-                          <div className="shrink-0 border-b border-base-300 pb-1.5">
-                            <div className="min-w-0">
-                              <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                Files in commit
-                              </h2>
-                              <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
-                                {commitBrowseMeta?.subject ?? commitBrowseHash.slice(0, 7)}
-                              </p>
+                        ) : !listsError && fileBlamePath ? (
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                              <div className="min-w-0">
+                                <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                  Blame
+                                </h2>
+                                <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
+                                  {fileBlamePath}
+                                </code>
+                              </div>
+                              <button
+                                type="button"
+                                className="btn shrink-0 btn-sm btn-primary"
+                                onClick={() => {
+                                  clearFileToolView();
+                                }}
+                              >
+                                Back to commits
+                              </button>
+                            </div>
+                            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                              {fileBlameLoading ? (
+                                <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                  <span className="loading loading-md loading-spinner text-primary" />
+                                  <p className="m-0 text-sm text-base-content/70">Loading blame…</p>
+                                </div>
+                              ) : fileBlameError ? (
+                                <div role="alert" className="alert text-sm alert-error">
+                                  <span className="wrap-break-word">{fileBlameError}</span>
+                                </div>
+                              ) : (
+                                <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
+                                  {fileBlameText ?? ""}
+                                </pre>
+                              )}
                             </div>
                           </div>
-                          {commitBrowseLoading ? (
-                            <div className="flex flex-col items-center justify-center gap-2 py-8">
-                              <span className="loading loading-md loading-spinner text-primary" />
-                              <p className="m-0 text-xs text-base-content/70">Loading files…</p>
-                            </div>
-                          ) : commitBrowseError ? (
-                            <div role="alert" className="alert py-2 text-xs alert-error">
-                              <span className="wrap-break-word">{commitBrowseError}</span>
-                            </div>
-                          ) : commitBrowseFiles.length === 0 ? (
-                            <p className="m-0 text-center text-xs text-base-content/60">
-                              No files changed in this commit
-                            </p>
-                          ) : (
-                            <ul className="m-0 flex max-h-[min(52vh,28rem)] list-none flex-col gap-2 overflow-y-auto py-1 pr-0.5">
-                              {commitBrowseFiles.map((entry) => (
-                                <li key={entry.path}>
-                                  <button
-                                    type="button"
-                                    className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
-                                    onClick={() =>
-                                      void loadCommitFileDiff(entry.path, commitBrowseHash ?? "")
-                                    }
-                                    onContextMenu={(e) => {
-                                      if (!nativeContextMenusAvailable()) return;
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      openFileRowMenu(entry.path, e.clientX, e.clientY);
-                                    }}
-                                  >
-                                    <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
-                                      {entry.path}
-                                    </code>
-                                    <DiffLineStatBadge stat={entry.stats} />
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="mb-4 min-w-0">
-                          <h2 className="m-0 mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0 border-b border-base-300 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                            <span>Commits</span>
-                            <span className="font-mono text-[0.6rem] font-normal tracking-normal text-base-content/55 normal-case">
-                              {commits.length}
-                              {graphCommitsHasMore ? "+" : ""}
-                            </span>
-                          </h2>
-                          {commits.length === 0 ? (
-                            <p className="m-0 text-center text-xs text-base-content/60">
-                              No commits to show
-                            </p>
-                          ) : (
-                            <>
-                              <div
-                                className="mb-0.5 grid items-center gap-x-1.5 border-b border-base-300/80 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase"
-                                style={{
-                                  gridTemplateColumns: `minmax(0, 6.75rem) ${commitGraphLayout.graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`,
-                                }}
-                              >
-                                <span className="truncate">Branch</span>
-                                <span className="min-w-0 truncate">Graph</span>
-                                <span className="min-w-0 truncate">Commit message</span>
-                                <span className="min-w-0 truncate">Author</span>
-                                <span className="text-right">When</span>
+                        ) : !listsError && fileHistoryPath ? (
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                              <div className="min-w-0">
+                                <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                  File history
+                                </h2>
+                                <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
+                                  {fileHistoryPath}
+                                </code>
+                                <p className="mt-1 mb-0 text-xs text-base-content/60">
+                                  Commits that touched this path (newest first). Click a row to open
+                                  the diff for that revision.
+                                </p>
                               </div>
-                              <div
-                                className="grid w-full min-w-0 gap-x-1.5"
-                                style={{
-                                  gridTemplateColumns: `minmax(0, 6.75rem) ${commitGraphLayout.graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`,
-                                  gridTemplateRows: `repeat(${commits.length}, ${COMMIT_GRAPH_ROW_HEIGHT}px)`,
+                              <button
+                                type="button"
+                                className="btn shrink-0 btn-sm btn-primary"
+                                onClick={() => {
+                                  clearFileToolView();
                                 }}
                               >
-                                {commits.map((c, idx) => {
-                                  const stashRef = c.stashRef?.trim() || null;
-                                  const visibleLocalTips = localBranches.filter(
-                                    (b) =>
-                                      graphBranchVisible[`local:${b.name}`] !== false &&
-                                      b.tipHash === c.hash,
-                                  );
-                                  const visibleRemoteTips = remoteBranches.filter(
-                                    (r) =>
-                                      graphBranchVisible[`remote:${r.name}`] !== false &&
-                                      r.tipHash === c.hash,
-                                  );
-                                  const sortedNames = commitGraphLayout.branchNamesSorted;
-                                  const tipsHereNames = [
-                                    ...visibleLocalTips.map((b) => b.name),
-                                    ...visibleRemoteTips.map((r) => r.name),
-                                  ];
-                                  const firstTipName = sortedNames.find((n) =>
-                                    tipsHereNames.includes(n),
-                                  );
-                                  const laneIdx = firstTipName
-                                    ? sortedNames.indexOf(firstTipName)
-                                    : -1;
-                                  const laneColor =
-                                    laneIdx >= 0
-                                      ? commitGraphLayout.laneColors[
-                                          laneIdx % commitGraphLayout.laneColors.length
-                                        ]
-                                      : undefined;
-                                  const hasBranchTips =
-                                    visibleLocalTips.length > 0 || visibleRemoteTips.length > 0;
-                                  const branchCell = hasBranchTips ? (
-                                    <span
-                                      className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[0.62rem] leading-tight text-base-content"
-                                      title={tipsHereNames.join(", ")}
-                                      style={
-                                        laneColor
-                                          ? {
-                                              borderLeft: `2px solid ${laneColor}`,
-                                              paddingLeft: 4,
-                                            }
-                                          : undefined
-                                      }
-                                    >
-                                      {visibleLocalTips.some(
-                                        (b) => b.name === currentBranchName,
-                                      ) ? (
-                                        <span className="shrink-0 text-primary" aria-hidden>
-                                          ✓
-                                        </span>
-                                      ) : null}
-                                      {visibleLocalTips.map((b) => (
-                                        <span
-                                          key={`l:${b.name}`}
-                                          className="max-w-full min-w-0 cursor-context-menu truncate font-medium"
-                                          onContextMenu={(e) => {
-                                            if (branchBusy) return;
-                                            if (!nativeContextMenusAvailable()) return;
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            openGraphBranchLocalMenu(b.name, e.clientX, e.clientY);
-                                          }}
-                                        >
-                                          {b.name}
-                                        </span>
-                                      ))}
-                                      {visibleLocalTips.length > 0 &&
-                                      visibleRemoteTips.length > 0 ? (
-                                        <span
-                                          className="shrink-0 text-[0.55rem] text-base-content/45"
-                                          aria-hidden
-                                        >
-                                          ·
-                                        </span>
-                                      ) : null}
-                                      {visibleRemoteTips.map((r) => (
-                                        <span
-                                          key={`r:${r.name}`}
-                                          className="max-w-full min-w-0 cursor-context-menu truncate font-medium text-secondary"
-                                          onContextMenu={(e) => {
-                                            if (branchBusy) return;
-                                            if (!nativeContextMenusAvailable()) return;
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            openGraphBranchRemoteMenu(r.name, e.clientX, e.clientY);
-                                          }}
-                                        >
-                                          {r.name}
-                                        </span>
-                                      ))}
-                                    </span>
-                                  ) : stashRef ? (
-                                    <span
-                                      className="flex min-w-0 cursor-context-menu flex-wrap items-center gap-1 text-[0.62rem] leading-tight text-base-content"
-                                      title={`Stash ${stashRef}`}
-                                      onContextMenu={(e) => {
-                                        if (branchBusy || stashBusy !== null) return;
-                                        if (!nativeContextMenusAvailable()) return;
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        openGraphStashMenu(stashRef, e.clientX, e.clientY);
-                                      }}
-                                    >
-                                      <span className="badge shrink-0 font-mono badge-xs badge-warning">
-                                        {stashRef}
-                                      </span>
-                                    </span>
-                                  ) : idx === 0 ? (
-                                    <span
-                                      className="flex min-w-0 cursor-context-menu items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content/85"
-                                      title={commitsSectionTitle}
-                                      onContextMenu={(e) => {
-                                        if (branchBusy || !currentBranchName) return;
-                                        if (!nativeContextMenusAvailable()) return;
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        openGraphBranchLocalMenu(
-                                          currentBranchName,
-                                          e.clientX,
-                                          e.clientY,
-                                        );
-                                      }}
-                                    >
-                                      <span className="shrink-0 text-primary" aria-hidden>
-                                        ✓
-                                      </span>
-                                      <span className="min-w-0 truncate font-medium">
-                                        {commitsSectionTitle}
-                                      </span>
-                                    </span>
-                                  ) : null;
-                                  const isBrowsing = commitBrowseHash === c.hash;
-                                  const isHeadBranchTipRow =
-                                    currentBranchTipHash !== null &&
-                                    c.hash === currentBranchTipHash;
-                                  const rel = formatRelativeShort(c.date);
-                                  const fullTitle = [
-                                    stashRef
-                                      ? `${stashRef} — ${c.shortHash} — ${c.subject}`
-                                      : `${c.shortHash} — ${c.subject}`,
-                                    c.author,
-                                    formatDate(c.date) ?? undefined,
-                                  ]
-                                    .filter(Boolean)
-                                    .join("\n");
-                                  const rowRule =
-                                    idx < commits.length - 1 ? "border-b border-base-300/40" : "";
-                                  return (
-                                    <Fragment key={c.hash}>
-                                      <div
-                                        className={`flex min-h-0 min-w-0 items-center px-0.5 ${rowRule} ${
-                                          isHeadBranchTipRow ? "bg-primary/12" : ""
-                                        }`}
-                                        style={{ gridColumn: 1, gridRow: idx + 1 }}
-                                      >
-                                        {branchCell}
-                                      </div>
+                                Back to commits
+                              </button>
+                            </div>
+                            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                              {fileHistoryLoading ? (
+                                <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                  <span className="loading loading-md loading-spinner text-primary" />
+                                  <p className="m-0 text-sm text-base-content/70">
+                                    Loading history…
+                                  </p>
+                                </div>
+                              ) : fileHistoryError ? (
+                                <div role="alert" className="alert text-sm alert-error">
+                                  <span className="wrap-break-word">{fileHistoryError}</span>
+                                </div>
+                              ) : fileHistoryCommits.length === 0 ? (
+                                <p className="m-0 text-center text-sm text-base-content/60">
+                                  No commits found for this file
+                                </p>
+                              ) : (
+                                <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1.5 overflow-y-auto pr-0.5">
+                                  {fileHistoryCommits.map((c) => (
+                                    <li key={c.hash}>
                                       <button
                                         type="button"
-                                        title={fullTitle}
-                                        className={`grid h-full min-h-0 w-full grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left text-[0.6875rem] leading-tight transition-colors ${rowRule} ${
-                                          isBrowsing
-                                            ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
-                                            : isHeadBranchTipRow
-                                              ? "bg-primary/12 hover:bg-primary/18"
-                                              : "hover:bg-base-300/40"
-                                        }`}
-                                        style={{ gridColumn: "3 / 6", gridRow: idx + 1 }}
-                                        onClick={() => void selectCommit(c.hash)}
+                                        className="flex w-full flex-col gap-0.5 rounded-lg border border-base-300/50 bg-base-200/40 px-3 py-2 text-left transition-colors hover:border-base-300 hover:bg-base-300/35"
+                                        onClick={() => void onPickFileHistoryCommit(c.hash)}
+                                      >
+                                        <span className="font-mono text-[0.65rem] text-base-content/70">
+                                          {c.shortHash}
+                                        </span>
+                                        <span className="text-sm leading-snug text-base-content/95">
+                                          {c.subject}
+                                        </span>
+                                        <span className="text-[0.65rem] text-base-content/55">
+                                          {formatAuthorDisplay(c.author)} ·{" "}
+                                          {formatRelativeShort(c.date) ?? formatDate(c.date) ?? "—"}
+                                        </span>
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          </div>
+                        ) : !listsError && commitDiffPath && commitBrowseHash ? (
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-1.5">
+                              <button
+                                type="button"
+                                className="btn shrink-0 btn-xs btn-primary"
+                                onClick={backFromCommitFileDiff}
+                              >
+                                Back to files
+                              </button>
+                              <div className="min-w-0 flex-1 text-right">
+                                <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                  Commit diff
+                                </h2>
+                                <code className="mt-0.5 block font-mono text-[0.65rem] leading-tight wrap-break-word text-base-content/85">
+                                  {commitDiffPath}
+                                </code>
+                                <p className="mt-0.5 mb-0 font-mono text-[0.6rem] text-base-content/50">
+                                  {commits.find((x) => x.hash === commitBrowseHash)?.shortHash ??
+                                    commitBrowseHash.slice(0, 7)}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                              {commitDiffLoading ? (
+                                <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
+                                  <span className="loading loading-md loading-spinner text-primary" />
+                                  <p className="m-0 text-xs text-base-content/70">Loading diff…</p>
+                                </div>
+                              ) : commitDiffError ? (
+                                <div role="alert" className="alert py-2 text-xs alert-error">
+                                  <span className="wrap-break-word">{commitDiffError}</span>
+                                </div>
+                              ) : (
+                                <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
+                                  <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                    Patch
+                                  </div>
+                                  <UnifiedDiff
+                                    text={commitDiffText ?? ""}
+                                    emptyLabel="(no diff for this file)"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ) : !listsError && commitBrowseHash ? (
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
+                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
+                              <button
+                                type="button"
+                                className="btn shrink-0 btn-xs btn-primary"
+                                onClick={clearCommitBrowse}
+                              >
+                                Back to commits
+                              </button>
+                              <div className="max-w-[min(100%,20rem)] min-w-0 flex-1 text-right">
+                                {commitBrowseMeta?.author.trim() ? (
+                                  <p className="m-0 text-[0.7rem] leading-snug font-medium text-base-content/90">
+                                    {commitBrowseMeta.author.trim()}
+                                  </p>
+                                ) : null}
+                                {commitBrowseMeta?.authorEmail.trim() ? (
+                                  <code className="mt-0.5 block font-mono text-[0.6rem] leading-snug wrap-break-word text-base-content/65">
+                                    {commitBrowseMeta.authorEmail.trim()}
+                                  </code>
+                                ) : null}
+                                {commitSignature.loading ? (
+                                  <p
+                                    className={`mb-0 text-[0.6rem] text-base-content/50 ${
+                                      commitBrowseMeta?.author.trim() ||
+                                      commitBrowseMeta?.authorEmail.trim()
+                                        ? "mt-1"
+                                        : "mt-0"
+                                    }`}
+                                  >
+                                    Signature: checking…
+                                  </p>
+                                ) : (
+                                  <p
+                                    className={`mb-0 text-[0.6rem] text-base-content/60 ${
+                                      commitBrowseMeta?.author.trim() ||
+                                      commitBrowseMeta?.authorEmail.trim()
+                                        ? "mt-1"
+                                        : "mt-0"
+                                    }`}
+                                  >
+                                    Signature:{" "}
+                                    {commitSignature.verified === true ? (
+                                      <span className="text-success">verified</span>
+                                    ) : commitSignature.verified === false ? (
+                                      <span className="text-base-content/70">not verified</span>
+                                    ) : (
+                                      <span className="text-base-content/50">unknown</span>
+                                    )}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="shrink-0 border-b border-base-300 pb-1.5">
+                              <div className="min-w-0">
+                                <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                  Files in commit
+                                </h2>
+                                <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
+                                  {commitBrowseMeta?.subject ?? commitBrowseHash.slice(0, 7)}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex min-h-0 flex-1 flex-col">
+                              {commitBrowseLoading ? (
+                                <div className="flex flex-col items-center justify-center gap-2 py-8">
+                                  <span className="loading loading-md loading-spinner text-primary" />
+                                  <p className="m-0 text-xs text-base-content/70">Loading files…</p>
+                                </div>
+                              ) : commitBrowseError ? (
+                                <div role="alert" className="alert py-2 text-xs alert-error">
+                                  <span className="wrap-break-word">{commitBrowseError}</span>
+                                </div>
+                              ) : commitBrowseFiles.length === 0 ? (
+                                <p className="m-0 text-center text-xs text-base-content/60">
+                                  No files changed in this commit
+                                </p>
+                              ) : (
+                                <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto py-1 pr-0.5">
+                                  {commitBrowseFiles.map((entry) => (
+                                    <li key={entry.path}>
+                                      <button
+                                        type="button"
+                                        className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
+                                        onClick={() =>
+                                          void loadCommitFileDiff(
+                                            entry.path,
+                                            commitBrowseHash ?? "",
+                                          )
+                                        }
                                         onContextMenu={(e) => {
                                           if (!nativeContextMenusAvailable()) return;
                                           e.preventDefault();
                                           e.stopPropagation();
-                                          openGraphCommitMenu(c.hash, e.clientX, e.clientY);
+                                          openFileRowMenu(entry.path, e.clientX, e.clientY);
                                         }}
                                       >
-                                        <span className="min-w-0 truncate text-base-content/90">
-                                          {c.subject}
-                                        </span>
-                                        <span
-                                          className="min-w-0 truncate text-[0.62rem] text-base-content/55"
-                                          title={c.author.trim() || undefined}
-                                        >
-                                          {formatAuthorDisplay(c.author) || "—"}
-                                        </span>
-                                        <span
-                                          className="shrink-0 text-right text-[0.6rem] text-base-content/45 tabular-nums"
-                                          title={formatDate(c.date) ?? undefined}
-                                        >
-                                          {rel ?? "—"}
-                                        </span>
+                                        <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
+                                          {entry.path}
+                                        </code>
+                                        <DiffLineStatBadge stat={entry.stats} />
                                       </button>
-                                    </Fragment>
-                                  );
-                                })}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                            <h2 className="m-0 mb-1.5 flex shrink-0 flex-wrap items-baseline gap-x-2 gap-y-0 border-b border-base-300 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                              <span>Commits</span>
+                              <span className="font-mono text-[0.6rem] font-normal tracking-normal text-base-content/55 normal-case">
+                                {commits.length}
+                                {graphCommitsHasMore ? "+" : ""}
+                              </span>
+                            </h2>
+                            {commits.length === 0 ? (
+                              <p className="m-0 flex flex-1 items-center justify-center text-center text-xs text-base-content/60">
+                                No commits to show
+                              </p>
+                            ) : (
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                                 <div
-                                  className="relative flex min-h-0 shrink-0 items-start justify-center self-stretch"
+                                  className="sticky top-0 z-10 mb-0.5 grid shrink-0 items-center gap-x-1.5 border-b border-base-300/80 bg-base-100 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase"
                                   style={{
-                                    gridColumn: 2,
-                                    gridRow: `1 / span ${commits.length}`,
+                                    gridTemplateColumns: `minmax(0, 6.75rem) ${commitGraphLayout.graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`,
                                   }}
                                 >
-                                  {commits.map((c, rowIdx) => (
+                                  <span className="truncate">Branch</span>
+                                  <span className="min-w-0 truncate">Graph</span>
+                                  <span className="min-w-0 truncate">Commit message</span>
+                                  <span className="min-w-0 truncate">Author</span>
+                                  <span className="text-right">When</span>
+                                </div>
+                                <div className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto">
+                                  <div
+                                    className="grid w-full min-w-0 gap-x-1.5"
+                                    style={{
+                                      gridTemplateColumns: `minmax(0, 6.75rem) ${commitGraphLayout.graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`,
+                                      gridTemplateRows: `repeat(${commits.length}, ${COMMIT_GRAPH_ROW_HEIGHT}px)`,
+                                    }}
+                                  >
+                                    {commits.map((c, idx) => {
+                                      const stashRef = c.stashRef?.trim() || null;
+                                      const visibleLocalTips = localBranches.filter(
+                                        (b) =>
+                                          graphBranchVisible[`local:${b.name}`] !== false &&
+                                          b.tipHash === c.hash,
+                                      );
+                                      const visibleRemoteTips = remoteBranches.filter(
+                                        (r) =>
+                                          graphBranchVisible[`remote:${r.name}`] !== false &&
+                                          r.tipHash === c.hash,
+                                      );
+                                      const sortedNames = commitGraphLayout.branchNamesSorted;
+                                      const tipsHereNames = [
+                                        ...visibleLocalTips.map((b) => b.name),
+                                        ...visibleRemoteTips.map((r) => r.name),
+                                      ];
+                                      const firstTipName = sortedNames.find((n) =>
+                                        tipsHereNames.includes(n),
+                                      );
+                                      const laneIdx = firstTipName
+                                        ? sortedNames.indexOf(firstTipName)
+                                        : -1;
+                                      const laneColor =
+                                        laneIdx >= 0
+                                          ? commitGraphLayout.laneColors[
+                                              laneIdx % commitGraphLayout.laneColors.length
+                                            ]
+                                          : undefined;
+                                      const hasBranchTips =
+                                        visibleLocalTips.length > 0 || visibleRemoteTips.length > 0;
+                                      const branchCell = hasBranchTips ? (
+                                        <span
+                                          className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[0.62rem] leading-tight text-base-content"
+                                          title={tipsHereNames.join(", ")}
+                                          style={
+                                            laneColor
+                                              ? {
+                                                  borderLeft: `2px solid ${laneColor}`,
+                                                  paddingLeft: 4,
+                                                }
+                                              : undefined
+                                          }
+                                        >
+                                          {visibleLocalTips.some(
+                                            (b) => b.name === currentBranchName,
+                                          ) ? (
+                                            <span className="shrink-0 text-primary" aria-hidden>
+                                              ✓
+                                            </span>
+                                          ) : null}
+                                          {visibleLocalTips.map((b) => (
+                                            <span
+                                              key={`l:${b.name}`}
+                                              className="max-w-full min-w-0 cursor-context-menu truncate font-medium"
+                                              onContextMenu={(e) => {
+                                                if (branchBusy) return;
+                                                if (!nativeContextMenusAvailable()) return;
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                openGraphBranchLocalMenu(
+                                                  b.name,
+                                                  e.clientX,
+                                                  e.clientY,
+                                                );
+                                              }}
+                                            >
+                                              {b.name}
+                                            </span>
+                                          ))}
+                                          {visibleLocalTips.length > 0 &&
+                                          visibleRemoteTips.length > 0 ? (
+                                            <span
+                                              className="shrink-0 text-[0.55rem] text-base-content/45"
+                                              aria-hidden
+                                            >
+                                              ·
+                                            </span>
+                                          ) : null}
+                                          {visibleRemoteTips.map((r) => (
+                                            <span
+                                              key={`r:${r.name}`}
+                                              className="max-w-full min-w-0 cursor-context-menu truncate font-medium text-secondary"
+                                              onContextMenu={(e) => {
+                                                if (branchBusy) return;
+                                                if (!nativeContextMenusAvailable()) return;
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                openGraphBranchRemoteMenu(
+                                                  r.name,
+                                                  e.clientX,
+                                                  e.clientY,
+                                                );
+                                              }}
+                                            >
+                                              {r.name}
+                                            </span>
+                                          ))}
+                                        </span>
+                                      ) : stashRef ? (
+                                        <span
+                                          className="flex min-w-0 cursor-context-menu flex-wrap items-center gap-1 text-[0.62rem] leading-tight text-base-content"
+                                          title={`Stash ${stashRef}`}
+                                          onContextMenu={(e) => {
+                                            if (branchBusy || stashBusy !== null) return;
+                                            if (!nativeContextMenusAvailable()) return;
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            openGraphStashMenu(stashRef, e.clientX, e.clientY);
+                                          }}
+                                        >
+                                          <span className="badge shrink-0 font-mono badge-xs badge-warning">
+                                            {stashRef}
+                                          </span>
+                                        </span>
+                                      ) : idx === 0 ? (
+                                        <span
+                                          className="flex min-w-0 cursor-context-menu items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content/85"
+                                          title={commitsSectionTitle}
+                                          onContextMenu={(e) => {
+                                            if (branchBusy || !currentBranchName) return;
+                                            if (!nativeContextMenusAvailable()) return;
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            openGraphBranchLocalMenu(
+                                              currentBranchName,
+                                              e.clientX,
+                                              e.clientY,
+                                            );
+                                          }}
+                                        >
+                                          <span className="shrink-0 text-primary" aria-hidden>
+                                            ✓
+                                          </span>
+                                          <span className="min-w-0 truncate font-medium">
+                                            {commitsSectionTitle}
+                                          </span>
+                                        </span>
+                                      ) : null;
+                                      const isBrowsing = commitBrowseHash === c.hash;
+                                      const isHeadBranchTipRow =
+                                        currentBranchTipHash !== null &&
+                                        c.hash === currentBranchTipHash;
+                                      const rel = formatRelativeShort(c.date);
+                                      const fullTitle = [
+                                        stashRef
+                                          ? `${stashRef} — ${c.shortHash} — ${c.subject}`
+                                          : `${c.shortHash} — ${c.subject}`,
+                                        c.author,
+                                        formatDate(c.date) ?? undefined,
+                                      ]
+                                        .filter(Boolean)
+                                        .join("\n");
+                                      const rowRule =
+                                        idx < commits.length - 1
+                                          ? "border-b border-base-300/40"
+                                          : "";
+                                      return (
+                                        <Fragment key={c.hash}>
+                                          <div
+                                            className={`flex min-h-0 min-w-0 items-center px-0.5 ${rowRule} ${
+                                              isHeadBranchTipRow ? "bg-primary/12" : ""
+                                            }`}
+                                            style={{ gridColumn: 1, gridRow: idx + 1 }}
+                                          >
+                                            {branchCell}
+                                          </div>
+                                          <button
+                                            type="button"
+                                            title={fullTitle}
+                                            className={`grid h-full min-h-0 w-full grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left text-[0.6875rem] leading-tight transition-colors ${rowRule} ${
+                                              isBrowsing
+                                                ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
+                                                : isHeadBranchTipRow
+                                                  ? "bg-primary/12 hover:bg-primary/18"
+                                                  : "hover:bg-base-300/40"
+                                            }`}
+                                            style={{ gridColumn: "3 / 6", gridRow: idx + 1 }}
+                                            onClick={() => void selectCommit(c.hash)}
+                                            onContextMenu={(e) => {
+                                              if (!nativeContextMenusAvailable()) return;
+                                              e.preventDefault();
+                                              e.stopPropagation();
+                                              openGraphCommitMenu(c.hash, e.clientX, e.clientY);
+                                            }}
+                                          >
+                                            <span className="min-w-0 truncate text-base-content/90">
+                                              {c.subject}
+                                            </span>
+                                            <span
+                                              className="min-w-0 truncate text-[0.62rem] text-base-content/55"
+                                              title={c.author.trim() || undefined}
+                                            >
+                                              {formatAuthorDisplay(c.author) || "—"}
+                                            </span>
+                                            <span
+                                              className="shrink-0 text-right text-[0.6rem] text-base-content/45 tabular-nums"
+                                              title={formatDate(c.date) ?? undefined}
+                                            >
+                                              {rel ?? "—"}
+                                            </span>
+                                          </button>
+                                        </Fragment>
+                                      );
+                                    })}
                                     <div
-                                      key={`graph-row-bg-${c.hash}`}
-                                      className={`pointer-events-none absolute inset-x-0 z-0 ${
-                                        currentBranchTipHash === c.hash ? "bg-primary/12" : ""
-                                      }`}
+                                      className="relative flex min-h-0 shrink-0 items-start justify-center self-stretch"
                                       style={{
-                                        top: rowIdx * COMMIT_GRAPH_ROW_HEIGHT,
-                                        height: COMMIT_GRAPH_ROW_HEIGHT,
+                                        gridColumn: 2,
+                                        gridRow: `1 / span ${commits.length}`,
                                       }}
-                                      aria-hidden
-                                    />
-                                  ))}
-                                  <div className="relative z-[1]">
-                                    <CommitGraphColumn
-                                      layout={commitGraphLayout}
-                                      commitCount={commits.length}
-                                    />
+                                    >
+                                      {commits.map((c, rowIdx) => (
+                                        <div
+                                          key={`graph-row-bg-${c.hash}`}
+                                          className={`pointer-events-none absolute inset-x-0 z-0 ${
+                                            currentBranchTipHash === c.hash ? "bg-primary/12" : ""
+                                          }`}
+                                          style={{
+                                            top: rowIdx * COMMIT_GRAPH_ROW_HEIGHT,
+                                            height: COMMIT_GRAPH_ROW_HEIGHT,
+                                          }}
+                                          aria-hidden
+                                        />
+                                      ))}
+                                      <div className="relative z-[1]">
+                                        <CommitGraphColumn
+                                          layout={commitGraphLayout}
+                                          commitCount={commits.length}
+                                        />
+                                      </div>
+                                      {commits.map((c, rowIdx) => (
+                                        <div
+                                          key={`graph-ctx-${c.hash}`}
+                                          role="presentation"
+                                          className="absolute left-0 z-[2] w-full cursor-context-menu"
+                                          style={{
+                                            top: rowIdx * COMMIT_GRAPH_ROW_HEIGHT,
+                                            height: COMMIT_GRAPH_ROW_HEIGHT,
+                                          }}
+                                          onContextMenu={(e) => {
+                                            if (!nativeContextMenusAvailable()) return;
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            openGraphCommitMenu(c.hash, e.clientX, e.clientY);
+                                          }}
+                                        />
+                                      ))}
+                                    </div>
                                   </div>
-                                  {commits.map((c, rowIdx) => (
-                                    <div
-                                      key={`graph-ctx-${c.hash}`}
-                                      role="presentation"
-                                      className="absolute left-0 z-[2] w-full cursor-context-menu"
-                                      style={{
-                                        top: rowIdx * COMMIT_GRAPH_ROW_HEIGHT,
-                                        height: COMMIT_GRAPH_ROW_HEIGHT,
-                                      }}
-                                      onContextMenu={(e) => {
-                                        if (!nativeContextMenusAvailable()) return;
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        openGraphCommitMenu(c.hash, e.clientX, e.clientY);
-                                      }}
-                                    />
-                                  ))}
+                                  {graphCommitsHasMore ? (
+                                    <div className="mt-2 flex justify-center border-t border-base-300/50 pt-2">
+                                      <button
+                                        type="button"
+                                        className="btn btn-outline btn-sm"
+                                        disabled={loadingMoreGraphCommits}
+                                        onClick={() => void loadMoreGraphCommits()}
+                                      >
+                                        {loadingMoreGraphCommits ? (
+                                          <>
+                                            <span className="loading loading-xs loading-spinner" />
+                                            Loading…
+                                          </>
+                                        ) : (
+                                          "Load more commits"
+                                        )}
+                                      </button>
+                                    </div>
+                                  ) : null}
                                 </div>
                               </div>
-                              {graphCommitsHasMore ? (
-                                <div className="mt-2 flex justify-center border-t border-base-300/50 pt-2">
-                                  <button
-                                    type="button"
-                                    className="btn btn-outline btn-sm"
-                                    disabled={loadingMoreGraphCommits}
-                                    onClick={() => void loadMoreGraphCommits()}
-                                  >
-                                    {loadingMoreGraphCommits ? (
-                                      <>
-                                        <span className="loading loading-xs loading-spinner" />
-                                        Loading…
-                                      </>
-                                    ) : (
-                                      "Load more commits"
-                                    )}
-                                  </button>
-                                </div>
-                              ) : null}
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </>
               ) : (
-                <p className="m-0 text-center text-[0.9375rem] text-base-content/60">
+                <p className="m-0 flex min-h-0 flex-1 items-center justify-center text-center text-[0.9375rem] text-base-content/60">
                   No repository open
                 </p>
               )}
@@ -3049,7 +3064,7 @@ export default function App({
           </section>
         </div>
 
-        <aside className="col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:sticky lg:top-6 lg:col-span-3 lg:h-full lg:max-h-[calc(100vh-5rem)] lg:min-h-0">
+        <aside className="col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:col-span-3 lg:h-full lg:min-h-0">
           <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm">
             <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
               <section
@@ -3167,10 +3182,10 @@ export default function App({
               </section>
 
               <section
-                className="shrink-0 border-t border-base-300 bg-base-100 p-3"
+                className="flex min-h-0 min-w-0 flex-[1_1_0%] flex-col border-t border-base-300 bg-base-100"
                 aria-labelledby="sidebar-commit-heading"
               >
-                <div className="flex flex-col gap-3">
+                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h2
                       id="sidebar-commit-heading"
