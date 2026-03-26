@@ -309,6 +309,53 @@ export async function popupGraphCommitContextMenu(
   }
 }
 
+export async function popupTagSidebarMenu(
+  clientX: number,
+  clientY: number,
+  args: {
+    disabled: boolean;
+    hasOrigin: boolean;
+    onOrigin: boolean;
+    onDeleteLocal: () => void;
+    onDeleteRemote: () => void;
+    onPushToOrigin: () => void;
+  },
+): Promise<void> {
+  if (!isTauri()) return;
+  const deleteRemoteEnabled = !args.disabled && args.hasOrigin && args.onOrigin;
+  const pushEnabled = !args.disabled && args.hasOrigin && !args.onOrigin;
+  try {
+    await showMenuAt(clientX, clientY, [
+      {
+        id: "tag_sidebar_delete_local",
+        text: "Delete local tag…",
+        enabled: !args.disabled,
+        action: () => {
+          args.onDeleteLocal();
+        },
+      },
+      {
+        id: "tag_sidebar_delete_remote",
+        text: "Delete tag on origin…",
+        enabled: deleteRemoteEnabled,
+        action: () => {
+          args.onDeleteRemote();
+        },
+      },
+      {
+        id: "tag_sidebar_push_origin",
+        text: "Push tag to origin…",
+        enabled: pushEnabled,
+        action: () => {
+          args.onPushToOrigin();
+        },
+      },
+    ]);
+  } catch (e) {
+    console.error("native tag sidebar context menu failed", e);
+  }
+}
+
 export async function popupGraphTagContextMenu(
   clientX: number,
   clientY: number,

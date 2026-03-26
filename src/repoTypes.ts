@@ -36,6 +36,12 @@ export interface TagEntry {
   tipHash: string;
 }
 
+/** From `tag_origin_status`: presence of `origin` and whether the tag exists there. */
+export type TagOriginStatus = {
+  hasOrigin: boolean;
+  onOrigin: boolean;
+};
+
 /** One stash from `list_stashes` / bootstrap. */
 export interface StashEntry {
   refName: string;
@@ -46,5 +52,6 @@ export interface StashEntry {
 export type BranchSidebarSectionsState = {
   localOpen: boolean;
   remoteOpen: boolean;
+  tagsOpen: boolean;
   stashOpen: boolean;
 };

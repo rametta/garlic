@@ -34,6 +34,7 @@ export const emptyAppBootstrap: AppBootstrap = {
   branchSidebarSections: {
     localOpen: true,
     remoteOpen: true,
+    tagsOpen: true,
     stashOpen: false,
   },
 };

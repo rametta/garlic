@@ -6,6 +6,7 @@ import type {
   LocalBranchEntry,
   RemoteBranchEntry,
   StashEntry,
+  TagEntry,
 } from "../repoTypes";
 
 function IconEye({ className }: { className?: string }) {
@@ -57,6 +58,7 @@ function localBranchUpstreamLabel(ahead: number | null, behind: number | null): 
 
 function BranchPanel({
   title,
+  entityCount,
   open,
   onOpenChange,
   empty,
@@ -66,6 +68,7 @@ function BranchPanel({
   isLastSection,
 }: {
   title: string;
+  entityCount: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   empty: boolean;
@@ -86,7 +89,7 @@ function BranchPanel({
     >
       <summary className="collapse-title min-h-0 shrink-0 list-none px-0 py-0 [&::-webkit-details-marker]:hidden">
         <h2 className="m-0 card-title border-b border-base-300/80 px-3 py-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-          {title}
+          {title} <span className="tabular-nums opacity-90">({entityCount})</span>
         </h2>
       </summary>
       <div className="collapse-content flex min-h-0 flex-1 flex-col p-0">
@@ -492,9 +495,11 @@ export type BranchSidebarProps = {
   canShowBranches: boolean;
   localBranches: LocalBranchEntry[];
   remoteBranches: RemoteBranchEntry[];
+  tags: TagEntry[];
   stashes: StashEntry[];
   branchBusy: string | null;
   stashBusy: string | null;
+  pushBusy: boolean;
   branchGraphControls: BranchGraphControls;
   currentBranchName: string | null;
   onCheckoutLocal: (name: string) => void;
@@ -505,6 +510,7 @@ export type BranchSidebarProps = {
     clientY: number,
   ) => void;
   openGraphStashMenu: (stashRef: string, clientX: number, clientY: number) => void;
+  openTagSidebarMenu: (tagName: string, clientX: number, clientY: number) => void | Promise<void>;
   branchSidebarSections: BranchSidebarSectionsState;
   onBranchSidebarSectionsChange: (next: BranchSidebarSectionsState) => void;
 };
@@ -514,30 +520,36 @@ export function BranchSidebar({
   canShowBranches,
   localBranches,
   remoteBranches,
+  tags,
   stashes,
   branchBusy,
   stashBusy,
+  pushBusy,
   branchGraphControls,
   currentBranchName,
   onCheckoutLocal,
   onCreateFromRemote,
   runBranchSidebarContextMenu,
   openGraphStashMenu,
+  openTagSidebarMenu,
   branchSidebarSections,
   onBranchSidebarSectionsChange,
 }: BranchSidebarProps) {
   const [localBranchListFilter, setLocalBranchListFilter] = useState("");
   const [remoteBranchListFilter, setRemoteBranchListFilter] = useState("");
+  const [tagListFilter, setTagListFilter] = useState("");
   const [stashListFilter, setStashListFilter] = useState("");
 
   useEffect(() => {
     setLocalBranchListFilter("");
     setRemoteBranchListFilter("");
+    setTagListFilter("");
     setStashListFilter("");
   }, [repoPath]);
 
   const localBranchFilterNorm = localBranchListFilter.trim().toLowerCase();
   const remoteBranchFilterNorm = remoteBranchListFilter.trim().toLowerCase();
+  const tagFilterNorm = tagListFilter.trim().toLowerCase();
   const stashFilterNorm = stashListFilter.trim().toLowerCase();
 
   const filteredLocalBranches = useMemo(() => {
@@ -549,6 +561,11 @@ export function BranchSidebar({
     if (!remoteBranchFilterNorm) return remoteBranches;
     return remoteBranches.filter((r) => r.name.toLowerCase().includes(remoteBranchFilterNorm));
   }, [remoteBranches, remoteBranchFilterNorm]);
+
+  const filteredTags = useMemo(() => {
+    if (!tagFilterNorm) return tags;
+    return tags.filter((t) => t.name.toLowerCase().includes(tagFilterNorm));
+  }, [tags, tagFilterNorm]);
 
   const filteredStashes = useMemo(() => {
     if (!stashFilterNorm) return stashes;
@@ -572,6 +589,7 @@ export function BranchSidebar({
     localBranches.length === 0 ? "No local branches" : "No branches match filter";
   const remoteBranchesEmptyHint =
     remoteBranches.length === 0 ? "No remote-tracking branches" : "No branches match filter";
+  const tagsEmptyHint = tags.length === 0 ? "No tags" : "No tags match filter";
   const stashesEmptyHint = stashes.length === 0 ? "No stashes" : "No stashes match filter";
 
   return (
@@ -579,6 +597,7 @@ export function BranchSidebar({
       <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
         <BranchPanel
           title="Local branches"
+          entityCount={localBranches.length}
           open={branchSidebarSections.localOpen}
           onOpenChange={(next) => {
             onBranchSidebarSectionsChange({ ...branchSidebarSections, localOpen: next });
@@ -625,6 +644,7 @@ export function BranchSidebar({
 
         <BranchPanel
           title="Remote branches"
+          entityCount={remoteBranches.length}
           open={branchSidebarSections.remoteOpen}
           onOpenChange={(next) => {
             onBranchSidebarSectionsChange({ ...branchSidebarSections, remoteOpen: next });
@@ -665,7 +685,68 @@ export function BranchSidebar({
         </BranchPanel>
 
         <BranchPanel
+          title="Tags"
+          entityCount={tags.length}
+          open={branchSidebarSections.tagsOpen}
+          onOpenChange={(next) => {
+            onBranchSidebarSectionsChange({ ...branchSidebarSections, tagsOpen: next });
+          }}
+          empty={canShowBranches && filteredTags.length === 0}
+          emptyHint={tagsEmptyHint}
+          isLastSection={false}
+          belowHeader={
+            canShowBranches ? (
+              <input
+                type="search"
+                className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
+                value={tagListFilter}
+                onChange={(e) => {
+                  setTagListFilter(e.target.value);
+                }}
+                placeholder="Filter tags…"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Filter tags by name"
+              />
+            ) : null
+          }
+        >
+          {canShowBranches ? (
+            <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
+              {filteredTags.map((t) => {
+                const tagRowBusy = Boolean(branchBusy) || stashBusy !== null || pushBusy;
+                const shortTip = t.tipHash.length >= 7 ? t.tipHash.slice(0, 7) : t.tipHash;
+                return (
+                  <li key={t.name} className="min-w-0">
+                    <div
+                      className="flex w-full min-w-0 cursor-context-menu flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
+                      title={`${t.name} → ${t.tipHash}`}
+                      onContextMenu={(e) => {
+                        if (tagRowBusy) return;
+                        if (!nativeContextMenusAvailable()) return;
+                        e.preventDefault();
+                        void openTagSidebarMenu(t.name, e.clientX, e.clientY);
+                      }}
+                    >
+                      <div className="flex min-w-0 items-baseline justify-between gap-2">
+                        <span className="min-w-0 flex-1 font-mono text-[0.8125rem] leading-snug wrap-break-word">
+                          {t.name}
+                        </span>
+                        <span className="shrink-0 font-mono text-[0.65rem] leading-none tracking-tight opacity-60">
+                          {shortTip}
+                        </span>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </BranchPanel>
+
+        <BranchPanel
           title="Stashes"
+          entityCount={stashes.length}
           open={branchSidebarSections.stashOpen}
           onOpenChange={(next) => {
             onBranchSidebarSectionsChange({ ...branchSidebarSections, stashOpen: next });

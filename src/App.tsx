@@ -18,6 +18,7 @@ import {
   popupGraphCommitContextMenu,
   popupGraphTagContextMenu,
   popupStashContextMenu,
+  popupTagSidebarMenu,
 } from "./nativeContextMenu";
 import type {
   CommitEntry,
@@ -25,6 +26,7 @@ import type {
   RemoteBranchEntry,
   StashEntry,
   TagEntry,
+  TagOriginStatus,
 } from "./repoTypes";
 import { DEFAULT_OPENAI_MODEL, generateCommitTitleFromStagedDiff } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
@@ -42,6 +44,7 @@ export type {
   RemoteBranchEntry,
   StashEntry,
   TagEntry,
+  TagOriginStatus,
 } from "./repoTypes";
 
 /** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
@@ -1593,29 +1596,34 @@ export default function App({
     [branchBusy, repo, commits, selectCommit, cherryPickCommit],
   );
 
+  const runPushTagToOrigin = useCallback(
+    async (tagName: string) => {
+      if (!repo?.path || repo.error) return;
+      setPushBusy(true);
+      setOperationError(null);
+      try {
+        await invoke("push_tag_to_origin", { path: repo.path, tag: tagName });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setPushBusy(false);
+      }
+    },
+    [repo, refreshAfterMutation],
+  );
+
   const openGraphTagMenu = useCallback(
     (tagName: string, clientX: number, clientY: number) => {
       if (branchBusy || pushBusy) return;
       void popupGraphTagContextMenu(clientX, clientY, {
         pushDisabled: !repo?.path || Boolean(repo?.error),
         onPushToOrigin: () => {
-          void (async () => {
-            if (!repo?.path || repo.error) return;
-            setPushBusy(true);
-            setOperationError(null);
-            try {
-              await invoke("push_tag_to_origin", { path: repo.path, tag: tagName });
-              await refreshAfterMutation();
-            } catch (e) {
-              setOperationError(invokeErrorMessage(e));
-            } finally {
-              setPushBusy(false);
-            }
-          })();
+          void runPushTagToOrigin(tagName);
         },
       });
     },
-    [branchBusy, pushBusy, repo, refreshAfterMutation],
+    [branchBusy, pushBusy, repo, runPushTagToOrigin],
   );
 
   useEffect(() => {
@@ -1849,6 +1857,66 @@ export default function App({
       disabled: Boolean(branchBusy) || stashBusy !== null,
       onPop: () => void onStashPop(stashRef),
       onDrop: () => void onStashDrop(stashRef),
+    });
+  }
+
+  async function onDeleteTag(tagName: string) {
+    if (!repo?.path || repo.error) return;
+    const ok = await ask(
+      `Delete local tag "${tagName}"? This does not remove the tag on origin (use “Delete tag on origin” if needed).`,
+      { title: "Garlic", kind: "warning" },
+    );
+    if (!ok) return;
+    setBranchBusy(`delete-tag:${tagName}`);
+    setOperationError(null);
+    try {
+      await invoke("delete_tag", { path: repo.path, tag: tagName });
+      await refreshAfterMutation();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }
+
+  async function onDeleteRemoteTag(tagName: string) {
+    if (!repo?.path || repo.error) return;
+    const ok = await ask(
+      `Delete tag "${tagName}" from origin? This does not remove your local tag.`,
+      { title: "Garlic", kind: "warning" },
+    );
+    if (!ok) return;
+    setBranchBusy(`delete-remote-tag:${tagName}`);
+    setOperationError(null);
+    try {
+      await invoke("delete_remote_tag", { path: repo.path, tag: tagName });
+      await refreshAfterMutation();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }
+
+  async function openTagSidebarMenu(tagName: string, clientX: number, clientY: number) {
+    if (!repo?.path || repo.error) return;
+    if (branchBusy || stashBusy !== null || pushBusy) return;
+    let status: TagOriginStatus = { hasOrigin: false, onOrigin: false };
+    try {
+      status = await invoke<TagOriginStatus>("tag_origin_status", {
+        path: repo.path,
+        tag: tagName,
+      });
+    } catch {
+      // e.g. ls-remote failed while offline
+    }
+    void popupTagSidebarMenu(clientX, clientY, {
+      disabled: Boolean(branchBusy) || stashBusy !== null || pushBusy,
+      hasOrigin: status.hasOrigin,
+      onOrigin: status.onOrigin,
+      onDeleteLocal: () => void onDeleteTag(tagName),
+      onDeleteRemote: () => void onDeleteRemoteTag(tagName),
+      onPushToOrigin: () => void runPushTagToOrigin(tagName),
     });
   }
 
@@ -2350,9 +2418,11 @@ export default function App({
             canShowBranches={canShowBranches}
             localBranches={localBranches}
             remoteBranches={remoteBranches}
+            tags={tags}
             stashes={stashes}
             branchBusy={branchBusy}
             stashBusy={stashBusy}
+            pushBusy={pushBusy}
             branchGraphControls={branchGraphControls}
             currentBranchName={currentBranchName}
             branchSidebarSections={branchSidebarSections}
@@ -2365,6 +2435,7 @@ export default function App({
             }}
             runBranchSidebarContextMenu={runBranchSidebarContextMenu}
             openGraphStashMenu={openGraphStashMenu}
+            openTagSidebarMenu={openTagSidebarMenu}
           />
         </aside>
 

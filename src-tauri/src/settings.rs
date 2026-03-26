@@ -45,6 +45,8 @@ pub struct BranchSidebarSections {
     pub local_open: bool,
     #[serde(default = "default_true")]
     pub remote_open: bool,
+    #[serde(default = "default_true")]
+    pub tags_open: bool,
     #[serde(default = "default_false")]
     pub stash_open: bool,
 }
@@ -54,6 +56,7 @@ impl Default for BranchSidebarSections {
         Self {
             local_open: true,
             remote_open: true,
+            tags_open: true,
             stash_open: false,
         }
     }

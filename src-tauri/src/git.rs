@@ -839,6 +839,19 @@ pub fn create_tag(
     Ok(())
 }
 
+/// Delete a local tag (`git tag -d`).
+#[tauri::command]
+pub fn delete_tag(path: String, tag: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return Err("Tag name cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["tag", "-d", tag])?;
+    Ok(())
+}
+
 /// Create a local branch from `remote_ref` (e.g. `origin/feature/foo`) and switch to it.
 #[tauri::command]
 pub fn create_branch_from_remote(path: String, remote_ref: String) -> Result<(), String> {
@@ -1752,6 +1765,52 @@ pub fn force_push_to_origin(path: String) -> Result<(), String> {
         &path_buf,
         &["push", "--force-with-lease", "-u", "origin", "HEAD"],
     )?;
+    Ok(())
+}
+
+/// Whether `origin` exists and whether `refs/tags/<tag>` is present on `origin` (`git ls-remote`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagOriginStatus {
+    pub has_origin: bool,
+    pub on_origin: bool,
+}
+
+#[tauri::command]
+pub fn tag_origin_status(path: String, tag: String) -> Result<TagOriginStatus, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return Err("Tag name cannot be empty.".to_string());
+    }
+    if git_output(&path_buf, &["remote", "get-url", "origin"]).is_err() {
+        return Ok(TagOriginStatus {
+            has_origin: false,
+            on_origin: false,
+        });
+    }
+    let refspec = format!("refs/tags/{tag}");
+    let out = git_output(&path_buf, &["ls-remote", "origin", &refspec])?;
+    Ok(TagOriginStatus {
+        has_origin: true,
+        on_origin: !out.trim().is_empty(),
+    })
+}
+
+/// Delete a tag on `origin` (`git push origin --delete <tag>`).
+#[tauri::command]
+pub fn delete_remote_tag(path: String, tag: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return Err("Tag name cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
+        "No remote named \"origin\" configured.".to_string()
+    })?;
+    git_output(&path_buf, &["push", "origin", "--delete", tag])?;
     Ok(())
 }
 
