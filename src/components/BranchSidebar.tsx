@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import type { BranchTrieNode, RemoteTrieNode } from "../branchTrie";
 import { nativeContextMenusAvailable } from "../nativeContextMenu";
 import type { LocalBranchEntry, RemoteBranchEntry, StashEntry } from "../repoTypes";
 
@@ -94,11 +95,6 @@ function BranchPanel({
   );
 }
 
-export type BranchTrieNode = {
-  branchHere: LocalBranchEntry | null;
-  children: Map<string, BranchTrieNode>;
-};
-
 function emptyBranchTrieNode(): BranchTrieNode {
   return { branchHere: null, children: new Map() };
 }
@@ -127,22 +123,6 @@ function buildLocalBranchTrie(branches: LocalBranchEntry[]): BranchTrieNode {
   return root;
 }
 
-export function collectLocalBranchNamesInSubtree(node: BranchTrieNode): string[] {
-  const out: string[] = [];
-  if (node.branchHere) {
-    out.push(node.branchHere.name);
-  }
-  for (const child of node.children.values()) {
-    out.push(...collectLocalBranchNamesInSubtree(child));
-  }
-  return out;
-}
-
-export type RemoteTrieNode = {
-  refHere: string | null;
-  children: Map<string, RemoteTrieNode>;
-};
-
 function emptyRemoteTrieNode(): RemoteTrieNode {
   return { refHere: null, children: new Map() };
 }
@@ -169,17 +149,6 @@ function buildRemoteBranchTrie(refs: RemoteBranchEntry[]): RemoteTrieNode {
     insertRemoteRefIntoTrie(root, r.name);
   }
   return root;
-}
-
-export function collectRemoteRefsInSubtree(node: RemoteTrieNode): string[] {
-  const out: string[] = [];
-  if (node.refHere) {
-    out.push(node.refHere);
-  }
-  for (const child of node.children.values()) {
-    out.push(...collectRemoteRefsInSubtree(child));
-  }
-  return out;
 }
 
 export type BranchGraphControls = {

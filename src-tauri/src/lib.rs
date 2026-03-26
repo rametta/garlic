@@ -3,7 +3,9 @@ mod git;
 mod settings;
 mod window_title;
 
-use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, Submenu};
+use tauri::menu::{
+    CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
+};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::WindowEvent;
@@ -104,6 +106,9 @@ pub fn run() {
             git::list_commit_files,
             git::get_commit_signature_status,
             git::get_commit_file_diff,
+            git::get_commit_file_blob_pair,
+            git::get_staged_file_blob_pair,
+            git::get_unstaged_file_blob_pair,
             git::pull_local_branch,
             git::push_to_origin,
             git::force_push_to_origin,
@@ -146,6 +151,21 @@ pub fn run() {
             )?;
 
             let file_menu = Submenu::with_items(app, "File", true, &[&open_repo, &recent_submenu])?;
+
+            let edit_menu = Submenu::with_items(
+                app,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app, None)?,
+                    &PredefinedMenuItem::redo(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::cut(app, None)?,
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &PredefinedMenuItem::paste(app, None)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ],
+            )?;
 
             let repo_metadata =
                 MenuItem::with_id(app, "repo_metadata", "Repo Metadata", true, None::<&str>)?;
@@ -197,7 +217,10 @@ pub fn run() {
             });
             sync_recent_menu(app.handle());
 
-            let menu = Menu::with_items(app, &[&file_menu, &repo_menu, &theme_submenu])?;
+            let menu = Menu::with_items(
+                app,
+                &[&file_menu, &edit_menu, &repo_menu, &theme_submenu],
+            )?;
             menu.set_as_app_menu()?;
             Ok(())
         })

@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -787,10 +788,7 @@ pub fn delete_remote_branch(path: String, remote_ref: String) -> Result<(), Stri
     if remote.is_empty() || branch_on_remote.is_empty() {
         return Err("Invalid remote branch ref.".to_string());
     }
-    git_output(
-        &path_buf,
-        &["push", remote, "--delete", branch_on_remote],
-    )?;
+    git_output(&path_buf, &["push", remote, "--delete", branch_on_remote])?;
     Ok(())
 }
 
@@ -1344,6 +1342,124 @@ pub fn get_commit_file_diff(
         git_output(&path_buf, &["show", "-U1", hash, "--", rel])?
     };
     Ok(unified_diff_patch_only(&raw))
+}
+
+/// Old/new file bytes for image preview in the diff viewer (`before` = left/parent, `after` = right/current).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileBlobPair {
+    pub before_base64: Option<String>,
+    pub after_base64: Option<String>,
+}
+
+fn opt_bytes_to_b64(opt: Option<Vec<u8>>) -> Option<String> {
+    opt.map(|b| B64.encode(b))
+}
+
+/// `git show <object>` where `object` is e.g. `HEAD:path`, `rev:path`, or `:path` (index).
+fn git_show_blob_bytes(workdir: &Path, object_spec: &str) -> Result<Option<Vec<u8>>, String> {
+    let spec = object_spec.trim();
+    if spec.is_empty() {
+        return Ok(None);
+    }
+    let out = Command::new("git")
+        .current_dir(workdir)
+        .args(["show", spec])
+        .output()
+        .map_err(|e| format!("Could not run git: {e}"))?;
+    if out.status.success() {
+        return Ok(Some(out.stdout));
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("does not exist")
+        || stderr.contains("exists on disk, but not in")
+        || stderr.contains("fatal: invalid object")
+        || stderr.contains("fatal: bad revision")
+    {
+        return Ok(None);
+    }
+    if out.status.code() == Some(128) {
+        return Ok(None);
+    }
+    Err(format!("git show failed: {stderr}"))
+}
+
+/// Blobs at parent vs commit revision (same parent rule as [`get_commit_file_diff`]).
+#[tauri::command]
+pub fn get_commit_file_blob_pair(
+    path: String,
+    commit_hash: String,
+    file_path: String,
+) -> Result<FileBlobPair, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let hash = commit_hash.trim();
+    let rel = file_path.trim();
+    if hash.is_empty() {
+        return Err("Commit hash cannot be empty.".to_string());
+    }
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    let before_rev = if merge_commit_has_second_parent(&path_buf, hash) {
+        format!("{hash}^1")
+    } else {
+        format!("{hash}^")
+    };
+    let before_spec = format!("{before_rev}:{rel}");
+    let after_spec = format!("{hash}:{rel}");
+    let before = git_show_blob_bytes(&path_buf, &before_spec)?;
+    let after = git_show_blob_bytes(&path_buf, &after_spec)?;
+    Ok(FileBlobPair {
+        before_base64: opt_bytes_to_b64(before),
+        after_base64: opt_bytes_to_b64(after),
+    })
+}
+
+/// Staged diff: `HEAD` vs index (`:`).
+#[tauri::command]
+pub fn get_staged_file_blob_pair(path: String, file_path: String) -> Result<FileBlobPair, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    let before = git_show_blob_bytes(&path_buf, &format!("HEAD:{rel}"))?;
+    let after = git_show_blob_bytes(&path_buf, &format!(":{rel}"))?;
+    Ok(FileBlobPair {
+        before_base64: opt_bytes_to_b64(before),
+        after_base64: opt_bytes_to_b64(after),
+    })
+}
+
+fn read_working_tree_bytes(workdir: &Path, rel: &str) -> Result<Option<Vec<u8>>, String> {
+    let full = workdir.join(rel);
+    match std::fs::read(&full) {
+        Ok(b) => Ok(Some(b)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Could not read file: {e}")),
+    }
+}
+
+/// Unstaged diff: index vs working tree.
+#[tauri::command]
+pub fn get_unstaged_file_blob_pair(
+    path: String,
+    file_path: String,
+) -> Result<FileBlobPair, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    let before = git_show_blob_bytes(&path_buf, &format!(":{rel}"))?;
+    let after = read_working_tree_bytes(&path_buf, rel)?;
+    Ok(FileBlobPair {
+        before_base64: opt_bytes_to_b64(before),
+        after_base64: opt_bytes_to_b64(after),
+    })
 }
 
 fn is_valid_stash_ref(s: &str) -> bool {

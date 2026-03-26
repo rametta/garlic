@@ -1,4 +1,4 @@
-/** Layout constants for the commit DAG column (GitKraken-style lanes). */
+/** Layout constants for the commit DAG column. */
 
 export const COMMIT_GRAPH_ROW_HEIGHT = 28;
 export const COMMIT_GRAPH_LANE_WIDTH = 14;
@@ -33,7 +33,7 @@ function branchLaneHue(index: number): string {
 }
 
 /**
- * Prefer `main` / `master` so the trunk stays left (GitKraken-style), not the oldest sibling at a fork.
+ * Prefer `main` / `master` so the trunk stays left, not the oldest sibling at a fork.
  */
 function pickMainlineTipHash(tips: BranchTip[], currentBranchName: string | null): string | null {
   if (tips.length === 0) return null;

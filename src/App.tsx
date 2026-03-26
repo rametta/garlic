@@ -3,15 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { formatAuthorDisplay, formatDate, formatRelativeShort } from "./appFormat";
-import {
-  BranchSidebar,
-  collectLocalBranchNamesInSubtree,
-  collectRemoteRefsInSubtree,
-  type BranchGraphControls,
-} from "./components/BranchSidebar";
+import { collectLocalBranchNamesInSubtree, collectRemoteRefsInSubtree } from "./branchTrie";
+import { BranchSidebar, type BranchGraphControls } from "./components/BranchSidebar";
 import { CommitGraphSection } from "./components/CommitGraphSection";
 import { UnifiedDiff } from "./components/UnifiedDiff";
 import { computeCommitGraphLayout, type BranchTip } from "./commitGraphLayout";
+import { base64ToObjectUrl, mimeTypeForImagePath, pathLooksLikeRenderableImage } from "./diffImage";
 import {
   nativeContextMenusAvailable,
   popupBranchContextMenu,
@@ -82,6 +79,26 @@ export interface LineStat {
 export interface CommitFileEntry {
   path: string;
   stats: LineStat;
+}
+
+/** Raw bytes for diff image preview (`get_*_file_blob_pair`). */
+interface FileBlobPair {
+  beforeBase64: string | null;
+  afterBase64: string | null;
+}
+
+function blobPairToPreviewUrls(
+  pair: FileBlobPair,
+  filePath: string,
+): {
+  before: string | null;
+  after: string | null;
+} {
+  const mime = mimeTypeForImagePath(filePath);
+  return {
+    before: base64ToObjectUrl(pair.beforeBase64, mime),
+    after: base64ToObjectUrl(pair.afterBase64, mime),
+  };
 }
 
 /** One path in the working tree from `list_working_tree_files` / bootstrap. */
@@ -348,6 +365,16 @@ export default function App({
   const [commitDiffText, setCommitDiffText] = useState<string | null>(null);
   const [commitDiffLoading, setCommitDiffLoading] = useState(false);
   const [commitDiffError, setCommitDiffError] = useState<string | null>(null);
+  /** Object URLs for binary image preview in commit diff (revoked on change). */
+  const [commitDiffImagePreview, setCommitDiffImagePreview] = useState<{
+    before: string | null;
+    after: string | null;
+  } | null>(null);
+  /** Object URLs for staged/unstaged image preview. */
+  const [diffImagePreview, setDiffImagePreview] = useState<{
+    before: string | null;
+    after: string | null;
+  } | null>(null);
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [commitPushBusy, setCommitPushBusy] = useState(false);
@@ -391,6 +418,20 @@ export default function App({
       return null;
     }
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (commitDiffImagePreview?.before) URL.revokeObjectURL(commitDiffImagePreview.before);
+      if (commitDiffImagePreview?.after) URL.revokeObjectURL(commitDiffImagePreview.after);
+    };
+  }, [commitDiffImagePreview]);
+
+  useEffect(() => {
+    return () => {
+      if (diffImagePreview?.before) URL.revokeObjectURL(diffImagePreview.before);
+      if (diffImagePreview?.after) URL.revokeObjectURL(diffImagePreview.after);
+    };
+  }, [diffImagePreview]);
 
   useEffect(() => {
     setGraphBranchVisible((prev) => {
@@ -567,6 +608,7 @@ export default function App({
     setCommitDiffText(null);
     setCommitDiffLoading(false);
     setCommitDiffError(null);
+    setCommitDiffImagePreview(null);
     clearFileToolView();
   }, [clearFileToolView]);
 
@@ -582,6 +624,7 @@ export default function App({
       setDiffError(null);
       setDiffStagedText(null);
       setDiffUnstagedText(null);
+      setDiffImagePreview(null);
       try {
         if (side === "unstaged") {
           const unstaged = await invoke<string>("get_unstaged_diff", {
@@ -589,12 +632,34 @@ export default function App({
             filePath: f.path,
           });
           setDiffUnstagedText(unstaged);
+          if (pathLooksLikeRenderableImage(f.path)) {
+            try {
+              const pair = await invoke<FileBlobPair>("get_unstaged_file_blob_pair", {
+                path: repo.path,
+                filePath: f.path,
+              });
+              setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
+            } catch {
+              setDiffImagePreview(null);
+            }
+          }
         } else {
           const staged = await invoke<string>("get_staged_diff", {
             path: repo.path,
             filePath: f.path,
           });
           setDiffStagedText(staged);
+          if (pathLooksLikeRenderableImage(f.path)) {
+            try {
+              const pair = await invoke<FileBlobPair>("get_staged_file_blob_pair", {
+                path: repo.path,
+                filePath: f.path,
+              });
+              setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
+            } catch {
+              setDiffImagePreview(null);
+            }
+          }
         }
       } catch (e) {
         setDiffError(invokeErrorMessage(e));
@@ -619,6 +684,7 @@ export default function App({
       setCommitDiffPath(null);
       setCommitDiffText(null);
       setCommitDiffError(null);
+      setCommitDiffImagePreview(null);
       setCommitBrowseLoading(true);
       setCommitBrowseError(null);
       setCommitSignature({ loading: true, verified: null });
@@ -657,6 +723,7 @@ export default function App({
       setCommitDiffLoading(true);
       setCommitDiffError(null);
       setCommitDiffText(null);
+      setCommitDiffImagePreview(null);
       try {
         const text = await invoke<string>("get_commit_file_diff", {
           path: repo.path,
@@ -664,6 +731,18 @@ export default function App({
           filePath,
         });
         setCommitDiffText(text);
+        if (pathLooksLikeRenderableImage(filePath)) {
+          try {
+            const pair = await invoke<FileBlobPair>("get_commit_file_blob_pair", {
+              path: repo.path,
+              commitHash,
+              filePath,
+            });
+            setCommitDiffImagePreview(blobPairToPreviewUrls(pair, filePath));
+          } catch {
+            setCommitDiffImagePreview(null);
+          }
+        }
       } catch (e) {
         setCommitDiffError(invokeErrorMessage(e));
       } finally {
@@ -678,6 +757,7 @@ export default function App({
     setCommitDiffText(null);
     setCommitDiffError(null);
     setCommitDiffLoading(false);
+    setCommitDiffImagePreview(null);
   }, []);
 
   const clearDiffSelection = useCallback(() => {
@@ -687,6 +767,7 @@ export default function App({
     setDiffUnstagedText(null);
     setDiffError(null);
     setDiffLoading(false);
+    setDiffImagePreview(null);
     clearFileToolView();
   }, [clearFileToolView]);
 
@@ -1901,6 +1982,19 @@ export default function App({
                                       <UnifiedDiff
                                         text={diffStagedText}
                                         emptyLabel="(no staged diff)"
+                                        binaryImagePreview={
+                                          selectedDiffSide === "staged" &&
+                                          diffImagePreview &&
+                                          selectedDiffPath &&
+                                          pathLooksLikeRenderableImage(selectedDiffPath) &&
+                                          (diffImagePreview.before || diffImagePreview.after)
+                                            ? {
+                                                beforeUrl: diffImagePreview.before,
+                                                afterUrl: diffImagePreview.after,
+                                                fileLabel: selectedDiffPath,
+                                              }
+                                            : null
+                                        }
                                       />
                                     </div>
                                   ) : null}
@@ -1912,6 +2006,19 @@ export default function App({
                                       <UnifiedDiff
                                         text={diffUnstagedText}
                                         emptyLabel="(no unstaged diff)"
+                                        binaryImagePreview={
+                                          selectedDiffSide === "unstaged" &&
+                                          diffImagePreview &&
+                                          selectedDiffPath &&
+                                          pathLooksLikeRenderableImage(selectedDiffPath) &&
+                                          (diffImagePreview.before || diffImagePreview.after)
+                                            ? {
+                                                beforeUrl: diffImagePreview.before,
+                                                afterUrl: diffImagePreview.after,
+                                                fileLabel: selectedDiffPath,
+                                              }
+                                            : null
+                                        }
                                       />
                                     </div>
                                   ) : null}
@@ -2065,6 +2172,19 @@ export default function App({
                                   <UnifiedDiff
                                     text={commitDiffText ?? ""}
                                     emptyLabel="(no diff for this file)"
+                                    binaryImagePreview={
+                                      commitDiffImagePreview &&
+                                      commitDiffPath &&
+                                      pathLooksLikeRenderableImage(commitDiffPath) &&
+                                      (commitDiffImagePreview.before ||
+                                        commitDiffImagePreview.after)
+                                        ? {
+                                            beforeUrl: commitDiffImagePreview.before,
+                                            afterUrl: commitDiffImagePreview.after,
+                                            fileLabel: commitDiffPath,
+                                          }
+                                        : null
+                                    }
                                   />
                                 </div>
                               )}

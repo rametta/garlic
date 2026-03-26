@@ -16,6 +16,95 @@ import type { BundledLanguage, Highlighter } from "shiki";
 import { diffFileDisplayPath, pathToShikiLang } from "../diffLanguage";
 import { useDiffShikiTheme, useShikiHighlighter } from "../diffShiki";
 
+export type BinaryImagePreview = {
+  beforeUrl: string | null;
+  afterUrl: string | null;
+  fileLabel: string;
+};
+
+function BinaryImagePreview({ beforeUrl, afterUrl, fileLabel }: BinaryImagePreview) {
+  return (
+    <div className="unified-diff-binary-preview mb-3 flex min-w-0 flex-col gap-2 overflow-hidden rounded border border-base-300/80 bg-base-200/30 p-2">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[0.65rem] text-base-content/60">
+        <span className="font-mono wrap-break-word">{fileLabel}</span>
+        <span className="shrink-0 tracking-wide uppercase opacity-60">Image preview</span>
+      </div>
+      <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="flex min-h-0 min-w-0 flex-col gap-1">
+          <span className="text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+            Before
+          </span>
+          <div className="flex max-h-[min(50vh,420px)] min-h-[120px] min-w-0 items-center justify-center overflow-auto rounded bg-base-300/20 p-2">
+            {beforeUrl ? (
+              <img src={beforeUrl} alt="" className="max-h-full max-w-full object-contain" />
+            ) : (
+              <span className="text-xs text-base-content/40">—</span>
+            )}
+          </div>
+        </div>
+        <div className="flex min-h-0 min-w-0 flex-col gap-1">
+          <span className="text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+            After
+          </span>
+          <div className="flex max-h-[min(50vh,420px)] min-h-[120px] min-w-0 items-center justify-center overflow-auto rounded bg-base-300/20 p-2">
+            {afterUrl ? (
+              <img src={afterUrl} alt="" className="max-h-full max-w-full object-contain" />
+            ) : (
+              <span className="text-xs text-base-content/40">—</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Git omits `---`/`+++` for some binary patches (e.g. new file). `gitdiff-parser` then never sets
+ * `isBinary` (its outer `Binary files` handler never runs). Mark those files from the patch text.
+ */
+function enrichBinaryFilesFromGitBinaryMarker(files: FileData[], text: string): FileData[] {
+  if (!/\bBinary files\b/.test(text)) return files;
+  return files.map((f) => {
+    if (f.isBinary === true || f.hunks.length > 0) return f;
+    const path = diffFileDisplayPath(f);
+    if (path) {
+      const norm = path.replace(/\\/g, "/");
+      const binaryIdx = text.indexOf("Binary files");
+      if (binaryIdx >= 0) {
+        const tail = text.slice(binaryIdx).replace(/\\/g, "/");
+        if (tail.includes(norm) || tail.includes(`b/${norm}`) || tail.includes(`a/${norm}`)) {
+          return { ...f, isBinary: true };
+        }
+      }
+    }
+    if (files.length === 1) {
+      return { ...f, isBinary: true };
+    }
+    return f;
+  });
+}
+
+/** Last resort when parse still yields nothing for a Git binary patch. */
+function syntheticBinaryFileFromPatch(text: string): FileData {
+  const m = /^diff --git a\/(.+?) b\/(.+?)$/m.exec(text);
+  const newPath = m ? m[2].trim() : "";
+  const oldPath = m ? m[1].trim() : "";
+  return {
+    type: "modify",
+    hunks: [],
+    isBinary: true,
+    oldPath,
+    newPath,
+    oldRevision: "",
+    newRevision: "",
+    oldEndingNewLine: true,
+    newEndingNewLine: true,
+    oldMode: "",
+    newMode: "",
+  };
+}
+
 function fileKey(file: FileData, index: number): string {
   return `${file.oldRevision}-${file.newRevision}-${file.newPath || file.oldPath}-${index}`;
 }
@@ -116,15 +205,30 @@ function UnifiedDiffFile({
   fileIndex,
   highlighter,
   shikiTheme,
+  hideBinaryEmptyHunkPlaceholder,
 }: {
   file: FileData;
   fileIndex: number;
   highlighter: Highlighter | null;
   shikiTheme: "github-light" | "github-dark";
+  hideBinaryEmptyHunkPlaceholder: boolean;
 }) {
   const path = diffFileDisplayPath(file);
   const lang = useMemo(() => pathToShikiLang(path), [path]);
   const binary = file.isBinary === true;
+
+  if (file.isBinary === true && file.hunks.length === 0) {
+    if (hideBinaryEmptyHunkPlaceholder) {
+      return null;
+    }
+    return (
+      <div className="unified-diff-file flex min-w-0 flex-col gap-0">
+        <p className="m-0 px-2 py-1 text-xs text-base-content/60">
+          Binary file (no line-by-line diff)
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="unified-diff-file flex min-w-0 flex-col gap-0">
@@ -155,9 +259,11 @@ function UnifiedDiffFile({
 export function UnifiedDiff({
   text,
   emptyLabel,
+  binaryImagePreview,
 }: {
   text: string;
   emptyLabel: ReactNode;
+  binaryImagePreview?: BinaryImagePreview | null;
 }): ReactNode {
   const parsed = useMemo(() => {
     const trimmed = text.trim();
@@ -166,9 +272,13 @@ export function UnifiedDiff({
     }
     try {
       const files = parseDiff(text);
-      const withHunks = files.filter((f) => f.hunks.length > 0);
-      if (withHunks.length > 0) {
-        return { kind: "ok" as const, files: withHunks };
+      const enriched = enrichBinaryFilesFromGitBinaryMarker(files, text);
+      let withDiff = enriched.filter((f) => f.hunks.length > 0 || f.isBinary === true);
+      if (withDiff.length === 0 && /\bBinary files\b/.test(text)) {
+        withDiff = [syntheticBinaryFileFromPatch(text)];
+      }
+      if (withDiff.length > 0) {
+        return { kind: "ok" as const, files: withDiff };
       }
       return { kind: "raw" as const };
     } catch {
@@ -180,7 +290,19 @@ export function UnifiedDiff({
     return <span className="text-base-content/50">{emptyLabel}</span>;
   }
 
+  const showImagePreview =
+    binaryImagePreview &&
+    (binaryImagePreview.beforeUrl != null || binaryImagePreview.afterUrl != null);
+
   if (parsed.kind === "raw") {
+    if (showImagePreview) {
+      return (
+        <div className="unified-diff-root w-full min-w-0">
+          <BinaryImagePreview {...binaryImagePreview} />
+          <p className="m-0 text-xs text-base-content/50">Binary file (no line diff)</p>
+        </div>
+      );
+    }
     return (
       <pre className="m-0 font-mono text-[0.8125rem] leading-relaxed wrap-break-word whitespace-pre-wrap text-base-content">
         {text || emptyLabel}
@@ -188,10 +310,24 @@ export function UnifiedDiff({
     );
   }
 
-  return <UnifiedDiffWithHighlight parsedFiles={parsed.files} />;
+  return (
+    <div className="unified-diff-root w-full min-w-0">
+      {showImagePreview ? <BinaryImagePreview {...binaryImagePreview} /> : null}
+      <UnifiedDiffWithHighlight
+        parsedFiles={parsed.files}
+        hideBinaryEmptyHunkPlaceholder={Boolean(showImagePreview)}
+      />
+    </div>
+  );
 }
 
-function UnifiedDiffWithHighlight({ parsedFiles }: { parsedFiles: FileData[] }) {
+function UnifiedDiffWithHighlight({
+  parsedFiles,
+  hideBinaryEmptyHunkPlaceholder,
+}: {
+  parsedFiles: FileData[];
+  hideBinaryEmptyHunkPlaceholder: boolean;
+}) {
   const highlighter = useShikiHighlighter();
   const shikiTheme = useDiffShikiTheme();
 
@@ -205,6 +341,7 @@ function UnifiedDiffWithHighlight({ parsedFiles }: { parsedFiles: FileData[] }) 
             fileIndex={i}
             highlighter={highlighter}
             shikiTheme={shikiTheme}
+            hideBinaryEmptyHunkPlaceholder={hideBinaryEmptyHunkPlaceholder}
           />
         ))}
       </div>
