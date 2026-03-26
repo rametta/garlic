@@ -17,7 +17,13 @@ import {
   popupGraphCommitContextMenu,
   popupStashContextMenu,
 } from "./nativeContextMenu";
-import type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, StashEntry } from "./repoTypes";
+import type {
+  CommitEntry,
+  LocalBranchEntry,
+  RemoteBranchEntry,
+  StashEntry,
+  TagEntry,
+} from "./repoTypes";
 import { DEFAULT_OPENAI_MODEL, generateCommitTitleFromStagedDiff } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
 import {
@@ -27,7 +33,13 @@ import {
   reachableCommitHashesFromHead,
 } from "./graphCommitFilters";
 
-export type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, StashEntry } from "./repoTypes";
+export type {
+  CommitEntry,
+  LocalBranchEntry,
+  RemoteBranchEntry,
+  StashEntry,
+  TagEntry,
+} from "./repoTypes";
 
 /** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
 const FOCUS_REFRESH_DEBOUNCE_MS = 350;
@@ -126,6 +138,7 @@ export interface RestoreLastRepo {
   metadata: RepoMetadata | null;
   localBranches: LocalBranchEntry[];
   remoteBranches: RemoteBranchEntry[];
+  tags: TagEntry[];
   stashes: StashEntry[];
   commits: CommitEntry[];
   graphCommitsHasMore: boolean;
@@ -390,6 +403,7 @@ export default function App({
   const [remoteBranches, setRemoteBranches] = useState<RemoteBranchEntry[]>(
     () => startup.remoteBranches,
   );
+  const [tags, setTags] = useState<TagEntry[]>(() => startup.tags);
   const [stashes, setStashes] = useState<StashEntry[]>(() => startup.stashes);
   const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
   const [graphCommitsHasMore, setGraphCommitsHasMore] = useState(() => startup.graphCommitsHasMore);
@@ -539,14 +553,16 @@ export default function App({
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
-      const [locals, remotes, worktree, stashList] = await Promise.all([
+      const [locals, remotes, tagList, worktree, stashList] = await Promise.all([
         invoke<LocalBranchEntry[]>("list_local_branches", { path: repoPath }),
         invoke<RemoteBranchEntry[]>("list_remote_branches", { path: repoPath }),
+        invoke<TagEntry[]>("list_tags", { path: repoPath }),
         invoke<WorkingTreeFile[]>("list_working_tree_files", { path: repoPath }),
         invoke<StashEntry[]>("list_stashes", { path: repoPath }),
       ]);
       setLocalBranches(locals);
       setRemoteBranches(remotes);
+      setTags(tagList);
       setWorkingTreeFiles(worktree);
       setStashes(stashList);
       return worktree;
@@ -987,6 +1003,7 @@ export default function App({
         } else {
           setLocalBranches([]);
           setRemoteBranches([]);
+          setTags([]);
           setStashes([]);
           setCommits([]);
           setGraphCommitsHasMore(false);
@@ -996,6 +1013,7 @@ export default function App({
         setRepo(null);
         setLocalBranches([]);
         setRemoteBranches([]);
+        setTags([]);
         setStashes([]);
         setCommits([]);
         setGraphCommitsHasMore(false);
@@ -2769,6 +2787,7 @@ export default function App({
                             commitGraphLayout={commitGraphLayout}
                             localBranches={localBranches}
                             remoteBranches={remoteBranches}
+                            tags={tags}
                             graphBranchVisible={graphBranchVisible}
                             currentBranchName={currentBranchName}
                             currentBranchTipHash={currentBranchTipHash}

@@ -101,6 +101,7 @@ pub struct RestoreLastRepo {
     pub metadata: Option<git::RepoMetadata>,
     pub local_branches: Vec<git::LocalBranchEntry>,
     pub remote_branches: Vec<git::RemoteBranchEntry>,
+    pub tags: Vec<git::TagEntry>,
     pub stashes: Vec<git::StashEntry>,
     pub commits: Vec<git::CommitEntry>,
     /// True when the graph log has more commits than returned in `commits` (first page only).
@@ -116,6 +117,7 @@ impl RestoreLastRepo {
             metadata: None,
             local_branches: Vec::new(),
             remote_branches: Vec::new(),
+            tags: Vec::new(),
             stashes: Vec::new(),
             commits: Vec::new(),
             graph_commits_has_more: false,
@@ -143,7 +145,7 @@ fn restore_repo_snapshot(
                 });
             }
 
-            let (locals, remotes, working_tree, stashes) = std::thread::scope(|s| {
+            let (locals, remotes, working_tree, stashes, tags) = std::thread::scope(|s| {
                 let h1 = s.spawn({
                     let p = path.clone();
                     move || git::list_local_branches(p)
@@ -160,11 +162,16 @@ fn restore_repo_snapshot(
                     let p = path.clone();
                     move || git::list_stashes(p)
                 });
+                let h5 = s.spawn({
+                    let p = path.clone();
+                    move || git::list_tags(p)
+                });
                 (
                     h1.join().unwrap(),
                     h2.join().unwrap(),
                     h3.join().unwrap(),
                     h4.join().unwrap(),
+                    h5.join().unwrap(),
                 )
             });
             let commits_page = match (&locals, &remotes) {
@@ -185,7 +192,8 @@ fn restore_repo_snapshot(
                 .or(remotes.as_ref().err().cloned())
                 .or(commits_page.as_ref().err().cloned())
                 .or(working_tree.as_ref().err().cloned())
-                .or(stashes.as_ref().err().cloned());
+                .or(stashes.as_ref().err().cloned())
+                .or(tags.as_ref().err().cloned());
 
             let (commits, graph_commits_has_more) = match commits_page {
                 Ok(p) => (p.commits, p.has_more),
@@ -197,6 +205,7 @@ fn restore_repo_snapshot(
                 metadata: Some(meta),
                 local_branches: locals.unwrap_or_default(),
                 remote_branches: remotes.unwrap_or_default(),
+                tags: tags.unwrap_or_default(),
                 stashes: stashes.unwrap_or_default(),
                 commits,
                 graph_commits_has_more,

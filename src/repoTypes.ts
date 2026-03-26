@@ -30,6 +30,12 @@ export interface RemoteBranchEntry {
   tipHash: string;
 }
 
+/** Tag from `list_tags` (peeled commit OID for annotated tags). */
+export interface TagEntry {
+  name: string;
+  tipHash: string;
+}
+
 /** One stash from `list_stashes` / bootstrap. */
 export interface StashEntry {
   refName: string;

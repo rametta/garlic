@@ -19,6 +19,7 @@ export const emptyAppBootstrap: AppBootstrap = {
     metadata: null,
     localBranches: [],
     remoteBranches: [],
+    tags: [],
     stashes: [],
     commits: [],
     graphCommitsHasMore: false,

@@ -6,6 +6,7 @@ commands.allow = [
   "get_repo_metadata",
   "list_local_branches",
   "list_remote_branches",
+  "list_tags",
   "list_branch_commits",
   "list_graph_commits",
   "checkout_local_branch",

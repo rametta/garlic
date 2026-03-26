@@ -60,6 +60,14 @@ pub struct RemoteBranchEntry {
     pub tip_hash: String,
 }
 
+/// Tag (`refs/tags/...`) pointing at a commit (peeled OID for annotated tags).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagEntry {
+    pub name: String,
+    pub tip_hash: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalBranchEntry {
@@ -520,6 +528,56 @@ pub fn list_remote_branches(path: String) -> Result<Vec<RemoteBranchEntry>, Stri
             continue;
         }
         entries.push(RemoteBranchEntry { name, tip_hash });
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+/// All tags with the commit each tag points at (lightweight or peeled annotated).
+#[tauri::command]
+pub fn list_tags(path: String) -> Result<Vec<TagEntry>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let out = git_output(
+        &path_buf,
+        &[
+            "for-each-ref",
+            "--sort=refname",
+            "refs/tags",
+            "--format=%(refname:short)\t%(*objectname)\t%(objectname)",
+        ],
+    )?;
+    let mut entries = Vec::new();
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, '\t');
+        let Some(name) = parts.next().map(str::trim) else {
+            continue;
+        };
+        let Some(peeled) = parts.next().map(str::trim) else {
+            continue;
+        };
+        let Some(object) = parts.next().map(str::trim) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let tip_hash = if !peeled.is_empty() {
+            peeled.to_string()
+        } else {
+            object.to_string()
+        };
+        if tip_hash.is_empty() {
+            continue;
+        }
+        entries.push(TagEntry {
+            name: name.to_string(),
+            tip_hash,
+        });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)

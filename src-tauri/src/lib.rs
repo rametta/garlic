@@ -91,6 +91,7 @@ pub fn run() {
             git::get_repo_metadata,
             git::list_local_branches,
             git::list_remote_branches,
+            git::list_tags,
             git::list_branch_commits,
             git::list_graph_commits,
             git::checkout_local_branch,

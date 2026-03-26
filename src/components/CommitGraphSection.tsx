@@ -4,7 +4,7 @@ import { formatAuthorDisplay, formatDate, formatRelativeShort } from "../appForm
 import { CommitGraphColumn } from "./CommitGraphColumn";
 import { COMMIT_GRAPH_ROW_HEIGHT, type CommitGraphLayout } from "../commitGraphLayout";
 import { nativeContextMenusAvailable } from "../nativeContextMenu";
-import type { CommitEntry, LocalBranchEntry, RemoteBranchEntry } from "../repoTypes";
+import type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, TagEntry } from "../repoTypes";
 
 const GRAPH_GAP_PX = 6;
 const BRANCH_COL = "6.75rem";
@@ -14,6 +14,7 @@ export interface CommitGraphSectionProps {
   commitGraphLayout: CommitGraphLayout;
   localBranches: LocalBranchEntry[];
   remoteBranches: RemoteBranchEntry[];
+  tags: TagEntry[];
   graphBranchVisible: Record<string, boolean>;
   currentBranchName: string | null;
   currentBranchTipHash: string | null;
@@ -45,11 +46,16 @@ export interface CommitGraphSectionProps {
   wipChangedFileCount: number;
 }
 
-type TipsAtHash = { locals: LocalBranchEntry[]; remotes: RemoteBranchEntry[] };
+type TipsAtHash = {
+  locals: LocalBranchEntry[];
+  remotes: RemoteBranchEntry[];
+  tagTips: TagEntry[];
+};
 
 function buildTipsByHash(
   localBranches: LocalBranchEntry[],
   remoteBranches: RemoteBranchEntry[],
+  tags: TagEntry[],
   graphBranchVisible: Record<string, boolean>,
 ): Map<string, TipsAtHash> {
   const map = new Map<string, TipsAtHash>();
@@ -57,7 +63,7 @@ function buildTipsByHash(
     if (graphBranchVisible[`local:${b.name}`] === false) continue;
     let e = map.get(b.tipHash);
     if (!e) {
-      e = { locals: [], remotes: [] };
+      e = { locals: [], remotes: [], tagTips: [] };
       map.set(b.tipHash, e);
     }
     e.locals.push(b);
@@ -66,10 +72,21 @@ function buildTipsByHash(
     if (graphBranchVisible[`remote:${r.name}`] === false) continue;
     let e = map.get(r.tipHash);
     if (!e) {
-      e = { locals: [], remotes: [] };
+      e = { locals: [], remotes: [], tagTips: [] };
       map.set(r.tipHash, e);
     }
     e.remotes.push(r);
+  }
+  for (const t of tags) {
+    let e = map.get(t.tipHash);
+    if (!e) {
+      e = { locals: [], remotes: [], tagTips: [] };
+      map.set(t.tipHash, e);
+    }
+    e.tagTips.push(t);
+  }
+  for (const e of map.values()) {
+    e.tagTips.sort((a, b) => a.name.localeCompare(b.name));
   }
   return map;
 }
@@ -78,11 +95,17 @@ type RowLaneMeta = {
   laneColor: string | undefined;
   visibleLocalTips: LocalBranchEntry[];
   visibleRemoteTips: RemoteBranchEntry[];
+  visibleTags: TagEntry[];
 };
 
 function computeRowLaneMeta(layout: CommitGraphLayout, tips: TipsAtHash | undefined): RowLaneMeta {
   if (!tips) {
-    return { laneColor: undefined, visibleLocalTips: [], visibleRemoteTips: [] };
+    return {
+      laneColor: undefined,
+      visibleLocalTips: [],
+      visibleRemoteTips: [],
+      visibleTags: [],
+    };
   }
   const sortedNames = layout.branchNamesSorted;
   const tipsHereNames = [...tips.locals.map((b) => b.name), ...tips.remotes.map((r) => r.name)];
@@ -94,6 +117,7 @@ function computeRowLaneMeta(layout: CommitGraphLayout, tips: TipsAtHash | undefi
     laneColor,
     visibleLocalTips: tips.locals,
     visibleRemoteTips: tips.remotes,
+    visibleTags: tips.tagTips,
   };
 }
 
@@ -135,12 +159,12 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   openGraphCommitMenu,
 }: VirtualRowProps) {
   const stashRef = c.stashRef?.trim() || null;
-  const { laneColor, visibleLocalTips, visibleRemoteTips } = laneMeta;
+  const { laneColor, visibleLocalTips, visibleRemoteTips, visibleTags } = laneMeta;
+  const hasBranchTips = visibleLocalTips.length > 0 || visibleRemoteTips.length > 0;
   const tipsHereNames = [
     ...visibleLocalTips.map((b) => b.name),
     ...visibleRemoteTips.map((r) => r.name),
   ];
-  const hasBranchTips = visibleLocalTips.length > 0 || visibleRemoteTips.length > 0;
 
   const branchCell = hasBranchTips ? (
     <span
@@ -236,6 +260,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
     stashRef ? `${stashRef} — ${c.shortHash} — ${c.subject}` : `${c.shortHash} — ${c.subject}`,
     c.author,
     formatDate(c.date) ?? undefined,
+    visibleTags.length > 0 ? `Tags: ${visibleTags.map((t) => t.name).join(", ")}` : undefined,
   ]
     .filter(Boolean)
     .join("\n");
@@ -272,7 +297,22 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
           openGraphCommitMenu(c.hash, e.clientX, e.clientY);
         }}
       >
-        <span className="min-w-0 truncate text-base-content/90">{c.subject}</span>
+        <span className="flex min-w-0 items-center gap-x-1.5">
+          <span className="min-w-0 flex-1 truncate text-base-content/90">{c.subject}</span>
+          {visibleTags.length > 0 ? (
+            <span className="flex shrink-0 items-center gap-1">
+              {visibleTags.map((t) => (
+                <span
+                  key={`tag:${t.name}`}
+                  className="badge inline-flex max-w-[7rem] min-w-0 shrink-0 truncate badge-ghost font-mono badge-xs text-[0.6rem] text-accent"
+                  title={t.name}
+                >
+                  {t.name}
+                </span>
+              ))}
+            </span>
+          ) : null}
+        </span>
         <span
           className="min-w-0 truncate text-[0.62rem] text-base-content/55"
           title={c.author.trim() || undefined}
@@ -344,6 +384,7 @@ export function CommitGraphSection({
   commitGraphLayout,
   localBranches,
   remoteBranches,
+  tags,
   graphBranchVisible,
   currentBranchName,
   currentBranchTipHash,
@@ -394,8 +435,8 @@ export function CommitGraphSection({
   }, [authorFilterOpen, whenFilterOpen]);
 
   const tipsByHash = useMemo(
-    () => buildTipsByHash(localBranches, remoteBranches, graphBranchVisible),
-    [localBranches, remoteBranches, graphBranchVisible],
+    () => buildTipsByHash(localBranches, remoteBranches, tags, graphBranchVisible),
+    [localBranches, remoteBranches, tags, graphBranchVisible],
   );
 
   const rowLaneMetas = useMemo(() => {
