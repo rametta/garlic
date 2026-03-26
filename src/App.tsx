@@ -2748,12 +2748,13 @@ export default function App({
                           className="btn btn-outline btn-sm"
                           disabled={!canUseAiCommit}
                           title="Generate a commit message from staged changes using OpenAI"
+                          aria-label="Generate a commit message from staged changes using OpenAI"
                           onClick={() => void onAiGenerateCommitMessage()}
                         >
                           {aiCommitBusy ? (
                             <span className="loading loading-xs loading-spinner" />
                           ) : (
-                            "AI"
+                            "✨"
                           )}
                         </button>
                       ) : null}
