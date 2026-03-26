@@ -427,24 +427,37 @@ function BranchPanel({
   empty,
   emptyHint,
   headerRight,
+  belowHeader,
   children,
+  isLastSection,
 }: {
   title: string;
   empty: boolean;
   emptyHint: string;
   /** Optional control (e.g. action button) aligned with the panel title. */
   headerRight?: ReactNode;
+  /** Optional row below the title (e.g. list filter). */
+  belowHeader?: ReactNode;
   children: ReactNode;
+  /** When grouped in one card, omit bottom border on the final section. */
+  isLastSection: boolean;
 }) {
   return (
-    <div className="card flex min-h-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm">
-      <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-3 py-2">
+    <section
+      className={`flex min-h-0 min-w-0 flex-[1_1_0%] flex-col ${
+        isLastSection ? "" : "border-b border-base-300"
+      }`}
+    >
+      <div className="flex min-h-0 flex-1 flex-col gap-0">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
           <h2 className="m-0 card-title min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-70">
             {title}
           </h2>
           {headerRight ? <div className="shrink-0">{headerRight}</div> : null}
         </div>
+        {belowHeader ? (
+          <div className="shrink-0 border-b border-base-300">{belowHeader}</div>
+        ) : null}
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {empty ? (
             <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
@@ -453,7 +466,7 @@ function BranchPanel({
           )}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -951,8 +964,10 @@ export default function App({
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
   /** When set, the create-branch dialog starts the branch at this commit instead of HEAD. */
   const [createBranchStartCommit, setCreateBranchStartCommit] = useState<string | null>(null);
-  /** Case-insensitive substring filter for local + remote branch lists in the sidebar. */
-  const [branchListFilter, setBranchListFilter] = useState("");
+  /** Case-insensitive substring filters for each sidebar list (independent). */
+  const [localBranchListFilter, setLocalBranchListFilter] = useState("");
+  const [remoteBranchListFilter, setRemoteBranchListFilter] = useState("");
+  const [stashListFilter, setStashListFilter] = useState("");
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
@@ -974,7 +989,9 @@ export default function App({
   }, []);
 
   useEffect(() => {
-    setBranchListFilter("");
+    setLocalBranchListFilter("");
+    setRemoteBranchListFilter("");
+    setStashListFilter("");
   }, [repo?.path]);
 
   useEffect(() => {
@@ -2125,24 +2142,28 @@ export default function App({
     !listsError &&
     Boolean(repo && !repo.error);
 
-  const branchFilterNorm = branchListFilter.trim().toLowerCase();
+  const localBranchFilterNorm = localBranchListFilter.trim().toLowerCase();
+  const remoteBranchFilterNorm = remoteBranchListFilter.trim().toLowerCase();
+  const stashFilterNorm = stashListFilter.trim().toLowerCase();
+
   const filteredLocalBranches = useMemo(() => {
-    if (!branchFilterNorm) return localBranches;
-    return localBranches.filter((b) => b.name.toLowerCase().includes(branchFilterNorm));
-  }, [localBranches, branchFilterNorm]);
+    if (!localBranchFilterNorm) return localBranches;
+    return localBranches.filter((b) => b.name.toLowerCase().includes(localBranchFilterNorm));
+  }, [localBranches, localBranchFilterNorm]);
+
   const filteredRemoteBranches = useMemo(() => {
-    if (!branchFilterNorm) return remoteBranches;
-    return remoteBranches.filter((r) => r.name.toLowerCase().includes(branchFilterNorm));
-  }, [remoteBranches, branchFilterNorm]);
+    if (!remoteBranchFilterNorm) return remoteBranches;
+    return remoteBranches.filter((r) => r.name.toLowerCase().includes(remoteBranchFilterNorm));
+  }, [remoteBranches, remoteBranchFilterNorm]);
 
   const filteredStashes = useMemo(() => {
-    if (!branchFilterNorm) return stashes;
+    if (!stashFilterNorm) return stashes;
     return stashes.filter(
       (s) =>
-        s.refName.toLowerCase().includes(branchFilterNorm) ||
-        s.message.toLowerCase().includes(branchFilterNorm),
+        s.refName.toLowerCase().includes(stashFilterNorm) ||
+        s.message.toLowerCase().includes(stashFilterNorm),
     );
-  }, [stashes, branchFilterNorm]);
+  }, [stashes, stashFilterNorm]);
 
   const localBranchTrieRoot = useMemo(
     () => buildLocalBranchTrie(filteredLocalBranches),
@@ -2280,134 +2301,171 @@ export default function App({
             </div>
           </dialog>
 
-          {canShowBranches ? (
-            <label className="form-control w-full shrink-0">
-              <span className="label-text mb-1 text-xs font-semibold tracking-wide uppercase opacity-70">
-                Filter branches & stashes
-              </span>
-              <input
-                type="search"
-                className="input-bordered input input-sm w-full font-mono text-sm"
-                value={branchListFilter}
-                onChange={(e) => {
-                  setBranchListFilter(e.target.value);
-                }}
-                placeholder="Filter by name or message…"
-                autoComplete="off"
-                spellCheck={false}
-                aria-label="Filter local branches, remote branches, and stashes by name or stash message"
-              />
-            </label>
-          ) : null}
+          <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm lg:min-h-0">
+            <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
+              <BranchPanel
+                title="Local branches"
+                empty={canShowBranches && filteredLocalBranches.length === 0}
+                emptyHint={localBranchesEmptyHint}
+                isLastSection={false}
+                belowHeader={
+                  canShowBranches ? (
+                    <input
+                      type="search"
+                      className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
+                      value={localBranchListFilter}
+                      onChange={(e) => {
+                        setLocalBranchListFilter(e.target.value);
+                      }}
+                      placeholder="Filter local branches…"
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="Filter local branches by name"
+                    />
+                  ) : null
+                }
+                headerRight={
+                  canShowBranches ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      disabled={Boolean(branchBusy)}
+                      onClick={() => {
+                        openCreateBranchDialog();
+                      }}
+                    >
+                      New branch
+                    </button>
+                  ) : null
+                }
+              >
+                {canShowBranches ? (
+                  <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
+                    {renderLocalBranchTrieChildren(
+                      localBranchTrieRoot,
+                      currentBranchName,
+                      branchBusy,
+                      (name) => {
+                        void onCheckoutLocal(name);
+                      },
+                      (branchName, clientX, clientY) => {
+                        runBranchSidebarContextMenu(
+                          { kind: "local", branchName },
+                          clientX,
+                          clientY,
+                        );
+                      },
+                      branchGraphControls,
+                    )}
+                  </ul>
+                ) : null}
+              </BranchPanel>
 
-          <div className="flex min-h-0 flex-1 flex-col gap-3 lg:min-h-0">
-            <BranchPanel
-              title="Local branches"
-              empty={canShowBranches && filteredLocalBranches.length === 0}
-              emptyHint={localBranchesEmptyHint}
-              headerRight={
-                canShowBranches ? (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs"
-                    disabled={Boolean(branchBusy)}
-                    onClick={() => {
-                      openCreateBranchDialog();
-                    }}
-                  >
-                    New branch
-                  </button>
-                ) : null
-              }
-            >
-              {canShowBranches ? (
-                <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                  {renderLocalBranchTrieChildren(
-                    localBranchTrieRoot,
-                    currentBranchName,
-                    branchBusy,
-                    (name) => {
-                      void onCheckoutLocal(name);
-                    },
-                    (branchName, clientX, clientY) => {
-                      runBranchSidebarContextMenu({ kind: "local", branchName }, clientX, clientY);
-                    },
-                    branchGraphControls,
-                  )}
-                </ul>
-              ) : null}
-            </BranchPanel>
+              <BranchPanel
+                title="Remote branches"
+                empty={canShowBranches && filteredRemoteBranches.length === 0}
+                emptyHint={remoteBranchesEmptyHint}
+                isLastSection={false}
+                belowHeader={
+                  canShowBranches ? (
+                    <input
+                      type="search"
+                      className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
+                      value={remoteBranchListFilter}
+                      onChange={(e) => {
+                        setRemoteBranchListFilter(e.target.value);
+                      }}
+                      placeholder="Filter remote branches…"
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="Filter remote-tracking branches by name"
+                    />
+                  ) : null
+                }
+              >
+                {canShowBranches ? (
+                  <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
+                    {renderRemoteBranchTrieChildren(
+                      remoteBranchTrieRoot,
+                      branchBusy,
+                      (remoteRef) => {
+                        void onCreateFromRemote(remoteRef);
+                      },
+                      branchGraphControls,
+                      (fullRef, clientX, clientY) => {
+                        runBranchSidebarContextMenu({ kind: "remote", fullRef }, clientX, clientY);
+                      },
+                    )}
+                  </ul>
+                ) : null}
+              </BranchPanel>
 
-            <BranchPanel
-              title="Remote branches"
-              empty={canShowBranches && filteredRemoteBranches.length === 0}
-              emptyHint={remoteBranchesEmptyHint}
-            >
-              {canShowBranches ? (
-                <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                  {renderRemoteBranchTrieChildren(
-                    remoteBranchTrieRoot,
-                    branchBusy,
-                    (remoteRef) => {
-                      void onCreateFromRemote(remoteRef);
-                    },
-                    branchGraphControls,
-                    (fullRef, clientX, clientY) => {
-                      runBranchSidebarContextMenu({ kind: "remote", fullRef }, clientX, clientY);
-                    },
-                  )}
-                </ul>
-              ) : null}
-            </BranchPanel>
-
-            <BranchPanel
-              title="Stashes"
-              empty={canShowBranches && filteredStashes.length === 0}
-              emptyHint={stashesEmptyHint}
-              headerRight={
-                canShowBranches ? (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs"
-                    disabled={Boolean(branchBusy) || stashBusy !== null}
-                    onClick={() => {
-                      void onStashPush();
-                    }}
-                  >
-                    {stashBusy === "push" ? "…" : "Stash"}
-                  </button>
-                ) : null
-              }
-            >
-              {canShowBranches ? (
-                <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
-                  {filteredStashes.map((s) => {
-                    const stashRowBusy = Boolean(branchBusy) || stashBusy !== null;
-                    return (
-                      <li key={s.refName} className="min-w-0">
-                        <div
-                          className="flex w-full min-w-0 flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
-                          title={`${s.refName}: ${s.message}`}
-                          onContextMenu={(e) => {
-                            if (stashRowBusy) return;
-                            if (!nativeContextMenusAvailable()) return;
-                            e.preventDefault();
-                            openGraphStashMenu(s.refName, e.clientX, e.clientY);
-                          }}
-                        >
-                          <span className="font-mono text-[0.65rem] leading-snug break-all opacity-70">
-                            {s.refName}
-                          </span>
-                          <span className="text-[0.8125rem] leading-snug wrap-break-word">
-                            {s.message}
-                          </span>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : null}
-            </BranchPanel>
+              <BranchPanel
+                title="Stashes"
+                empty={canShowBranches && filteredStashes.length === 0}
+                emptyHint={stashesEmptyHint}
+                isLastSection
+                belowHeader={
+                  canShowBranches ? (
+                    <input
+                      type="search"
+                      className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
+                      value={stashListFilter}
+                      onChange={(e) => {
+                        setStashListFilter(e.target.value);
+                      }}
+                      placeholder="Filter by ref or message…"
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="Filter stashes by ref name or message"
+                    />
+                  ) : null
+                }
+                headerRight={
+                  canShowBranches ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      disabled={Boolean(branchBusy) || stashBusy !== null}
+                      onClick={() => {
+                        void onStashPush();
+                      }}
+                    >
+                      {stashBusy === "push" ? "…" : "Stash"}
+                    </button>
+                  ) : null
+                }
+              >
+                {canShowBranches ? (
+                  <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
+                    {filteredStashes.map((s) => {
+                      const stashRowBusy = Boolean(branchBusy) || stashBusy !== null;
+                      return (
+                        <li key={s.refName} className="min-w-0">
+                          <div
+                            className="flex w-full min-w-0 flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
+                            title={`${s.refName}: ${s.message}`}
+                            onContextMenu={(e) => {
+                              if (stashRowBusy) return;
+                              if (!nativeContextMenusAvailable()) return;
+                              e.preventDefault();
+                              openGraphStashMenu(s.refName, e.clientX, e.clientY);
+                            }}
+                          >
+                            <span className="font-mono text-[0.65rem] leading-snug break-all opacity-70">
+                              {s.refName}
+                            </span>
+                            <span className="text-[0.8125rem] leading-snug wrap-break-word">
+                              {s.message}
+                            </span>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : null}
+              </BranchPanel>
+            </div>
           </div>
         </aside>
 
@@ -2417,47 +2475,53 @@ export default function App({
           }`}
         >
           <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-md">
-            <div className="card-body flex min-h-0 flex-1 flex-col gap-0 px-6 py-5">
+            <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
               {loading ? (
-                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 py-4">
+                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 py-5">
                   <span className="loading loading-md loading-spinner text-primary" />
                   <p className="m-0 text-center text-[0.9375rem] text-base-content/80">
                     Loading repository…
                   </p>
                 </div>
               ) : loadError ? (
-                <div role="alert" className="alert text-sm alert-error">
-                  <span>{loadError}</span>
+                <div className="p-4">
+                  <div role="alert" className="alert text-sm alert-error">
+                    <span>{loadError}</span>
+                  </div>
                 </div>
               ) : repo ? (
                 <>
                   {repo.error ? (
-                    <>
+                    <div className="px-4 pt-4 pb-4">
                       <div role="status" className="alert text-sm alert-warning">
                         <span>{repo.error}</span>
                       </div>
                       <dl className="m-0 mt-4 flex flex-col gap-2.5">
                         <MetaRow label="Path">{repo.path}</MetaRow>
                       </dl>
-                    </>
+                    </div>
                   ) : (
                     <div className="flex min-h-0 flex-1 flex-col">
-                      {listsError ? (
-                        <div role="alert" className="mb-3 alert shrink-0 text-sm alert-error">
-                          <span>{listsError}</span>
-                        </div>
-                      ) : null}
-                      {operationError ? (
-                        <div role="alert" className="mb-3 alert shrink-0 text-sm alert-error">
-                          <span className="wrap-break-word whitespace-pre-wrap">
-                            {operationError}
-                          </span>
+                      {listsError || operationError ? (
+                        <div className="shrink-0 space-y-2 px-3 pt-3">
+                          {listsError ? (
+                            <div role="alert" className="alert text-sm alert-error">
+                              <span>{listsError}</span>
+                            </div>
+                          ) : null}
+                          {operationError ? (
+                            <div role="alert" className="alert text-sm alert-error">
+                              <span className="wrap-break-word whitespace-pre-wrap">
+                                {operationError}
+                              </span>
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
 
                       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                         {!listsError && selectedDiffPath ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
                             <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
                               <div className="min-w-0">
                                 <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
@@ -2521,7 +2585,7 @@ export default function App({
                             </div>
                           </div>
                         ) : !listsError && fileBlamePath ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
                             <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
                               <div className="min-w-0">
                                 <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
@@ -2559,7 +2623,7 @@ export default function App({
                             </div>
                           </div>
                         ) : !listsError && fileHistoryPath ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
                             <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
                               <div className="min-w-0">
                                 <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
@@ -2626,7 +2690,7 @@ export default function App({
                             </div>
                           </div>
                         ) : !listsError && commitDiffPath && commitBrowseHash ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 px-4 pt-3 pb-4">
                             <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-1.5">
                               <button
                                 type="button"
@@ -2672,7 +2736,7 @@ export default function App({
                             </div>
                           </div>
                         ) : !listsError && commitBrowseHash ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden px-4 pt-3 pb-4">
                             <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
                               <button
                                 type="button"
@@ -2781,7 +2845,7 @@ export default function App({
                           </div>
                         ) : (
                           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                            <h2 className="m-0 mb-1.5 flex shrink-0 flex-wrap items-baseline gap-x-2 gap-y-0 border-b border-base-300 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                            <h2 className="m-0 mb-1.5 flex shrink-0 flex-wrap items-baseline gap-x-2 gap-y-0 border-b border-base-300 px-3 pt-2 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                               <span>Commits</span>
                               <span className="font-mono text-[0.6rem] font-normal tracking-normal text-base-content/55 normal-case">
                                 {commits.length}
@@ -2789,22 +2853,22 @@ export default function App({
                               </span>
                             </h2>
                             {commits.length === 0 ? (
-                              <p className="m-0 flex flex-1 items-center justify-center text-center text-xs text-base-content/60">
+                              <p className="m-0 flex flex-1 items-center justify-center px-3 text-center text-xs text-base-content/60">
                                 No commits to show
                               </p>
                             ) : (
                               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                                 <div
-                                  className="sticky top-0 z-10 mb-0.5 grid shrink-0 items-center gap-x-1.5 border-b border-base-300/80 bg-base-100 px-1 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase"
+                                  className="sticky top-0 z-10 mb-0.5 grid shrink-0 items-center gap-x-1.5 border-b border-base-300/80 bg-base-100 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase"
                                   style={{
                                     gridTemplateColumns: `minmax(0, 6.75rem) ${commitGraphLayout.graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`,
                                   }}
                                 >
-                                  <span className="truncate">Branch</span>
+                                  <span className="truncate pl-3">Branch</span>
                                   <span className="min-w-0 truncate">Graph</span>
                                   <span className="min-w-0 truncate">Commit message</span>
                                   <span className="min-w-0 truncate">Author</span>
-                                  <span className="text-right">When</span>
+                                  <span className="pr-3 text-right">When</span>
                                 </div>
                                 <div className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto">
                                   <div
