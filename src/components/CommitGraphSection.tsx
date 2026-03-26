@@ -390,13 +390,6 @@ export function CommitGraphSection({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <h2 className="m-0 mb-1.5 flex shrink-0 flex-wrap items-baseline gap-x-2 gap-y-0 border-b border-base-300 px-3 pt-2 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-        <span>Commits</span>
-        <span className="font-mono text-[0.6rem] font-normal tracking-normal text-base-content/55 normal-case">
-          {commits.length}
-          {graphCommitsHasMore ? "+" : ""}
-        </span>
-      </h2>
       <div
         className="sticky top-0 z-10 mb-0.5 grid shrink-0 items-center gap-x-1.5 border-b border-base-300/80 bg-base-100 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase"
         style={{ gridTemplateColumns }}
@@ -426,7 +419,7 @@ export function CommitGraphSection({
             ) : null}
           </button>
           <div
-            className="dropdown-content z-[100] mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg"
+            className="dropdown-content z-100 mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg"
             onMouseDown={(e) => {
               e.stopPropagation();
             }}
@@ -483,7 +476,7 @@ export function CommitGraphSection({
             ) : null}
           </button>
           <div
-            className="dropdown-content dropdown-end z-[100] mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg"
+            className="dropdown-content dropdown-end z-100 mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg"
             onMouseDown={(e) => {
               e.stopPropagation();
             }}
@@ -540,7 +533,7 @@ export function CommitGraphSection({
       <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto">
         {commits.length === 0 ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex min-h-[10rem] flex-1 flex-col items-center justify-center px-3 py-8">
+            <div className="flex min-h-40 flex-1 flex-col items-center justify-center px-3 py-8">
               <p className="m-0 max-w-md text-center text-xs text-base-content/60">
                 {emptyMessage}
               </p>
@@ -578,7 +571,7 @@ export function CommitGraphSection({
                     />
                   );
                 })}
-                <div className="relative z-[1]">
+                <div className="relative z-1">
                   <CommitGraphColumn layout={commitGraphLayout} commitCount={commits.length} />
                 </div>
               </div>
@@ -588,7 +581,7 @@ export function CommitGraphSection({
                   <div
                     key={`graph-ctx-${c.hash}`}
                     role="presentation"
-                    className="absolute z-[2] cursor-context-menu"
+                    className="absolute z-2 cursor-context-menu"
                     style={{
                       left: graphLeft,
                       width: graphWidthPx,

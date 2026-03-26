@@ -2870,7 +2870,7 @@ export default function App({
       {createPortal(
         openaiSettingsOpen ? (
           <div
-            className="modal-open modal pointer-events-auto z-[9999]"
+            className="modal-open modal pointer-events-auto z-9999"
             role="presentation"
             onClick={() => {
               closeOpenAiSettingsDialog();
