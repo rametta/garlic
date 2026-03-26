@@ -125,6 +125,7 @@ pub fn run() {
             git::get_unstaged_file_blob_pair,
             git::pull_local_branch,
             git::push_to_origin,
+            git::push_tag_to_origin,
             git::force_push_to_origin,
             git::list_stashes,
             git::stash_push,

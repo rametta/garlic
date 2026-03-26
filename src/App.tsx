@@ -15,6 +15,7 @@ import {
   popupBranchContextMenu,
   popupFileRowContextMenu,
   popupGraphCommitContextMenu,
+  popupGraphTagContextMenu,
   popupStashContextMenu,
 } from "./nativeContextMenu";
 import type {
@@ -1552,6 +1553,31 @@ export default function App({
     [branchBusy, repo, commits, selectCommit, cherryPickCommit],
   );
 
+  const openGraphTagMenu = useCallback(
+    (tagName: string, clientX: number, clientY: number) => {
+      if (branchBusy || pushBusy) return;
+      void popupGraphTagContextMenu(clientX, clientY, {
+        pushDisabled: !repo?.path || Boolean(repo?.error),
+        onPushToOrigin: () => {
+          void (async () => {
+            if (!repo?.path || repo.error) return;
+            setPushBusy(true);
+            setOperationError(null);
+            try {
+              await invoke("push_tag_to_origin", { path: repo.path, tag: tagName });
+              await refreshAfterMutation();
+            } catch (e) {
+              setOperationError(invokeErrorMessage(e));
+            } finally {
+              setPushBusy(false);
+            }
+          })();
+        },
+      });
+    },
+    [branchBusy, pushBusy, repo, refreshAfterMutation],
+  );
+
   useEffect(() => {
     const promise = Promise.all([
       listen("open-openai-settings", () => {
@@ -2812,6 +2838,8 @@ export default function App({
                             openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
                             openGraphStashMenu={openGraphStashMenu}
                             openGraphCommitMenu={openGraphCommitMenu}
+                            openGraphTagMenu={openGraphTagMenu}
+                            pushBusy={pushBusy}
                             graphAuthorFilter={graphAuthorFilter}
                             onGraphAuthorFilterChange={setGraphAuthorFilter}
                             graphDateFrom={graphDateFrom}

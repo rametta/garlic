@@ -40,6 +40,7 @@ commands.allow = [
   "get_unstaged_file_blob_pair",
   "pull_local_branch",
   "push_to_origin",
+  "push_tag_to_origin",
   "force_push_to_origin",
   "list_stashes",
   "stash_push",

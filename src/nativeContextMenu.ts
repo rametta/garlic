@@ -308,3 +308,28 @@ export async function popupGraphCommitContextMenu(
     console.error("native commit context menu failed", e);
   }
 }
+
+export async function popupGraphTagContextMenu(
+  clientX: number,
+  clientY: number,
+  args: {
+    pushDisabled: boolean;
+    onPushToOrigin: () => void;
+  },
+): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    await showMenuAt(clientX, clientY, [
+      {
+        id: "tag_push_origin",
+        text: "Push tag to origin",
+        enabled: !args.pushDisabled,
+        action: () => {
+          args.onPushToOrigin();
+        },
+      },
+    ]);
+  } catch (e) {
+    console.error("native tag context menu failed", e);
+  }
+}

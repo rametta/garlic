@@ -1754,3 +1754,21 @@ pub fn force_push_to_origin(path: String) -> Result<(), String> {
     )?;
     Ok(())
 }
+
+/// Push a local tag to `origin` (`git push origin <tag>`).
+#[tauri::command]
+pub fn push_tag_to_origin(path: String, tag: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return Err("Tag name cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
+        "No remote named \"origin\" configured.".to_string()
+    })?;
+    let tag_ref = format!("refs/tags/{tag}");
+    git_output(&path_buf, &["rev-parse", "--verify", &tag_ref])?;
+    git_output(&path_buf, &["push", "origin", tag])?;
+    Ok(())
+}

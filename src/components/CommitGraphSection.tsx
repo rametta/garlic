@@ -20,6 +20,8 @@ export interface CommitGraphSectionProps {
   currentBranchTipHash: string | null;
   commitBrowseHash: string | null;
   branchBusy: string | null;
+  /** True while a push (branch or tag) is in progress. */
+  pushBusy: boolean;
   stashBusy: string | null;
   commitsSectionTitle: string;
   /** Shown when `commits.length === 0` (e.g. filters excluded every row). */
@@ -32,6 +34,7 @@ export interface CommitGraphSectionProps {
   openGraphBranchRemoteMenu: (fullRef: string, clientX: number, clientY: number) => void;
   openGraphStashMenu: (stashRef: string, clientX: number, clientY: number) => void;
   openGraphCommitMenu: (hash: string, clientX: number, clientY: number) => void;
+  openGraphTagMenu: (tagName: string, clientX: number, clientY: number) => void;
   graphAuthorFilter: string;
   onGraphAuthorFilterChange: (value: string) => void;
   graphDateFrom: string;
@@ -131,6 +134,7 @@ type VirtualRowProps = {
   currentBranchTipHash: string | null;
   currentBranchName: string | null;
   branchBusy: string | null;
+  pushBusy: boolean;
   stashBusy: string | null;
   commitsSectionTitle: string;
   onRowCommitSelect: (hash: string) => void;
@@ -138,6 +142,7 @@ type VirtualRowProps = {
   openGraphBranchRemoteMenu: (fullRef: string, clientX: number, clientY: number) => void;
   openGraphStashMenu: (stashRef: string, clientX: number, clientY: number) => void;
   openGraphCommitMenu: (hash: string, clientX: number, clientY: number) => void;
+  openGraphTagMenu: (tagName: string, clientX: number, clientY: number) => void;
 };
 
 const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
@@ -150,6 +155,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   currentBranchTipHash,
   currentBranchName,
   branchBusy,
+  pushBusy,
   stashBusy,
   commitsSectionTitle,
   onRowCommitSelect,
@@ -157,6 +163,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   openGraphBranchRemoteMenu,
   openGraphStashMenu,
   openGraphCommitMenu,
+  openGraphTagMenu,
 }: VirtualRowProps) {
   const stashRef = c.stashRef?.trim() || null;
   const { laneColor, visibleLocalTips, visibleRemoteTips, visibleTags } = laneMeta;
@@ -304,8 +311,15 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
               {visibleTags.map((t) => (
                 <span
                   key={`tag:${t.name}`}
-                  className="badge inline-flex max-w-[7rem] min-w-0 shrink-0 truncate badge-ghost font-mono badge-xs text-[0.6rem] text-accent"
+                  className="badge inline-flex max-w-[7rem] min-w-0 shrink-0 cursor-context-menu truncate badge-ghost font-mono badge-xs text-[0.6rem] text-accent"
                   title={t.name}
+                  onContextMenu={(e) => {
+                    if (branchBusy || pushBusy) return;
+                    if (!nativeContextMenusAvailable()) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openGraphTagMenu(t.name, e.clientX, e.clientY);
+                  }}
                 >
                   {t.name}
                 </span>
@@ -390,6 +404,7 @@ export function CommitGraphSection({
   currentBranchTipHash,
   commitBrowseHash,
   branchBusy,
+  pushBusy,
   stashBusy,
   commitsSectionTitle,
   emptyMessage = "No commits to show",
@@ -401,6 +416,7 @@ export function CommitGraphSection({
   openGraphBranchRemoteMenu,
   openGraphStashMenu,
   openGraphCommitMenu,
+  openGraphTagMenu,
   graphAuthorFilter,
   onGraphAuthorFilterChange,
   graphDateFrom,
@@ -765,6 +781,7 @@ export function CommitGraphSection({
                       currentBranchTipHash={currentBranchTipHash}
                       currentBranchName={currentBranchName}
                       branchBusy={branchBusy}
+                      pushBusy={pushBusy}
                       stashBusy={stashBusy}
                       commitsSectionTitle={commitsSectionTitle}
                       onRowCommitSelect={onRowCommitSelect}
@@ -772,6 +789,7 @@ export function CommitGraphSection({
                       openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
                       openGraphStashMenu={openGraphStashMenu}
                       openGraphCommitMenu={openGraphCommitMenu}
+                      openGraphTagMenu={openGraphTagMenu}
                     />
                   </div>
                 );
