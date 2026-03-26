@@ -581,7 +581,7 @@ function LocalBranchRow({
   return (
     <li className={isCurrent ? "menu-active" : ""}>
       <div
-        className="flex w-full min-w-0 items-stretch gap-0"
+        className="flex w-full min-w-0 items-center gap-0"
         onContextMenu={(e) => {
           if (busy) return;
           e.preventDefault();
@@ -590,11 +590,30 @@ function LocalBranchRow({
       >
         <button
           type="button"
+          className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
+          title={graphVisible ? "Hide branch from commit graph" : "Show branch in commit graph"}
+          aria-label={graphVisible ? "Hide from graph" : "Show in graph"}
+          aria-pressed={graphVisible}
+          disabled={busy}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            graph.toggleGraphLocal(branch.name);
+          }}
+        >
+          {graphVisible ? (
+            <IconEye className="text-success opacity-95" />
+          ) : (
+            <IconEyeOff className="text-success/45" />
+          )}
+        </button>
+        <button
+          type="button"
           disabled={busy || isCurrent}
           onClick={() => {
             onCheckoutLocal(branch.name);
           }}
-          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 py-2 pr-1 pl-2 text-left ${busy ? "opacity-60" : ""}`}
+          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 py-2 pr-2 pl-1 text-left ${busy ? "opacity-60" : ""}`}
         >
           <span
             className="min-w-0 flex-1 truncate text-[0.8125rem] leading-snug"
@@ -619,25 +638,6 @@ function LocalBranchRow({
               {upstreamLabel}
             </span>
           ) : null}
-        </button>
-        <button
-          type="button"
-          className="btn shrink-0 rounded-none px-2 opacity-90 btn-ghost btn-xs"
-          title={graphVisible ? "Hide branch from commit graph" : "Show branch in commit graph"}
-          aria-label={graphVisible ? "Hide from graph" : "Show in graph"}
-          aria-pressed={graphVisible}
-          disabled={busy}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            graph.toggleGraphLocal(branch.name);
-          }}
-        >
-          {graphVisible ? (
-            <IconEye className="opacity-90" />
-          ) : (
-            <IconEyeOff className="opacity-50" />
-          )}
         </button>
       </div>
     </li>
@@ -675,11 +675,10 @@ function renderLocalBranchTrieChildren(
     return (
       <li key={segment}>
         <details open>
-          <summary className="min-w-0 font-mono text-[0.8125rem]">
-            <span className="min-w-0 wrap-break-word">{segment}</span>
+          <summary className="grid min-w-0 cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-0 font-mono text-[0.8125rem]">
             <button
               type="button"
-              className="btn w-fit shrink-0 justify-self-end rounded-none px-2 opacity-90 btn-ghost btn-xs"
+              className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center self-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
               title={
                 folderGraphVisible
                   ? "Hide all branches in this folder from commit graph"
@@ -694,11 +693,12 @@ function renderLocalBranchTrieChildren(
               }}
             >
               {folderGraphVisible ? (
-                <IconEye className="opacity-90" />
+                <IconEye className="text-success opacity-95" />
               ) : (
-                <IconEyeOff className="opacity-50" />
+                <IconEyeOff className="text-success/45" />
               )}
             </button>
+            <span className="min-w-0 py-2 pr-2 pl-1 wrap-break-word">{segment}</span>
           </summary>
           <ul>
             {child.branchHere ? (
@@ -745,7 +745,7 @@ function RemoteBranchRow({
   return (
     <li>
       <div
-        className="flex w-full min-w-0 items-stretch gap-0"
+        className="flex w-full min-w-0 items-center gap-0"
         onContextMenu={(e) => {
           if (busy) return;
           e.preventDefault();
@@ -754,17 +754,7 @@ function RemoteBranchRow({
       >
         <button
           type="button"
-          disabled={busy}
-          onClick={() => {
-            onCreateFromRemote(fullRef);
-          }}
-          className={`flex h-auto min-h-0 min-w-0 flex-1 justify-start py-2 pr-1 pl-2 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
-        >
-          {busy ? "Creating…" : fullRef}
-        </button>
-        <button
-          type="button"
-          className="btn shrink-0 rounded-none px-2 opacity-90 btn-ghost btn-xs"
+          className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
           title={graphVisible ? "Hide remote from commit graph" : "Show remote in commit graph"}
           aria-label={graphVisible ? "Hide from graph" : "Show in graph"}
           aria-pressed={graphVisible}
@@ -776,10 +766,20 @@ function RemoteBranchRow({
           }}
         >
           {graphVisible ? (
-            <IconEye className="opacity-90" />
+            <IconEye className="text-success opacity-95" />
           ) : (
-            <IconEyeOff className="opacity-50" />
+            <IconEyeOff className="text-success/45" />
           )}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            onCreateFromRemote(fullRef);
+          }}
+          className={`flex h-auto min-h-0 min-w-0 flex-1 justify-start py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
+        >
+          {busy ? "Creating…" : fullRef}
         </button>
       </div>
     </li>
@@ -815,11 +815,10 @@ function renderRemoteBranchTrieChildren(
     return (
       <li key={segment}>
         <details open>
-          <summary className="min-w-0 font-mono text-[0.8125rem]">
-            <span className="min-w-0 wrap-break-word">{segment}</span>
+          <summary className="grid min-w-0 cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-0 font-mono text-[0.8125rem]">
             <button
               type="button"
-              className="btn w-fit shrink-0 justify-self-end rounded-none px-2 opacity-90 btn-ghost btn-xs"
+              className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center self-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
               title={
                 folderGraphVisible
                   ? "Hide all remote branches in this folder from commit graph"
@@ -834,11 +833,12 @@ function renderRemoteBranchTrieChildren(
               }}
             >
               {folderGraphVisible ? (
-                <IconEye className="opacity-90" />
+                <IconEye className="text-success opacity-95" />
               ) : (
-                <IconEyeOff className="opacity-50" />
+                <IconEyeOff className="text-success/45" />
               )}
             </button>
+            <span className="min-w-0 py-2 pr-2 pl-1 wrap-break-word">{segment}</span>
           </summary>
           <ul>
             {child.refHere ? (
@@ -2094,6 +2094,15 @@ export default function App({
     return remoteBranches.filter((r) => r.name.toLowerCase().includes(branchFilterNorm));
   }, [remoteBranches, branchFilterNorm]);
 
+  const filteredStashes = useMemo(() => {
+    if (!branchFilterNorm) return stashes;
+    return stashes.filter(
+      (s) =>
+        s.refName.toLowerCase().includes(branchFilterNorm) ||
+        s.message.toLowerCase().includes(branchFilterNorm),
+    );
+  }, [stashes, branchFilterNorm]);
+
   const localBranchTrieRoot = useMemo(
     () => buildLocalBranchTrie(filteredLocalBranches),
     [filteredLocalBranches],
@@ -2107,6 +2116,7 @@ export default function App({
     localBranches.length === 0 ? "No local branches" : "No branches match filter";
   const remoteBranchesEmptyHint =
     remoteBranches.length === 0 ? "No remote-tracking branches" : "No branches match filter";
+  const stashesEmptyHint = stashes.length === 0 ? "No stashes" : "No stashes match filter";
 
   const commitGraphLayout = useMemo(
     () =>
@@ -2228,7 +2238,7 @@ export default function App({
           {canShowBranches ? (
             <label className="form-control w-full shrink-0">
               <span className="label-text mb-1 text-xs font-semibold tracking-wide uppercase opacity-70">
-                Filter branches
+                Filter branches & stashes
               </span>
               <input
                 type="search"
@@ -2237,10 +2247,10 @@ export default function App({
                 onChange={(e) => {
                   setBranchListFilter(e.target.value);
                 }}
-                placeholder="Filter by name…"
+                placeholder="Filter by name or message…"
                 autoComplete="off"
                 spellCheck={false}
-                aria-label="Filter branch lists by name"
+                aria-label="Filter local branches, remote branches, and stashes by name or stash message"
               />
             </label>
           ) : null}
@@ -2320,8 +2330,8 @@ export default function App({
 
           <BranchPanel
             title="Stashes"
-            empty={canShowBranches && stashes.length === 0}
-            emptyHint="No stashes"
+            empty={canShowBranches && filteredStashes.length === 0}
+            emptyHint={stashesEmptyHint}
             headerRight={
               canShowBranches ? (
                 <button
@@ -2338,14 +2348,13 @@ export default function App({
             }
           >
             {canShowBranches ? (
-              <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-                {stashes.map((s) => {
-                  const popping = stashBusy === `pop:${s.refName}`;
+              <ul className="menu w-full min-w-0 menu-sm rounded-md bg-transparent p-0">
+                {filteredStashes.map((s) => {
                   const stashRowBusy = Boolean(branchBusy) || stashBusy !== null;
                   return (
-                    <li key={s.refName}>
+                    <li key={s.refName} className="min-w-0">
                       <div
-                        className="flex w-full min-w-0 items-stretch gap-0"
+                        className="w-full min-w-0 overflow-x-hidden px-2 py-2"
                         onContextMenu={(e) => {
                           if (stashRowBusy) return;
                           e.preventDefault();
@@ -2358,28 +2367,17 @@ export default function App({
                           });
                         }}
                       >
-                        <span
-                          className="flex min-h-0 min-w-0 flex-1 flex-col justify-center gap-0.5 py-2 pr-1 pl-2 text-left"
+                        <div
+                          className="flex min-h-0 min-w-0 flex-col gap-0.5 text-left wrap-break-word"
                           title={`${s.refName}: ${s.message}`}
                         >
-                          <span className="font-mono text-[0.65rem] leading-none opacity-70">
+                          <span className="font-mono text-[0.65rem] leading-snug break-all opacity-70">
                             {s.refName}
                           </span>
-                          <span className="truncate text-[0.8125rem] leading-snug">
+                          <span className="text-[0.8125rem] leading-snug wrap-break-word">
                             {s.message}
                           </span>
-                        </span>
-                        <button
-                          type="button"
-                          className="btn shrink-0 self-stretch rounded-none px-2 btn-ghost btn-xs"
-                          title="Pop stash"
-                          disabled={stashRowBusy}
-                          onClick={() => {
-                            void onStashPop(s.refName);
-                          }}
-                        >
-                          {popping ? "…" : "Pop"}
-                        </button>
+                        </div>
                       </div>
                     </li>
                   );
@@ -3424,9 +3422,24 @@ export default function App({
               className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
               style={{
                 left: Math.min(Math.max(8, stashContextMenu.x), window.innerWidth - 228),
-                top: Math.min(Math.max(8, stashContextMenu.y), window.innerHeight - 120),
+                top: Math.min(Math.max(8, stashContextMenu.y), window.innerHeight - 160),
               }}
             >
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="rounded"
+                  disabled={Boolean(branchBusy) || stashBusy !== null}
+                  onClick={() => {
+                    const ref = stashContextMenu.stashRef;
+                    setStashContextMenu(null);
+                    void onStashPop(ref);
+                  }}
+                >
+                  Pop stash…
+                </button>
+              </li>
               <li role="none">
                 <button
                   type="button"
