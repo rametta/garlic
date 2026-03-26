@@ -34,6 +34,8 @@ export async function popupBranchContextMenu(
     onDelete: () => void;
     onForceDelete: () => void;
     onDeleteRemote?: () => void;
+    /** When set (e.g. for `origin/*` refs), edit that remote's fetch URL. */
+    onEditOriginUrl?: () => void;
   },
 ): Promise<void> {
   if (!isTauri()) return;
@@ -103,6 +105,17 @@ export async function popupBranchContextMenu(
         },
       },
     );
+  }
+
+  if (args.kind === "remote" && args.onEditOriginUrl) {
+    items.push({
+      id: "remote_edit_origin_url",
+      text: "Edit origin URL…",
+      enabled: !args.branchBusy,
+      action: () => {
+        args.onEditOriginUrl!();
+      },
+    });
   }
 
   if (args.kind === "remote" && args.onDeleteRemote) {

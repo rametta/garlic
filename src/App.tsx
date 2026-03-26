@@ -26,6 +26,13 @@ const FOCUS_REFRESH_DEBOUNCE_MS = 350;
  */
 const BRANCH_LIST_FULL_REFRESH_INTERVAL_MS = 45_000;
 
+/** Remote name before `remote/branch` (e.g. `origin/main` → `origin`). */
+function remoteNameFromRemoteRef(fullRef: string): string | null {
+  const i = fullRef.indexOf("/");
+  if (i <= 0) return null;
+  return fullRef.slice(0, i);
+}
+
 function IconEye({ className }: { className?: string }) {
   return (
     <svg
@@ -957,6 +964,9 @@ export default function App({
   const [fileBlameError, setFileBlameError] = useState<string | null>(null);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
+  const editOriginUrlDialogRef = useRef<HTMLDialogElement>(null);
+  const editOriginUrlInputRef = useRef<HTMLInputElement>(null);
+  const [editOriginUrl, setEditOriginUrl] = useState("");
   /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
   const lastFullBranchListRefreshAtRef = useRef(0);
   const focusRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1421,6 +1431,50 @@ export default function App({
     [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse],
   );
 
+  const openEditOriginUrlDialog = useCallback(async () => {
+    if (!repo?.path || repo.error) return;
+    setOperationError(null);
+    try {
+      const url = await invoke<string>("get_remote_url", {
+        path: repo.path,
+        remoteName: "origin",
+      });
+      setEditOriginUrl(url);
+      editOriginUrlDialogRef.current?.showModal();
+      queueMicrotask(() => {
+        const el = editOriginUrlInputRef.current;
+        if (el) {
+          el.focus();
+          el.select();
+        }
+      });
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    }
+  }, [repo]);
+
+  const submitEditOriginUrl = useCallback(async () => {
+    if (!repo?.path || repo.error) return;
+    const trimmed = editOriginUrl.trim();
+    if (!trimmed) return;
+    setBranchBusy("remote-url");
+    setOperationError(null);
+    try {
+      await invoke("set_remote_url", {
+        path: repo.path,
+        remoteName: "origin",
+        url: trimmed,
+      });
+      editOriginUrlDialogRef.current?.close();
+      setEditOriginUrl("");
+      await refreshAfterMutation();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }, [repo, editOriginUrl, refreshAfterMutation]);
+
   const pullLocalBranch = useCallback(
     async (branchName: string) => {
       if (!repo?.path || repo.error) return;
@@ -1595,6 +1649,10 @@ export default function App({
         },
         onDeleteRemote:
           spec.kind === "remote" ? () => void deleteRemoteBranch(spec.fullRef) : undefined,
+        onEditOriginUrl:
+          spec.kind === "remote" && remoteNameFromRemoteRef(spec.fullRef) === "origin"
+            ? () => void openEditOriginUrlDialog()
+            : undefined,
       });
     },
     [
@@ -1605,6 +1663,7 @@ export default function App({
       rebaseCurrentBranchOnto,
       deleteLocalBranch,
       deleteRemoteBranch,
+      openEditOriginUrlDialog,
     ],
   );
 
@@ -2295,6 +2354,75 @@ export default function App({
                     <span className="loading loading-sm loading-spinner" />
                   ) : (
                     "Create"
+                  )}
+                </button>
+              </div>
+            </div>
+          </dialog>
+
+          <dialog
+            ref={editOriginUrlDialogRef}
+            className="modal"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                e.currentTarget.close();
+              }
+            }}
+            onClose={() => {
+              setEditOriginUrl("");
+            }}
+          >
+            <div
+              className="modal-box"
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              <h3 className="m-0 text-lg font-bold">Edit origin URL</h3>
+              <p className="mt-1 mb-0 text-sm text-base-content/70">
+                Updates where Git fetches from and pushes to for the{" "}
+                <span className="font-mono">origin</span> remote.
+              </p>
+              <label className="form-control mt-4 w-full">
+                <span className="label-text mb-1">Remote URL</span>
+                <input
+                  ref={editOriginUrlInputRef}
+                  type="text"
+                  className="input-bordered input w-full font-mono text-sm"
+                  value={editOriginUrl}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={branchBusy === "remote-url"}
+                  onChange={(e) => {
+                    setEditOriginUrl(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void submitEditOriginUrl();
+                    }
+                  }}
+                />
+              </label>
+              <div className="modal-action">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={branchBusy === "remote-url"}
+                  onClick={() => editOriginUrlDialogRef.current?.close()}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={branchBusy === "remote-url" || !editOriginUrl.trim()}
+                  onClick={() => void submitEditOriginUrl()}
+                >
+                  {branchBusy === "remote-url" ? (
+                    <span className="loading loading-sm loading-spinner" />
+                  ) : (
+                    "Save"
                   )}
                 </button>
               </div>

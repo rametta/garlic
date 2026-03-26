@@ -794,6 +794,35 @@ pub fn delete_remote_branch(path: String, remote_ref: String) -> Result<(), Stri
     Ok(())
 }
 
+/// Fetch URL for a named remote (`git remote get-url <name>`).
+#[tauri::command]
+pub fn get_remote_url(path: String, remote_name: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let name = remote_name.trim();
+    if name.is_empty() {
+        return Err("Remote name cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["remote", "get-url", name])
+}
+
+/// Set URL for a named remote (`git remote set-url <name> <newurl>`).
+#[tauri::command]
+pub fn set_remote_url(path: String, remote_name: String, url: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let name = remote_name.trim();
+    let url = url.trim();
+    if name.is_empty() {
+        return Err("Remote name cannot be empty.".to_string());
+    }
+    if url.is_empty() {
+        return Err("Remote URL cannot be empty.".to_string());
+    }
+    git_output(&path_buf, &["remote", "set-url", "--", name, url])?;
+    Ok(())
+}
+
 /// Rebase the current branch onto `onto` (local branch name or remote ref such as `origin/main`).
 /// With `interactive`, runs `git rebase -i` using the user's configured sequence/core editor.
 #[tauri::command]
