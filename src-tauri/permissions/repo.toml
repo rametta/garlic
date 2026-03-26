@@ -49,6 +49,7 @@ commands.allow = [
   "restore_app_bootstrap",
   "set_last_repo_path",
   "set_theme",
+  "set_branch_sidebar_sections",
   "set_openai_settings",
   "write_export_text_file",
   "open_in_cursor",

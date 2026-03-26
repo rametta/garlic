@@ -41,3 +41,10 @@ export interface StashEntry {
   refName: string;
   message: string;
 }
+
+/** Which branch-sidebar panels are expanded (persisted in settings.json). */
+export type BranchSidebarSectionsState = {
+  localOpen: boolean;
+  remoteOpen: boolean;
+  stashOpen: boolean;
+};

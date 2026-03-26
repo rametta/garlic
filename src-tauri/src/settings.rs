@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use tauri::AppHandle;
 use tauri::Manager;
+use tauri_plugin_opener::reveal_item_in_dir;
 
 /// DaisyUI theme names (excluding `auto`, handled in the frontend).
 pub const DAISY_THEMES: &[&str] = &[
@@ -26,6 +27,36 @@ pub const DAISY_THEMES: &[&str] = &[
 
 fn is_valid_theme_preference(t: &str) -> bool {
     t == "auto" || DAISY_THEMES.contains(&t)
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_false() -> bool {
+    false
+}
+
+/// Collapsible branch-sidebar sections (persisted in `settings.json`).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchSidebarSections {
+    #[serde(default = "default_true")]
+    pub local_open: bool,
+    #[serde(default = "default_true")]
+    pub remote_open: bool,
+    #[serde(default = "default_false")]
+    pub stash_open: bool,
+}
+
+impl Default for BranchSidebarSections {
+    fn default() -> Self {
+        Self {
+            local_open: true,
+            remote_open: true,
+            stash_open: false,
+        }
+    }
 }
 
 fn resolve_persisted_theme_preference(theme: &Option<String>) -> String {
@@ -59,6 +90,8 @@ struct AppSettings {
     /// OpenAI model id for commit messages (`None` → default in bootstrap).
     #[serde(default)]
     openai_model: Option<String>,
+    #[serde(default)]
+    branch_sidebar_sections: BranchSidebarSections,
 }
 
 fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -86,6 +119,16 @@ fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<(), String> 
     let path = settings_path(app)?;
     let content = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+/// Opens the system file manager with `settings.json` selected (writes default settings if the file does not exist yet).
+pub fn reveal_settings_file_in_explorer(app: &AppHandle) -> Result<(), String> {
+    let path = settings_path(app)?;
+    if !path.exists() {
+        let s = load_settings(app)?;
+        save_settings(app, &s)?;
+    }
+    reveal_item_in_dir(&path).map_err(|e| e.to_string())
 }
 
 fn clear_last_repo_path(app: &AppHandle) -> Result<(), String> {
@@ -231,6 +274,7 @@ pub struct AppBootstrap {
     pub openai_api_key: Option<String>,
     /// Resolved model id (defaults to `gpt-5.4-mini` when unset).
     pub openai_model: String,
+    pub branch_sidebar_sections: BranchSidebarSections,
 }
 
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
@@ -249,6 +293,7 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
         theme,
         openai_api_key,
         openai_model,
+        branch_sidebar_sections: settings.branch_sidebar_sections.clone(),
     })
 }
 
@@ -289,6 +334,17 @@ pub fn recent_repo_paths(app: &AppHandle) -> Vec<String> {
     load_settings(app)
         .map(|s| s.recent_repo_paths)
         .unwrap_or_default()
+}
+
+/// Persists which branch-sidebar sections (local / remote / stashes) are expanded.
+#[tauri::command]
+pub fn set_branch_sidebar_sections(
+    app: AppHandle,
+    sections: BranchSidebarSections,
+) -> Result<(), String> {
+    let mut s = load_settings(&app)?;
+    s.branch_sidebar_sections = sections;
+    save_settings(&app, &s)
 }
 
 /// Persists theme preference: `auto` (follow OS light/dark) or a DaisyUI `data-theme` name.

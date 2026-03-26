@@ -1,4 +1,5 @@
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { BranchSidebarSectionsState } from "./repoTypes";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -35,6 +36,7 @@ import {
 } from "./graphCommitFilters";
 
 export type {
+  BranchSidebarSectionsState,
   CommitEntry,
   LocalBranchEntry,
   RemoteBranchEntry,
@@ -383,6 +385,7 @@ export default function App({
   themePreference: initialThemePreference,
   openaiApiKey: initialOpenaiApiKey,
   openaiModel: initialOpenaiModel,
+  branchSidebarSections: initialBranchSidebarSections,
 }: {
   startup: RestoreLastRepo;
   /** Persisted value: `auto` or a DaisyUI theme name. */
@@ -391,8 +394,13 @@ export default function App({
   openaiApiKey: string | null;
   /** OpenAI model id for commit suggestions (defaults to `gpt-5.4-mini`). */
   openaiModel: string;
+  /** Which branch-sidebar panels are expanded (persisted in settings). */
+  branchSidebarSections: BranchSidebarSectionsState;
 }) {
   const [themePreference, setThemePreference] = useState(initialThemePreference);
+  const [branchSidebarSections, setBranchSidebarSections] = useState<BranchSidebarSectionsState>(
+    () => ({ ...initialBranchSidebarSections }),
+  );
   const [repo, setRepo] = useState<RepoMetadata | null>(() => startup.metadata ?? null);
   const [loadError, setLoadError] = useState<string | null>(() => startup.loadError ?? null);
   /** Mutations (checkout, commit, refresh, …) while a repo is open — shown inline, not as a full-panel error. */
@@ -1112,6 +1120,38 @@ export default function App({
     [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse],
   );
 
+  const openCreateBranchDialog = useCallback(() => {
+    setCreateBranchStartCommit(null);
+    setNewBranchName("");
+    setCreateBranchFieldError(null);
+    setOperationError(null);
+    createBranchDialogRef.current?.showModal();
+    requestAnimationFrame(() => {
+      newBranchInputRef.current?.focus();
+    });
+  }, []);
+
+  const onStashPush = useCallback(async () => {
+    if (!repo?.path || repo.error) return;
+    setStashBusy("push");
+    setOperationError(null);
+    try {
+      await invoke("stash_push", { path: repo.path, message: null });
+      await refreshAfterMutation();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setStashBusy(null);
+    }
+  }, [repo, refreshAfterMutation]);
+
+  const persistBranchSidebarSections = useCallback((next: BranchSidebarSectionsState) => {
+    setBranchSidebarSections(next);
+    void invoke("set_branch_sidebar_sections", { sections: next }).catch((e: unknown) => {
+      console.error("set_branch_sidebar_sections failed", e);
+    });
+  }, []);
+
   const openEditOriginUrlDialog = useCallback(async () => {
     if (!repo?.path || repo.error) return;
     setOperationError(null);
@@ -1598,6 +1638,12 @@ export default function App({
         const path = e.payload.trim();
         if (path) void loadRepo(path);
       }),
+      listen("new-branch-request", () => {
+        openCreateBranchDialog();
+      }),
+      listen("stash-push-request", () => {
+        void onStashPush();
+      }),
       listen<{ theme: string }>("theme-changed", (e) => {
         const pref = e.payload.theme;
         setThemePreference(pref);
@@ -1635,7 +1681,13 @@ export default function App({
         }
       });
     };
-  }, [loadRepo, openOpenAiSettingsDialog, refreshAfterMutation]);
+  }, [
+    loadRepo,
+    onStashPush,
+    openCreateBranchDialog,
+    openOpenAiSettingsDialog,
+    refreshAfterMutation,
+  ]);
 
   useEffect(() => {
     if (themePreference !== "auto") return;
@@ -1665,17 +1717,6 @@ export default function App({
     } finally {
       setBranchBusy(null);
     }
-  }
-
-  function openCreateBranchDialog() {
-    setCreateBranchStartCommit(null);
-    setNewBranchName("");
-    setCreateBranchFieldError(null);
-    setOperationError(null);
-    createBranchDialogRef.current?.showModal();
-    requestAnimationFrame(() => {
-      newBranchInputRef.current?.focus();
-    });
   }
 
   async function submitCreateBranch() {
@@ -1762,20 +1803,6 @@ export default function App({
       setOperationError(invokeErrorMessage(e));
     } finally {
       setBranchBusy(null);
-    }
-  }
-
-  async function onStashPush() {
-    if (!repo?.path || repo.error) return;
-    setStashBusy("push");
-    setOperationError(null);
-    try {
-      await invoke("stash_push", { path: repo.path, message: null });
-      await refreshAfterMutation();
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    } finally {
-      setStashBusy(null);
     }
   }
 
@@ -2328,6 +2355,8 @@ export default function App({
             stashBusy={stashBusy}
             branchGraphControls={branchGraphControls}
             currentBranchName={currentBranchName}
+            branchSidebarSections={branchSidebarSections}
+            onBranchSidebarSectionsChange={persistBranchSidebarSections}
             onCheckoutLocal={(name) => {
               void onCheckoutLocal(name);
             }}
@@ -2335,11 +2364,7 @@ export default function App({
               void onCreateFromRemote(remoteRef);
             }}
             runBranchSidebarContextMenu={runBranchSidebarContextMenu}
-            onStashPush={() => {
-              void onStashPush();
-            }}
             openGraphStashMenu={openGraphStashMenu}
-            openCreateBranchDialog={openCreateBranchDialog}
           />
         </aside>
 

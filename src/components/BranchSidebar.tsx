@@ -1,7 +1,12 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { BranchTrieNode, RemoteTrieNode } from "../branchTrie";
 import { nativeContextMenusAvailable } from "../nativeContextMenu";
-import type { LocalBranchEntry, RemoteBranchEntry, StashEntry } from "../repoTypes";
+import type {
+  BranchSidebarSectionsState,
+  LocalBranchEntry,
+  RemoteBranchEntry,
+  StashEntry,
+} from "../repoTypes";
 
 function IconEye({ className }: { className?: string }) {
   return (
@@ -52,34 +57,39 @@ function localBranchUpstreamLabel(ahead: number | null, behind: number | null): 
 
 function BranchPanel({
   title,
+  open,
+  onOpenChange,
   empty,
   emptyHint,
-  headerRight,
   belowHeader,
   children,
   isLastSection,
 }: {
   title: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   empty: boolean;
   emptyHint: string;
-  headerRight?: ReactNode;
   belowHeader?: ReactNode;
   children: ReactNode;
   isLastSection: boolean;
 }) {
   return (
-    <section
-      className={`flex min-h-0 min-w-0 flex-[1_1_0%] flex-col ${
+    <details
+      open={open}
+      onToggle={(e) => {
+        onOpenChange(e.currentTarget.open);
+      }}
+      className={`collapse-arrow collapse flex min-h-0 min-w-0 flex-none flex-col border-base-300 bg-transparent [&[open]]:min-h-0 [&[open]]:flex-1 [&[open]]:flex-col ${
         isLastSection ? "" : "border-b border-base-300"
       }`}
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-0">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
-          <h2 className="m-0 card-title min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-70">
-            {title}
-          </h2>
-          {headerRight ? <div className="shrink-0">{headerRight}</div> : null}
-        </div>
+      <summary className="collapse-title min-h-0 shrink-0 list-none px-0 py-0 [&::-webkit-details-marker]:hidden">
+        <h2 className="m-0 card-title border-b border-base-300/80 px-3 py-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+          {title}
+        </h2>
+      </summary>
+      <div className="collapse-content flex min-h-0 flex-1 flex-col p-0">
         {belowHeader ? (
           <div className="shrink-0 border-b border-base-300">{belowHeader}</div>
         ) : null}
@@ -91,7 +101,7 @@ function BranchPanel({
           )}
         </div>
       </div>
-    </section>
+    </details>
   );
 }
 
@@ -494,9 +504,9 @@ export type BranchSidebarProps = {
     clientX: number,
     clientY: number,
   ) => void;
-  onStashPush: () => void;
   openGraphStashMenu: (stashRef: string, clientX: number, clientY: number) => void;
-  openCreateBranchDialog: () => void;
+  branchSidebarSections: BranchSidebarSectionsState;
+  onBranchSidebarSectionsChange: (next: BranchSidebarSectionsState) => void;
 };
 
 export function BranchSidebar({
@@ -512,9 +522,9 @@ export function BranchSidebar({
   onCheckoutLocal,
   onCreateFromRemote,
   runBranchSidebarContextMenu,
-  onStashPush,
   openGraphStashMenu,
-  openCreateBranchDialog,
+  branchSidebarSections,
+  onBranchSidebarSectionsChange,
 }: BranchSidebarProps) {
   const [localBranchListFilter, setLocalBranchListFilter] = useState("");
   const [remoteBranchListFilter, setRemoteBranchListFilter] = useState("");
@@ -569,6 +579,10 @@ export function BranchSidebar({
       <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
         <BranchPanel
           title="Local branches"
+          open={branchSidebarSections.localOpen}
+          onOpenChange={(next) => {
+            onBranchSidebarSectionsChange({ ...branchSidebarSections, localOpen: next });
+          }}
           empty={canShowBranches && filteredLocalBranches.length === 0}
           emptyHint={localBranchesEmptyHint}
           isLastSection={false}
@@ -586,20 +600,6 @@ export function BranchSidebar({
                 spellCheck={false}
                 aria-label="Filter local branches by name"
               />
-            ) : null
-          }
-          headerRight={
-            canShowBranches ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                disabled={Boolean(branchBusy)}
-                onClick={() => {
-                  openCreateBranchDialog();
-                }}
-              >
-                New branch
-              </button>
             ) : null
           }
         >
@@ -625,6 +625,10 @@ export function BranchSidebar({
 
         <BranchPanel
           title="Remote branches"
+          open={branchSidebarSections.remoteOpen}
+          onOpenChange={(next) => {
+            onBranchSidebarSectionsChange({ ...branchSidebarSections, remoteOpen: next });
+          }}
           empty={canShowBranches && filteredRemoteBranches.length === 0}
           emptyHint={remoteBranchesEmptyHint}
           isLastSection={false}
@@ -662,6 +666,10 @@ export function BranchSidebar({
 
         <BranchPanel
           title="Stashes"
+          open={branchSidebarSections.stashOpen}
+          onOpenChange={(next) => {
+            onBranchSidebarSectionsChange({ ...branchSidebarSections, stashOpen: next });
+          }}
           empty={canShowBranches && filteredStashes.length === 0}
           emptyHint={stashesEmptyHint}
           isLastSection
@@ -679,20 +687,6 @@ export function BranchSidebar({
                 spellCheck={false}
                 aria-label="Filter stashes by ref name or message"
               />
-            ) : null
-          }
-          headerRight={
-            canShowBranches ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                disabled={Boolean(branchBusy) || stashBusy !== null}
-                onClick={() => {
-                  onStashPush();
-                }}
-              >
-                {stashBusy === "push" ? "…" : "Stash"}
-              </button>
             ) : null
           }
         >

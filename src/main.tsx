@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App, { type RestoreLastRepo } from "./App";
+import type { BranchSidebarSectionsState } from "./repoTypes";
 import "./index.css";
 import { DEFAULT_OPENAI_MODEL } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
@@ -11,6 +12,7 @@ export interface AppBootstrap {
   theme: string | null;
   openaiApiKey: string | null;
   openaiModel: string;
+  branchSidebarSections: BranchSidebarSectionsState;
 }
 
 export const emptyAppBootstrap: AppBootstrap = {
@@ -29,6 +31,11 @@ export const emptyAppBootstrap: AppBootstrap = {
   theme: null,
   openaiApiKey: null,
   openaiModel: "gpt-5.4-mini",
+  branchSidebarSections: {
+    localOpen: true,
+    remoteOpen: true,
+    stashOpen: false,
+  },
 };
 
 async function bootstrap() {
@@ -48,6 +55,7 @@ async function bootstrap() {
         themePreference={data.theme ?? "light"}
         openaiApiKey={data.openaiApiKey ?? null}
         openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}
+        branchSidebarSections={data.branchSidebarSections}
       />
     </React.StrictMode>,
   );

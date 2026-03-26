@@ -134,6 +134,7 @@ pub fn run() {
             settings::restore_app_bootstrap,
             set_last_repo_path,
             settings::set_theme,
+            settings::set_branch_sidebar_sections,
             settings::set_openai_settings,
             write_export_text_file,
             open_in_cursor::open_in_cursor,
@@ -175,8 +176,19 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
-            let garlic_menu =
-                Submenu::with_items(app, "Garlic", true, &[&configure_openai_key])?;
+            let reveal_settings_file = MenuItem::with_id(
+                app,
+                "reveal_settings_file",
+                "Show Settings File…",
+                true,
+                None::<&str>,
+            )?;
+            let garlic_menu = Submenu::with_items(
+                app,
+                "Garlic",
+                true,
+                &[&configure_openai_key, &reveal_settings_file],
+            )?;
 
             let file_menu = Submenu::with_items(app, "File", true, &[&open_repo, &recent_submenu])?;
 
@@ -197,6 +209,14 @@ pub fn run() {
 
             let repo_metadata =
                 MenuItem::with_id(app, "repo_metadata", "Repo Metadata", true, None::<&str>)?;
+            let new_branch = MenuItem::with_id(
+                app,
+                "new_branch",
+                "New Branch…",
+                true,
+                None::<&str>,
+            )?;
+            let stash_push_menu = MenuItem::with_id(app, "stash_push_menu", "Stash", true, None::<&str>)?;
             let force_push = MenuItem::with_id(
                 app,
                 "force_push",
@@ -208,7 +228,7 @@ pub fn run() {
                 app,
                 "Repository",
                 true,
-                &[&repo_metadata, &force_push],
+                &[&repo_metadata, &new_branch, &stash_push_menu, &force_push],
             )?;
 
             let current = settings::persisted_theme_preference(&app.handle());
@@ -274,8 +294,34 @@ pub fn run() {
                 });
                 return;
             }
+            if menu_id_is(&event, "reveal_settings_file") {
+                if let Err(e) = settings::reveal_settings_file_in_explorer(&app) {
+                    let handle = app.clone();
+                    handle
+                        .dialog()
+                        .message(e)
+                        .title("Garlic")
+                        .kind(MessageDialogKind::Error)
+                        .show(|_| {});
+                }
+                return;
+            }
             if menu_id_is(&event, "open_repo") {
                 let _ = app.emit("open-repo-request", ());
+                return;
+            }
+            if menu_id_is(&event, "new_branch") {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = handle.emit("new-branch-request", ());
+                });
+                return;
+            }
+            if menu_id_is(&event, "stash_push_menu") {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = handle.emit("stash-push-request", ());
+                });
                 return;
             }
             if menu_id_is(&event, "repo_metadata") {
