@@ -9,6 +9,13 @@ import {
   computeCommitGraphLayout,
   type BranchTip,
 } from "./commitGraphLayout";
+import {
+  nativeContextMenusAvailable,
+  popupBranchContextMenu,
+  popupFileRowContextMenu,
+  popupGraphCommitContextMenu,
+  popupStashContextMenu,
+} from "./nativeContextMenu";
 import { resolveThemePreference } from "./theme";
 
 /** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
@@ -356,6 +363,7 @@ function StagePanelFileRow({
       onContextMenu={
         onFileContextMenu
           ? (e) => {
+              if (!nativeContextMenusAvailable()) return;
               e.preventDefault();
               e.stopPropagation();
               onFileContextMenu(f.path, variant, e.clientX, e.clientY);
@@ -584,6 +592,7 @@ function LocalBranchRow({
         className="flex w-full min-w-0 items-center gap-0"
         onContextMenu={(e) => {
           if (busy) return;
+          if (!nativeContextMenusAvailable()) return;
           e.preventDefault();
           onLocalBranchContextMenu(branch.name, e.clientX, e.clientY);
         }}
@@ -748,6 +757,7 @@ function RemoteBranchRow({
         className="flex w-full min-w-0 items-center gap-0"
         onContextMenu={(e) => {
           if (busy) return;
+          if (!nativeContextMenusAvailable()) return;
           e.preventDefault();
           onRemoteBranchContextMenu(fullRef, e.clientX, e.clientY);
         }}
@@ -929,22 +939,6 @@ export default function App({
   const [fileBlameText, setFileBlameText] = useState<string | null>(null);
   const [fileBlameLoading, setFileBlameLoading] = useState(false);
   const [fileBlameError, setFileBlameError] = useState<string | null>(null);
-  const [fileRowContextMenu, setFileRowContextMenu] = useState<
-    | {
-        path: string;
-        x: number;
-        y: number;
-        source: "worktree";
-        variant: "staged" | "unstaged";
-      }
-    | {
-        path: string;
-        x: number;
-        y: number;
-        source: "commitBrowse";
-      }
-    | null
-  >(null);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
@@ -956,24 +950,6 @@ export default function App({
   const [createBranchStartCommit, setCreateBranchStartCommit] = useState<string | null>(null);
   /** Case-insensitive substring filter for local + remote branch lists in the sidebar. */
   const [branchListFilter, setBranchListFilter] = useState("");
-  /** Right-click context menu on a local or remote branch row (`clientX` / `clientY` for positioning). */
-  const [branchContextMenu, setBranchContextMenu] = useState<
-    | { kind: "local"; branchName: string; x: number; y: number }
-    | { kind: "remote"; fullRef: string; x: number; y: number }
-    | null
-  >(null);
-  /** Right-click context menu on a stash row. */
-  const [stashContextMenu, setStashContextMenu] = useState<{
-    stashRef: string;
-    x: number;
-    y: number;
-  } | null>(null);
-  /** Right-click on a commit row or graph lane in the center column. */
-  const [graphCommitContextMenu, setGraphCommitContextMenu] = useState<{
-    hash: string;
-    x: number;
-    y: number;
-  } | null>(null);
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
@@ -997,30 +973,6 @@ export default function App({
   useEffect(() => {
     setBranchListFilter("");
   }, [repo?.path]);
-
-  useEffect(() => {
-    setBranchContextMenu(null);
-    setStashContextMenu(null);
-    setGraphCommitContextMenu(null);
-    setFileRowContextMenu(null);
-  }, [repo?.path]);
-
-  useEffect(() => {
-    if (!branchContextMenu && !stashContextMenu && !graphCommitContextMenu && !fileRowContextMenu)
-      return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setBranchContextMenu(null);
-        setStashContextMenu(null);
-        setGraphCommitContextMenu(null);
-        setFileRowContextMenu(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [branchContextMenu, stashContextMenu, graphCommitContextMenu, fileRowContextMenu]);
 
   useEffect(() => {
     setGraphBranchVisible((prev) => {
@@ -1485,7 +1437,6 @@ export default function App({
         return;
       }
       if (!ok) return;
-      setBranchContextMenu(null);
       setBranchBusy(`delete:${branchName}`);
       setOperationError(null);
       try {
@@ -1522,8 +1473,6 @@ export default function App({
           onto,
           interactive,
         });
-        setBranchContextMenu(null);
-        setGraphCommitContextMenu(null);
         await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
@@ -1549,8 +1498,6 @@ export default function App({
           path: repo.path,
           branchOrRef: onto,
         });
-        setBranchContextMenu(null);
-        setGraphCommitContextMenu(null);
         await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
@@ -1559,6 +1506,45 @@ export default function App({
       }
     },
     [repo, refreshAfterMutation],
+  );
+
+  const runBranchSidebarContextMenu = useCallback(
+    (
+      spec: { kind: "local"; branchName: string } | { kind: "remote"; fullRef: string },
+      clientX: number,
+      clientY: number,
+    ) => {
+      void popupBranchContextMenu(clientX, clientY, {
+        kind: spec.kind,
+        branchName: spec.kind === "local" ? spec.branchName : undefined,
+        fullRef: spec.kind === "remote" ? spec.fullRef : undefined,
+        currentBranchName: repo?.detached ? null : (repo?.branch ?? null),
+        repoDetached: Boolean(repo?.detached),
+        branchBusy: Boolean(branchBusy),
+        onPull: () => void pullLocalBranch(spec.kind === "local" ? spec.branchName : ""),
+        onMerge: () =>
+          void mergeBranchIntoCurrent(spec.kind === "local" ? spec.branchName : spec.fullRef),
+        onRebase: () =>
+          void rebaseCurrentBranchOnto(
+            spec.kind === "local" ? spec.branchName : spec.fullRef,
+            false,
+          ),
+        onRebaseInteractive: () =>
+          void rebaseCurrentBranchOnto(
+            spec.kind === "local" ? spec.branchName : spec.fullRef,
+            true,
+          ),
+        onDelete: () => {
+          if (spec.kind !== "local") return;
+          void deleteLocalBranch(spec.branchName, false);
+        },
+        onForceDelete: () => {
+          if (spec.kind !== "local") return;
+          void deleteLocalBranch(spec.branchName, true);
+        },
+      });
+    },
+    [repo, branchBusy, pullLocalBranch, mergeBranchIntoCurrent, rebaseCurrentBranchOnto, deleteLocalBranch],
   );
 
   const cherryPickCommit = useCallback(
@@ -1570,7 +1556,6 @@ export default function App({
         kind: "warning",
       });
       if (!ok) return;
-      setGraphCommitContextMenu(null);
       setBranchBusy("cherry-pick");
       setOperationError(null);
       try {
@@ -1588,26 +1573,6 @@ export default function App({
     [repo, commits, refreshAfterMutation],
   );
 
-  const openFileRowMenu = useCallback(
-    (
-      path: string,
-      clientX: number,
-      clientY: number,
-      opts?: { source: "worktree"; variant: "staged" | "unstaged" } | { source: "commitBrowse" },
-    ) => {
-      setBranchContextMenu(null);
-      setStashContextMenu(null);
-      setGraphCommitContextMenu(null);
-      setFileRowContextMenu({
-        path,
-        x: clientX,
-        y: clientY,
-        ...(opts ?? { source: "commitBrowse" as const }),
-      });
-    },
-    [],
-  );
-
   const discardPathChanges = useCallback(
     async (filePath: string, fromUnstaged: boolean) => {
       if (!repo?.path || repo.error) return;
@@ -1618,7 +1583,6 @@ export default function App({
         { title: "Garlic", kind: "warning" },
       );
       if (!ok) return;
-      setFileRowContextMenu(null);
       setStageCommitBusy(true);
       setOperationError(null);
       try {
@@ -1640,7 +1604,6 @@ export default function App({
   const openFileHistory = useCallback(
     async (filePath: string) => {
       if (!repo?.path || repo.error) return;
-      setFileRowContextMenu(null);
       clearDiffSelection();
       setFileHistoryPath(filePath);
       setFileHistoryLoading(true);
@@ -1665,7 +1628,6 @@ export default function App({
   const openFileBlame = useCallback(
     async (filePath: string) => {
       if (!repo?.path || repo.error) return;
-      setFileRowContextMenu(null);
       clearDiffSelection();
       setFileBlamePath(filePath);
       setFileBlameLoading(true);
@@ -1686,6 +1648,38 @@ export default function App({
     [repo, clearDiffSelection],
   );
 
+  const openFileRowMenu = useCallback(
+    (
+      path: string,
+      clientX: number,
+      clientY: number,
+      opts?: { source: "worktree"; variant: "staged" | "unstaged" } | { source: "commitBrowse" },
+    ) => {
+      const source = opts ?? { source: "commitBrowse" as const };
+      if (source.source === "worktree") {
+        void popupFileRowContextMenu(clientX, clientY, {
+          source: "worktree",
+          variant: source.variant,
+          branchBusy: Boolean(branchBusy),
+          stageCommitBusy: Boolean(stageCommitBusy),
+          discardLabel:
+            source.variant === "unstaged" ? "Discard unstaged changes…" : "Discard staged changes…",
+          onHistory: () => void openFileHistory(path),
+          onBlame: () => void openFileBlame(path),
+          onDiscard: () => void discardPathChanges(path, source.variant === "unstaged"),
+        });
+      } else {
+        void popupFileRowContextMenu(clientX, clientY, {
+          source: "commitBrowse",
+          branchBusy: Boolean(branchBusy),
+          onHistory: () => void openFileHistory(path),
+          onBlame: () => void openFileBlame(path),
+        });
+      }
+    },
+    [branchBusy, stageCommitBusy, openFileHistory, openFileBlame, discardPathChanges],
+  );
+
   const onPickFileHistoryCommit = useCallback(
     async (hash: string) => {
       const rel = fileHistoryPath;
@@ -1698,47 +1692,44 @@ export default function App({
 
   const openGraphBranchLocalMenu = useCallback(
     (branchName: string, clientX: number, clientY: number) => {
-      setStashContextMenu(null);
-      setGraphCommitContextMenu(null);
-      setFileRowContextMenu(null);
-      setBranchContextMenu({
-        kind: "local",
-        branchName,
-        x: clientX,
-        y: clientY,
-      });
+      runBranchSidebarContextMenu({ kind: "local", branchName }, clientX, clientY);
     },
-    [],
+    [runBranchSidebarContextMenu],
   );
 
   const openGraphBranchRemoteMenu = useCallback(
     (fullRef: string, clientX: number, clientY: number) => {
-      setStashContextMenu(null);
-      setGraphCommitContextMenu(null);
-      setFileRowContextMenu(null);
-      setBranchContextMenu({
-        kind: "remote",
-        fullRef,
-        x: clientX,
-        y: clientY,
-      });
+      runBranchSidebarContextMenu({ kind: "remote", fullRef }, clientX, clientY);
     },
-    [],
+    [runBranchSidebarContextMenu],
   );
 
-  const openGraphCommitMenu = useCallback((hash: string, clientX: number, clientY: number) => {
-    setStashContextMenu(null);
-    setBranchContextMenu(null);
-    setFileRowContextMenu(null);
-    setGraphCommitContextMenu({ hash, x: clientX, y: clientY });
-  }, []);
-
-  const openGraphStashMenu = useCallback((stashRef: string, clientX: number, clientY: number) => {
-    setBranchContextMenu(null);
-    setGraphCommitContextMenu(null);
-    setFileRowContextMenu(null);
-    setStashContextMenu({ stashRef, x: clientX, y: clientY });
-  }, []);
+  const openGraphCommitMenu = useCallback(
+    (hash: string, clientX: number, clientY: number) => {
+      const entry = commits.find((x) => x.hash === hash);
+      const shortHash = entry?.shortHash ?? hash.slice(0, 7);
+      void popupGraphCommitContextMenu(clientX, clientY, {
+        branchBusy: Boolean(branchBusy),
+        cherryPickDisabled:
+          Boolean(branchBusy) || Boolean(repo?.detached) || Boolean(entry?.stashRef),
+        onBrowse: () => void selectCommit(hash),
+        onCherryPick: () => void cherryPickCommit(hash),
+        onCreateBranch: () => {
+          setCreateBranchStartCommit(hash);
+          setNewBranchName("");
+          setCreateBranchFieldError(null);
+          setOperationError(null);
+          createBranchDialogRef.current?.showModal();
+          requestAnimationFrame(() => {
+            newBranchInputRef.current?.focus();
+          });
+        },
+        onCopyFull: () => void navigator.clipboard.writeText(hash),
+        onCopyShort: () => void navigator.clipboard.writeText(shortHash),
+      });
+    },
+    [branchBusy, repo, commits, selectCommit, cherryPickCommit],
+  );
 
   useEffect(() => {
     const promise = Promise.all([
@@ -1828,18 +1819,6 @@ export default function App({
 
   function openCreateBranchDialog() {
     setCreateBranchStartCommit(null);
-    setNewBranchName("");
-    setCreateBranchFieldError(null);
-    setOperationError(null);
-    createBranchDialogRef.current?.showModal();
-    requestAnimationFrame(() => {
-      newBranchInputRef.current?.focus();
-    });
-  }
-
-  function openCreateBranchFromCommitDialog(commitHash: string) {
-    setGraphCommitContextMenu(null);
-    setCreateBranchStartCommit(commitHash);
     setNewBranchName("");
     setCreateBranchFieldError(null);
     setOperationError(null);
@@ -1953,6 +1932,14 @@ export default function App({
     } finally {
       setStashBusy(null);
     }
+  }
+
+  function openGraphStashMenu(stashRef: string, clientX: number, clientY: number) {
+    void popupStashContextMenu(clientX, clientY, {
+      disabled: Boolean(branchBusy) || stashBusy !== null,
+      onPop: () => void onStashPop(stashRef),
+      onDrop: () => void onStashDrop(stashRef),
+    });
   }
 
   async function onStagePaths(paths: string[]) {
@@ -2291,14 +2278,7 @@ export default function App({
                     void onCheckoutLocal(name);
                   },
                   (branchName, clientX, clientY) => {
-                    setStashContextMenu(null);
-                    setGraphCommitContextMenu(null);
-                    setBranchContextMenu({
-                      kind: "local",
-                      branchName,
-                      x: clientX,
-                      y: clientY,
-                    });
+                    runBranchSidebarContextMenu({ kind: "local", branchName }, clientX, clientY);
                   },
                   branchGraphControls,
                 )}
@@ -2321,14 +2301,7 @@ export default function App({
                   },
                   branchGraphControls,
                   (fullRef, clientX, clientY) => {
-                    setStashContextMenu(null);
-                    setGraphCommitContextMenu(null);
-                    setBranchContextMenu({
-                      kind: "remote",
-                      fullRef,
-                      x: clientX,
-                      y: clientY,
-                    });
+                    runBranchSidebarContextMenu({ kind: "remote", fullRef }, clientX, clientY);
                   },
                 )}
               </ul>
@@ -2365,14 +2338,9 @@ export default function App({
                         title={`${s.refName}: ${s.message}`}
                         onContextMenu={(e) => {
                           if (stashRowBusy) return;
+                          if (!nativeContextMenusAvailable()) return;
                           e.preventDefault();
-                          setBranchContextMenu(null);
-                          setGraphCommitContextMenu(null);
-                          setStashContextMenu({
-                            stashRef: s.refName,
-                            x: e.clientX,
-                            y: e.clientY,
-                          });
+                          openGraphStashMenu(s.refName, e.clientX, e.clientY);
                         }}
                       >
                         <span className="font-mono text-[0.65rem] leading-snug break-all opacity-70">
@@ -2742,6 +2710,7 @@ export default function App({
                                       void loadCommitFileDiff(entry.path, commitBrowseHash ?? "")
                                     }
                                     onContextMenu={(e) => {
+                                      if (!nativeContextMenusAvailable()) return;
                                       e.preventDefault();
                                       e.stopPropagation();
                                       openFileRowMenu(entry.path, e.clientX, e.clientY);
@@ -2848,6 +2817,7 @@ export default function App({
                                           className="max-w-full min-w-0 cursor-context-menu truncate font-medium"
                                           onContextMenu={(e) => {
                                             if (branchBusy) return;
+                                            if (!nativeContextMenusAvailable()) return;
                                             e.preventDefault();
                                             e.stopPropagation();
                                             openGraphBranchLocalMenu(b.name, e.clientX, e.clientY);
@@ -2871,6 +2841,7 @@ export default function App({
                                           className="max-w-full min-w-0 cursor-context-menu truncate font-medium text-secondary"
                                           onContextMenu={(e) => {
                                             if (branchBusy) return;
+                                            if (!nativeContextMenusAvailable()) return;
                                             e.preventDefault();
                                             e.stopPropagation();
                                             openGraphBranchRemoteMenu(r.name, e.clientX, e.clientY);
@@ -2886,6 +2857,7 @@ export default function App({
                                       title={`Stash ${stashRef}`}
                                       onContextMenu={(e) => {
                                         if (branchBusy || stashBusy !== null) return;
+                                        if (!nativeContextMenusAvailable()) return;
                                         e.preventDefault();
                                         e.stopPropagation();
                                         openGraphStashMenu(stashRef, e.clientX, e.clientY);
@@ -2901,6 +2873,7 @@ export default function App({
                                       title={commitsSectionTitle}
                                       onContextMenu={(e) => {
                                         if (branchBusy || !currentBranchName) return;
+                                        if (!nativeContextMenusAvailable()) return;
                                         e.preventDefault();
                                         e.stopPropagation();
                                         openGraphBranchLocalMenu(
@@ -2957,6 +2930,7 @@ export default function App({
                                         style={{ gridColumn: "3 / 6", gridRow: idx + 1 }}
                                         onClick={() => void selectCommit(c.hash)}
                                         onContextMenu={(e) => {
+                                          if (!nativeContextMenusAvailable()) return;
                                           e.preventDefault();
                                           e.stopPropagation();
                                           openGraphCommitMenu(c.hash, e.clientX, e.clientY);
@@ -3017,6 +2991,7 @@ export default function App({
                                         height: COMMIT_GRAPH_ROW_HEIGHT,
                                       }}
                                       onContextMenu={(e) => {
+                                        if (!nativeContextMenusAvailable()) return;
                                         e.preventDefault();
                                         e.stopPropagation();
                                         openGraphCommitMenu(c.hash, e.clientX, e.clientY);
@@ -3274,356 +3249,6 @@ export default function App({
           </div>
         </aside>
       </div>
-      {branchContextMenu || stashContextMenu || graphCommitContextMenu || fileRowContextMenu ? (
-        <>
-          <div
-            className="fixed inset-0 z-[100]"
-            role="presentation"
-            onClick={() => {
-              setBranchContextMenu(null);
-              setStashContextMenu(null);
-              setGraphCommitContextMenu(null);
-              setFileRowContextMenu(null);
-            }}
-          />
-          {branchContextMenu
-            ? (() => {
-                const m = branchContextMenu;
-                const onto = m.kind === "local" ? m.branchName : m.fullRef;
-                const disableRebaseOnto = m.kind === "local" && m.branchName === currentBranchName;
-                const isCurrentLocalBranch =
-                  m.kind === "local" && m.branchName === currentBranchName;
-                return (
-                  <ul
-                    role="menu"
-                    className="menu fixed z-[101] min-w-[14rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
-                    style={{
-                      left: Math.min(Math.max(8, m.x), window.innerWidth - 240),
-                      top: Math.min(Math.max(8, m.y), window.innerHeight - 320),
-                    }}
-                  >
-                    {m.kind === "local" ? (
-                      <li role="none">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="rounded"
-                          disabled={Boolean(branchBusy)}
-                          title="Fetch and merge (or fast-forward) this branch from its upstream"
-                          onClick={() => {
-                            const name = m.branchName;
-                            setBranchContextMenu(null);
-                            void pullLocalBranch(name);
-                          }}
-                        >
-                          Pull
-                        </button>
-                      </li>
-                    ) : null}
-                    <li role="none">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="rounded"
-                        disabled={
-                          Boolean(branchBusy) || disableRebaseOnto || Boolean(repo?.detached)
-                        }
-                        title={
-                          repo?.detached
-                            ? "Check out a branch first"
-                            : disableRebaseOnto
-                              ? "Already on this branch"
-                              : "Merge this branch into the checked-out branch"
-                        }
-                        onClick={() => {
-                          setBranchContextMenu(null);
-                          void mergeBranchIntoCurrent(onto);
-                        }}
-                      >
-                        Merge into current branch
-                      </button>
-                    </li>
-                    <li role="none">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="rounded"
-                        disabled={Boolean(branchBusy) || disableRebaseOnto}
-                        title={
-                          disableRebaseOnto
-                            ? "Already on this branch"
-                            : "Replay commits from the current branch onto this branch"
-                        }
-                        onClick={() => {
-                          setBranchContextMenu(null);
-                          void rebaseCurrentBranchOnto(onto, false);
-                        }}
-                      >
-                        Rebase current branch onto this
-                      </button>
-                    </li>
-                    <li role="none">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="rounded"
-                        disabled={Boolean(branchBusy) || disableRebaseOnto}
-                        title={
-                          disableRebaseOnto
-                            ? "Already on this branch"
-                            : "Edit the rebase todo list in your Git editor"
-                        }
-                        onClick={() => {
-                          setBranchContextMenu(null);
-                          void rebaseCurrentBranchOnto(onto, true);
-                        }}
-                      >
-                        Interactive rebase onto this…
-                      </button>
-                    </li>
-                    {m.kind === "local" ? (
-                      <>
-                        <li role="none">
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="rounded"
-                            disabled={Boolean(branchBusy) || isCurrentLocalBranch}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              const name = m.branchName;
-                              void deleteLocalBranch(name, false);
-                            }}
-                          >
-                            Delete branch…
-                          </button>
-                        </li>
-                        <li role="none">
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="rounded text-error"
-                            disabled={Boolean(branchBusy) || isCurrentLocalBranch}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              const name = m.branchName;
-                              void deleteLocalBranch(name, true);
-                            }}
-                          >
-                            Force delete…
-                          </button>
-                        </li>
-                      </>
-                    ) : null}
-                  </ul>
-                );
-              })()
-            : null}
-          {stashContextMenu ? (
-            <ul
-              role="menu"
-              className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
-              style={{
-                left: Math.min(Math.max(8, stashContextMenu.x), window.innerWidth - 228),
-                top: Math.min(Math.max(8, stashContextMenu.y), window.innerHeight - 160),
-              }}
-            >
-              <li role="none">
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="rounded"
-                  disabled={Boolean(branchBusy) || stashBusy !== null}
-                  onClick={() => {
-                    const ref = stashContextMenu.stashRef;
-                    setStashContextMenu(null);
-                    void onStashPop(ref);
-                  }}
-                >
-                  Pop stash…
-                </button>
-              </li>
-              <li role="none">
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="rounded text-error"
-                  disabled={Boolean(branchBusy) || stashBusy !== null}
-                  onClick={() => {
-                    const ref = stashContextMenu.stashRef;
-                    setStashContextMenu(null);
-                    void onStashDrop(ref);
-                  }}
-                >
-                  Delete stash…
-                </button>
-              </li>
-            </ul>
-          ) : null}
-          {fileRowContextMenu ? (
-            <ul
-              role="menu"
-              className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
-              style={{
-                left: Math.min(Math.max(8, fileRowContextMenu.x), window.innerWidth - 228),
-                top: Math.min(
-                  Math.max(8, fileRowContextMenu.y),
-                  window.innerHeight - (fileRowContextMenu.source === "worktree" ? 180 : 120),
-                ),
-              }}
-            >
-              <li role="none">
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="rounded"
-                  disabled={Boolean(branchBusy)}
-                  onClick={() => {
-                    const p = fileRowContextMenu.path;
-                    setFileRowContextMenu(null);
-                    void openFileHistory(p);
-                  }}
-                >
-                  File history
-                </button>
-              </li>
-              <li role="none">
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="rounded"
-                  disabled={Boolean(branchBusy)}
-                  onClick={() => {
-                    const p = fileRowContextMenu.path;
-                    setFileRowContextMenu(null);
-                    void openFileBlame(p);
-                  }}
-                >
-                  Blame
-                </button>
-              </li>
-              {fileRowContextMenu.source === "worktree" ? (
-                <li role="none">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="rounded text-error"
-                    disabled={Boolean(branchBusy) || stageCommitBusy}
-                    title={
-                      fileRowContextMenu.variant === "unstaged"
-                        ? "Restore this file from the index, or remove it if untracked"
-                        : "Reset this path to the last commit (index and working tree)"
-                    }
-                    onClick={() => {
-                      const m = fileRowContextMenu;
-                      if (m.source !== "worktree") return;
-                      void discardPathChanges(m.path, m.variant === "unstaged");
-                    }}
-                  >
-                    {fileRowContextMenu.variant === "unstaged"
-                      ? "Discard unstaged changes…"
-                      : "Discard staged changes…"}
-                  </button>
-                </li>
-              ) : null}
-            </ul>
-          ) : null}
-          {graphCommitContextMenu
-            ? (() => {
-                const m = graphCommitContextMenu;
-                const entry = commits.find((x) => x.hash === m.hash);
-                const shortHash = entry?.shortHash ?? m.hash.slice(0, 7);
-                return (
-                  <ul
-                    role="menu"
-                    className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
-                    style={{
-                      left: Math.min(Math.max(8, m.x), window.innerWidth - 228),
-                      top: Math.min(Math.max(8, m.y), window.innerHeight - 200),
-                    }}
-                  >
-                    <li role="none">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="rounded"
-                        onClick={() => {
-                          setGraphCommitContextMenu(null);
-                          void selectCommit(m.hash);
-                        }}
-                      >
-                        Browse commit
-                      </button>
-                    </li>
-                    <li role="none">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="rounded"
-                        disabled={
-                          Boolean(branchBusy) || Boolean(repo?.detached) || Boolean(entry?.stashRef)
-                        }
-                        title={
-                          repo?.detached
-                            ? "Check out a branch first"
-                            : entry?.stashRef
-                              ? "Not available for stash commits"
-                              : "Apply this commit on top of the current branch"
-                        }
-                        onClick={() => {
-                          void cherryPickCommit(m.hash);
-                        }}
-                      >
-                        Cherry-pick this commit
-                      </button>
-                    </li>
-                    <li role="none">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="rounded"
-                        disabled={Boolean(branchBusy)}
-                        onClick={() => {
-                          openCreateBranchFromCommitDialog(m.hash);
-                        }}
-                      >
-                        Create branch from here…
-                      </button>
-                    </li>
-                    <li role="none">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="rounded"
-                        onClick={() => {
-                          void navigator.clipboard.writeText(m.hash);
-                          setGraphCommitContextMenu(null);
-                        }}
-                      >
-                        Copy full hash
-                      </button>
-                    </li>
-                    <li role="none">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="rounded"
-                        onClick={() => {
-                          void navigator.clipboard.writeText(shortHash);
-                          setGraphCommitContextMenu(null);
-                        }}
-                      >
-                        Copy short hash
-                      </button>
-                    </li>
-                  </ul>
-                );
-              })()
-            : null}
-        </>
-      ) : null}
     </main>
   );
 }
