@@ -173,6 +173,42 @@ function invokeErrorMessage(e: unknown): string {
   return String(e);
 }
 
+function DismissibleAlert({
+  role = "alert",
+  className,
+  children,
+  onDismiss,
+}: {
+  role?: "alert" | "status";
+  className: string;
+  children: ReactNode;
+  onDismiss: () => void;
+}) {
+  return (
+    <div role={role} className={`${className} flex flex-row items-start gap-2`}>
+      <div className="min-w-0 flex-1">{children}</div>
+      <button
+        type="button"
+        className="btn btn-square shrink-0 opacity-80 btn-ghost btn-sm hover:opacity-100"
+        aria-label="Dismiss"
+        onClick={onDismiss}
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className="h-4 w-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 function DiffLineStatBadge({ stat }: { stat: LineStat }) {
   if (stat.isBinary) {
     return (
@@ -1901,17 +1937,28 @@ export default function App({
                 </div>
               ) : loadError ? (
                 <div className="p-4">
-                  <div role="alert" className="alert text-sm alert-error">
+                  <DismissibleAlert
+                    className="alert text-sm alert-error"
+                    onDismiss={() => {
+                      setLoadError(null);
+                    }}
+                  >
                     <span>{loadError}</span>
-                  </div>
+                  </DismissibleAlert>
                 </div>
               ) : repo ? (
                 <>
                   {repo.error ? (
                     <div className="px-4 pt-4 pb-4">
-                      <div role="status" className="alert text-sm alert-warning">
+                      <DismissibleAlert
+                        role="status"
+                        className="alert text-sm alert-warning"
+                        onDismiss={() => {
+                          setRepo((r) => (r ? { ...r, error: null } : null));
+                        }}
+                      >
                         <span>{repo.error}</span>
-                      </div>
+                      </DismissibleAlert>
                       <dl className="m-0 mt-4 flex flex-col gap-2.5">
                         <MetaRow label="Path">{repo.path}</MetaRow>
                       </dl>
@@ -1921,16 +1968,26 @@ export default function App({
                       {listsError || operationError ? (
                         <div className="shrink-0 space-y-2 px-3 pt-3">
                           {listsError ? (
-                            <div role="alert" className="alert text-sm alert-error">
+                            <DismissibleAlert
+                              className="alert text-sm alert-error"
+                              onDismiss={() => {
+                                setListsError(null);
+                              }}
+                            >
                               <span>{listsError}</span>
-                            </div>
+                            </DismissibleAlert>
                           ) : null}
                           {operationError ? (
-                            <div role="alert" className="alert text-sm alert-error">
+                            <DismissibleAlert
+                              className="alert text-sm alert-error"
+                              onDismiss={() => {
+                                setOperationError(null);
+                              }}
+                            >
                               <span className="wrap-break-word whitespace-pre-wrap">
                                 {operationError}
                               </span>
-                            </div>
+                            </DismissibleAlert>
                           ) : null}
                         </div>
                       ) : null}
@@ -1969,9 +2026,14 @@ export default function App({
                                   <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
                                 </div>
                               ) : diffError ? (
-                                <div role="alert" className="alert text-sm alert-error">
+                                <DismissibleAlert
+                                  className="alert text-sm alert-error"
+                                  onDismiss={() => {
+                                    setDiffError(null);
+                                  }}
+                                >
                                   <span className="wrap-break-word">{diffError}</span>
-                                </div>
+                                </DismissibleAlert>
                               ) : (
                                 <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
                                   {diffStagedText !== null ? (
@@ -2054,9 +2116,14 @@ export default function App({
                                   <p className="m-0 text-sm text-base-content/70">Loading blame…</p>
                                 </div>
                               ) : fileBlameError ? (
-                                <div role="alert" className="alert text-sm alert-error">
+                                <DismissibleAlert
+                                  className="alert text-sm alert-error"
+                                  onDismiss={() => {
+                                    setFileBlameError(null);
+                                  }}
+                                >
                                   <span className="wrap-break-word">{fileBlameError}</span>
-                                </div>
+                                </DismissibleAlert>
                               ) : (
                                 <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
                                   {fileBlameText ?? ""}
@@ -2098,9 +2165,14 @@ export default function App({
                                   </p>
                                 </div>
                               ) : fileHistoryError ? (
-                                <div role="alert" className="alert text-sm alert-error">
+                                <DismissibleAlert
+                                  className="alert text-sm alert-error"
+                                  onDismiss={() => {
+                                    setFileHistoryError(null);
+                                  }}
+                                >
                                   <span className="wrap-break-word">{fileHistoryError}</span>
-                                </div>
+                                </DismissibleAlert>
                               ) : fileHistoryCommits.length === 0 ? (
                                 <p className="m-0 text-center text-sm text-base-content/60">
                                   No commits found for this file
@@ -2161,9 +2233,14 @@ export default function App({
                                   <p className="m-0 text-xs text-base-content/70">Loading diff…</p>
                                 </div>
                               ) : commitDiffError ? (
-                                <div role="alert" className="alert py-2 text-xs alert-error">
+                                <DismissibleAlert
+                                  className="alert py-2 text-xs alert-error"
+                                  onDismiss={() => {
+                                    setCommitDiffError(null);
+                                  }}
+                                >
                                   <span className="wrap-break-word">{commitDiffError}</span>
-                                </div>
+                                </DismissibleAlert>
                               ) : (
                                 <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
                                   <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
@@ -2260,9 +2337,14 @@ export default function App({
                                   <p className="m-0 text-xs text-base-content/70">Loading files…</p>
                                 </div>
                               ) : commitBrowseError ? (
-                                <div role="alert" className="alert py-2 text-xs alert-error">
+                                <DismissibleAlert
+                                  className="alert py-2 text-xs alert-error"
+                                  onDismiss={() => {
+                                    setCommitBrowseError(null);
+                                  }}
+                                >
                                   <span className="wrap-break-word">{commitBrowseError}</span>
-                                </div>
+                                </DismissibleAlert>
                               ) : commitBrowseFiles.length === 0 ? (
                                 <p className="m-0 text-center text-xs text-base-content/60">
                                   No files changed in this commit
