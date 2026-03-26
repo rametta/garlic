@@ -40,9 +40,44 @@ export function filterGraphCommits(
   });
 }
 
+/**
+ * Commit hashes reachable from `HEAD` by walking `parentHashes` on the given rows only
+ * (same ancestry idea as `git log HEAD`, limited to commits already loaded in the graph).
+ */
+export function reachableCommitHashesFromHead(
+  loadedCommits: CommitEntry[],
+  headFullHash: string | null,
+): Set<string> {
+  const trimmed = headFullHash?.trim() ?? "";
+  if (!trimmed) return new Set();
+  const byHash = new Map(loadedCommits.map((c) => [c.hash, c] as const));
+  let tip = trimmed;
+  if (!byHash.has(tip)) {
+    const match = loadedCommits.find(
+      (c) => c.hash === tip || c.hash.startsWith(tip) || c.shortHash === tip,
+    );
+    if (match === undefined) return new Set();
+    tip = match.hash;
+  }
+  const reachable = new Set<string>();
+  const stack = [tip];
+  while (stack.length > 0) {
+    const h = stack.pop();
+    if (h === undefined || reachable.has(h)) continue;
+    reachable.add(h);
+    const c = byHash.get(h);
+    if (c === undefined) continue;
+    for (const p of c.parentHashes) {
+      if (!reachable.has(p)) stack.push(p);
+    }
+  }
+  return reachable;
+}
+
 export function formatCommitsExportTxt(
   commits: CommitEntry[],
   repoLabel: string,
+  checkoutLabel: string,
   authorQuery: string,
   dateFromYmd: string,
   dateToYmd: string,
@@ -50,6 +85,7 @@ export function formatCommitsExportTxt(
   const lines: string[] = [];
   lines.push(`# Garlic commit export`);
   lines.push(`# Repository: ${repoLabel}`);
+  lines.push(`# Checked-out: ${checkoutLabel}`);
   lines.push(`# Count: ${commits.length}`);
   const parts: string[] = [];
   if (authorQuery.trim()) parts.push(`author contains "${authorQuery.trim()}"`);

@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { formatAuthorDisplay, formatDate, formatRelativeShort } from "../appFormat";
 import { CommitGraphColumn } from "./CommitGraphColumn";
 import { COMMIT_GRAPH_ROW_HEIGHT, type CommitGraphLayout } from "../commitGraphLayout";
@@ -31,6 +31,16 @@ export interface CommitGraphSectionProps {
   openGraphBranchRemoteMenu: (fullRef: string, clientX: number, clientY: number) => void;
   openGraphStashMenu: (stashRef: string, clientX: number, clientY: number) => void;
   openGraphCommitMenu: (hash: string, clientX: number, clientY: number) => void;
+  graphAuthorFilter: string;
+  onGraphAuthorFilterChange: (value: string) => void;
+  graphDateFrom: string;
+  graphDateTo: string;
+  onGraphDateFromChange: (value: string) => void;
+  onGraphDateToChange: (value: string) => void;
+  graphFiltersActive: boolean;
+  onClearGraphFilters: () => void;
+  onExportGraphCommits: () => void;
+  exportGraphCommitsDisabled: boolean;
 }
 
 type TipsAtHash = { locals: LocalBranchEntry[]; remotes: RemoteBranchEntry[] };
@@ -301,8 +311,37 @@ export function CommitGraphSection({
   openGraphBranchRemoteMenu,
   openGraphStashMenu,
   openGraphCommitMenu,
+  graphAuthorFilter,
+  onGraphAuthorFilterChange,
+  graphDateFrom,
+  graphDateTo,
+  onGraphDateFromChange,
+  onGraphDateToChange,
+  graphFiltersActive,
+  onClearGraphFilters,
+  onExportGraphCommits,
+  exportGraphCommitsDisabled,
 }: CommitGraphSectionProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const authorFilterWrapRef = useRef<HTMLDivElement>(null);
+  const whenFilterWrapRef = useRef<HTMLDivElement>(null);
+  const [authorFilterOpen, setAuthorFilterOpen] = useState(false);
+  const [whenFilterOpen, setWhenFilterOpen] = useState(false);
+
+  useEffect(() => {
+    if (!authorFilterOpen && !whenFilterOpen) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const t = e.target as Node;
+      if (authorFilterWrapRef.current?.contains(t)) return;
+      if (whenFilterWrapRef.current?.contains(t)) return;
+      setAuthorFilterOpen(false);
+      setWhenFilterOpen(false);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+    };
+  }, [authorFilterOpen, whenFilterOpen]);
 
   const tipsByHash = useMemo(
     () => buildTipsByHash(localBranches, remoteBranches, graphBranchVisible),
@@ -324,19 +363,33 @@ export function CommitGraphSection({
   const graphWidthPx = commitGraphLayout.graphWidthPx;
   const gridTemplateColumns = `minmax(0, ${BRANCH_COL}) ${graphWidthPx}px minmax(0, 1fr) minmax(0, 6.5rem) minmax(0, 3.25rem)`;
 
-  if (commits.length === 0) {
-    return (
-      <p className="m-0 flex flex-1 items-center justify-center px-3 text-center text-xs text-base-content/60">
-        {emptyMessage}
-      </p>
-    );
-  }
-
   const graphLeft = `calc(${BRANCH_COL} + ${GRAPH_GAP_PX}px)`;
   const virtualRows = rowVirtualizer.getVirtualItems();
 
+  const loadMoreFooter = graphCommitsHasMore ? (
+    <div className="mt-2 flex justify-center border-t border-base-300/50 pt-2">
+      <button
+        type="button"
+        className="btn btn-outline btn-sm"
+        disabled={loadingMoreGraphCommits}
+        onClick={() => {
+          loadMoreGraphCommits();
+        }}
+      >
+        {loadingMoreGraphCommits ? (
+          <>
+            <span className="loading loading-xs loading-spinner" />
+            Loading…
+          </>
+        ) : (
+          "Load more commits"
+        )}
+      </button>
+    </div>
+  ) : null;
+
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <h2 className="m-0 mb-1.5 flex shrink-0 flex-wrap items-baseline gap-x-2 gap-y-0 border-b border-base-300 px-3 pt-2 pb-1.5 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
         <span>Commits</span>
         <span className="font-mono text-[0.6rem] font-normal tracking-normal text-base-content/55 normal-case">
@@ -351,120 +404,243 @@ export function CommitGraphSection({
         <span className="truncate pl-3">Branch</span>
         <span className="min-w-0 truncate">Graph</span>
         <span className="min-w-0 truncate">Commit message</span>
-        <span className="min-w-0 truncate">Author</span>
-        <span className="pr-3 text-right">When</span>
-      </div>
-      <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto">
         <div
-          className="relative w-full min-w-0"
-          style={{
-            height: totalHeight,
-            minHeight: totalHeight,
-          }}
+          ref={authorFilterWrapRef}
+          className={`dropdown dropdown-end min-w-0 justify-self-stretch ${authorFilterOpen ? "dropdown-open" : ""}`}
         >
-          <div
-            className="pointer-events-none absolute z-0"
-            style={{
-              left: graphLeft,
-              width: graphWidthPx,
-              top: 0,
-              height: totalHeight,
+          <button
+            type="button"
+            className="btn h-6 min-h-0 w-full max-w-full justify-start gap-1 px-1 font-sans text-[0.6rem] font-semibold tracking-wide normal-case opacity-100 btn-ghost btn-xs"
+            aria-expanded={authorFilterOpen}
+            aria-haspopup="dialog"
+            title="Filter by author"
+            onClick={(e) => {
+              e.stopPropagation();
+              setWhenFilterOpen(false);
+              setAuthorFilterOpen((o) => !o);
             }}
           >
-            {virtualRows.map((v) => {
-              const c = commits[v.index];
-              return (
-                <div
-                  key={`graph-bg-${c.hash}`}
-                  className={`absolute right-0 left-0 z-0 ${
-                    currentBranchTipHash === c.hash ? "bg-primary/12" : ""
-                  }`}
-                  style={{ top: v.start, height: v.size }}
-                  aria-hidden
-                />
-              );
-            })}
-            <div className="relative z-[1]">
-              <CommitGraphColumn layout={commitGraphLayout} commitCount={commits.length} />
-            </div>
+            <span className="truncate uppercase">Author</span>
+            {graphAuthorFilter.trim() ? (
+              <span className="badge shrink-0 badge-xs badge-primary" title="Filter active" />
+            ) : null}
+          </button>
+          <div
+            className="dropdown-content z-[100] mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg"
+            onMouseDown={(e) => {
+              e.stopPropagation();
+            }}
+          >
+            <label className="form-control w-full">
+              <span className="label-text text-[0.65rem] font-medium uppercase opacity-70">
+                Name or email
+              </span>
+              <input
+                type="text"
+                className="input-bordered input input-xs w-full font-mono text-xs"
+                placeholder="Contains…"
+                autoComplete="off"
+                spellCheck={false}
+                value={graphAuthorFilter}
+                onChange={(e) => {
+                  onGraphAuthorFilterChange(e.target.value);
+                }}
+              />
+            </label>
+            {graphFiltersActive ? (
+              <button
+                type="button"
+                className="btn mt-2 w-full btn-ghost btn-xs"
+                onClick={() => {
+                  onClearGraphFilters();
+                  setAuthorFilterOpen(false);
+                }}
+              >
+                Clear all filters
+              </button>
+            ) : null}
           </div>
-          {virtualRows.map((v) => {
-            const c = commits[v.index];
-            return (
+        </div>
+        <div
+          ref={whenFilterWrapRef}
+          className={`dropdown dropdown-end min-w-0 justify-self-end pr-2 ${whenFilterOpen ? "dropdown-open" : ""}`}
+        >
+          <button
+            type="button"
+            className="btn h-6 min-h-0 gap-1 px-1 font-sans text-[0.6rem] font-semibold tracking-wide normal-case opacity-100 btn-ghost btn-xs"
+            aria-expanded={whenFilterOpen}
+            aria-haspopup="dialog"
+            title="Filter by date"
+            onClick={(e) => {
+              e.stopPropagation();
+              setAuthorFilterOpen(false);
+              setWhenFilterOpen((o) => !o);
+            }}
+          >
+            <span className="uppercase">When</span>
+            {graphDateFrom.trim() || graphDateTo.trim() ? (
+              <span className="badge shrink-0 badge-xs badge-primary" title="Filter active" />
+            ) : null}
+          </button>
+          <div
+            className="dropdown-content dropdown-end z-[100] mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg"
+            onMouseDown={(e) => {
+              e.stopPropagation();
+            }}
+          >
+            <label className="form-control w-full">
+              <span className="label-text text-[0.65rem] font-medium uppercase opacity-70">
+                From
+              </span>
+              <input
+                type="date"
+                className="input-bordered input input-xs w-full font-mono text-xs"
+                value={graphDateFrom}
+                onChange={(e) => {
+                  onGraphDateFromChange(e.target.value);
+                }}
+              />
+            </label>
+            <label className="form-control mt-2 w-full">
+              <span className="label-text text-[0.65rem] font-medium uppercase opacity-70">To</span>
+              <input
+                type="date"
+                className="input-bordered input input-xs w-full font-mono text-xs"
+                value={graphDateTo}
+                onChange={(e) => {
+                  onGraphDateToChange(e.target.value);
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn mt-3 w-full btn-outline btn-xs"
+              disabled={exportGraphCommitsDisabled}
+              onClick={() => {
+                onExportGraphCommits();
+              }}
+            >
+              Export list…
+            </button>
+            {graphFiltersActive ? (
+              <button
+                type="button"
+                className="btn mt-1 w-full btn-ghost btn-xs"
+                onClick={() => {
+                  onClearGraphFilters();
+                  setWhenFilterOpen(false);
+                }}
+              >
+                Clear all filters
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+      <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto">
+        {commits.length === 0 ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex min-h-[10rem] flex-1 flex-col items-center justify-center px-3 py-8">
+              <p className="m-0 max-w-md text-center text-xs text-base-content/60">
+                {emptyMessage}
+              </p>
+            </div>
+            {loadMoreFooter}
+          </div>
+        ) : (
+          <>
+            <div
+              className="relative w-full min-w-0"
+              style={{
+                height: totalHeight,
+                minHeight: totalHeight,
+              }}
+            >
               <div
-                key={`graph-ctx-${c.hash}`}
-                role="presentation"
-                className="absolute z-[2] cursor-context-menu"
+                className="pointer-events-none absolute z-0"
                 style={{
                   left: graphLeft,
                   width: graphWidthPx,
-                  top: v.start,
-                  height: v.size,
-                }}
-                onContextMenu={(e) => {
-                  if (!nativeContextMenusAvailable()) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openGraphCommitMenu(c.hash, e.clientX, e.clientY);
-                }}
-              />
-            );
-          })}
-          {virtualRows.map((v) => {
-            const idx = v.index;
-            const c = commits[idx];
-            return (
-              <div
-                key={v.key}
-                className="absolute top-0 right-0 left-0 flex gap-x-1.5 px-0.5"
-                style={{
-                  top: v.start,
-                  height: v.size,
+                  top: 0,
+                  height: totalHeight,
                 }}
               >
-                <CommitGraphVirtualRow
-                  c={c}
-                  idx={idx}
-                  commitsLength={commits.length}
-                  graphWidthPx={graphWidthPx}
-                  laneMeta={rowLaneMetas[idx]}
-                  commitBrowseHash={commitBrowseHash}
-                  currentBranchTipHash={currentBranchTipHash}
-                  currentBranchName={currentBranchName}
-                  branchBusy={branchBusy}
-                  stashBusy={stashBusy}
-                  commitsSectionTitle={commitsSectionTitle}
-                  onRowCommitSelect={onRowCommitSelect}
-                  openGraphBranchLocalMenu={openGraphBranchLocalMenu}
-                  openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
-                  openGraphStashMenu={openGraphStashMenu}
-                  openGraphCommitMenu={openGraphCommitMenu}
-                />
+                {virtualRows.map((v) => {
+                  const c = commits[v.index];
+                  return (
+                    <div
+                      key={`graph-bg-${c.hash}`}
+                      className={`absolute right-0 left-0 z-0 ${
+                        currentBranchTipHash === c.hash ? "bg-primary/12" : ""
+                      }`}
+                      style={{ top: v.start, height: v.size }}
+                      aria-hidden
+                    />
+                  );
+                })}
+                <div className="relative z-[1]">
+                  <CommitGraphColumn layout={commitGraphLayout} commitCount={commits.length} />
+                </div>
               </div>
-            );
-          })}
-        </div>
-        {graphCommitsHasMore ? (
-          <div className="mt-2 flex justify-center border-t border-base-300/50 pt-2">
-            <button
-              type="button"
-              className="btn btn-outline btn-sm"
-              disabled={loadingMoreGraphCommits}
-              onClick={() => {
-                loadMoreGraphCommits();
-              }}
-            >
-              {loadingMoreGraphCommits ? (
-                <>
-                  <span className="loading loading-xs loading-spinner" />
-                  Loading…
-                </>
-              ) : (
-                "Load more commits"
-              )}
-            </button>
-          </div>
-        ) : null}
+              {virtualRows.map((v) => {
+                const c = commits[v.index];
+                return (
+                  <div
+                    key={`graph-ctx-${c.hash}`}
+                    role="presentation"
+                    className="absolute z-[2] cursor-context-menu"
+                    style={{
+                      left: graphLeft,
+                      width: graphWidthPx,
+                      top: v.start,
+                      height: v.size,
+                    }}
+                    onContextMenu={(e) => {
+                      if (!nativeContextMenusAvailable()) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      openGraphCommitMenu(c.hash, e.clientX, e.clientY);
+                    }}
+                  />
+                );
+              })}
+              {virtualRows.map((v) => {
+                const idx = v.index;
+                const c = commits[idx];
+                return (
+                  <div
+                    key={v.key}
+                    className="absolute top-0 right-0 left-0 flex gap-x-1.5 px-0.5"
+                    style={{
+                      top: v.start,
+                      height: v.size,
+                    }}
+                  >
+                    <CommitGraphVirtualRow
+                      c={c}
+                      idx={idx}
+                      commitsLength={commits.length}
+                      graphWidthPx={graphWidthPx}
+                      laneMeta={rowLaneMetas[idx]}
+                      commitBrowseHash={commitBrowseHash}
+                      currentBranchTipHash={currentBranchTipHash}
+                      currentBranchName={currentBranchName}
+                      branchBusy={branchBusy}
+                      stashBusy={stashBusy}
+                      commitsSectionTitle={commitsSectionTitle}
+                      onRowCommitSelect={onRowCommitSelect}
+                      openGraphBranchLocalMenu={openGraphBranchLocalMenu}
+                      openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
+                      openGraphStashMenu={openGraphStashMenu}
+                      openGraphCommitMenu={openGraphCommitMenu}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            {loadMoreFooter}
+          </>
+        )}
       </div>
     </div>
   );

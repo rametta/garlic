@@ -110,6 +110,8 @@ pub struct RepoMetadata {
     pub git_root: Option<String>,
     pub error: Option<String>,
     pub branch: Option<String>,
+    /// Full `HEAD` OID (`git rev-parse HEAD`); used to scope exports to the checked-out branch.
+    pub head_hash: Option<String>,
     pub head_short: Option<String>,
     pub head_subject: Option<String>,
     pub head_author: Option<String>,
@@ -224,6 +226,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         git_root: None,
         error: None,
         branch: None,
+        head_hash: None,
         head_short: None,
         head_subject: None,
         head_author: None,
@@ -252,6 +255,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
 
     let branch = if detached { None } else { abbrev.clone() };
 
+    let head_hash = git_output(&path_buf, &["rev-parse", "HEAD"]).ok();
     let head_short = git_output(&path_buf, &["rev-parse", "--short", "HEAD"]).ok();
 
     let log_line = git_output(&path_buf, &["log", "-1", "--format=%s|%an|%aI"]).ok();
@@ -280,6 +284,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
     let meta = RepoMetadata {
         git_root,
         branch,
+        head_hash,
         head_short,
         head_subject,
         head_author,

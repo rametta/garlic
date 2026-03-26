@@ -24,6 +24,7 @@ import {
   buildGraphExportDefaultFilename,
   filterGraphCommits,
   formatCommitsExportTxt,
+  reachableCommitHashesFromHead,
 } from "./graphCommitFilters";
 
 export type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, StashEntry } from "./repoTypes";
@@ -54,6 +55,8 @@ interface RepoMetadata {
   gitRoot: string | null;
   error: string | null;
   branch: string | null;
+  /** Full `HEAD` OID; used to scope export to the checked-out branch. */
+  headHash?: string | null;
   headShort: string | null;
   headSubject: string | null;
   headAuthor: string | null;
@@ -719,6 +722,16 @@ export default function App({
     graphDateFrom.trim().length > 0 ||
     graphDateTo.trim().length > 0;
 
+  const graphCommitsReachableFromHead = useMemo(
+    () => reachableCommitHashesFromHead(commits, repo?.headHash ?? null),
+    [commits, repo?.headHash],
+  );
+
+  const graphExportCommits = useMemo(
+    () => graphFilteredCommits.filter((c) => graphCommitsReachableFromHead.has(c.hash)),
+    [graphFilteredCommits, graphCommitsReachableFromHead],
+  );
+
   const clearFileToolView = useCallback(() => {
     setFileHistoryPath(null);
     setFileHistoryCommits([]);
@@ -753,7 +766,7 @@ export default function App({
 
   const exportFilteredCommitsList = useCallback(async () => {
     if (!repo?.path || repo.error) return;
-    if (graphFilteredCommits.length === 0) return;
+    if (graphExportCommits.length === 0) return;
     setOperationError(null);
     try {
       const path = await save({
@@ -761,9 +774,15 @@ export default function App({
         filters: [{ name: "Text", extensions: ["txt"] }],
       });
       if (path == null) return;
+      const checkoutExportLabel = repo.detached
+        ? repo.headShort
+          ? `Detached (${repo.headShort})`
+          : "Detached HEAD"
+        : (repo.branch ?? "—");
       const text = formatCommitsExportTxt(
-        graphFilteredCommits,
+        graphExportCommits,
         repo.name.trim() || repo.path,
+        checkoutExportLabel,
         graphAuthorFilter,
         graphDateFrom,
         graphDateTo,
@@ -772,7 +791,7 @@ export default function App({
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     }
-  }, [repo, graphFilteredCommits, graphAuthorFilter, graphDateFrom, graphDateTo]);
+  }, [repo, graphExportCommits, graphAuthorFilter, graphDateFrom, graphDateTo]);
 
   const loadDiffForFile = useCallback(
     async (f: WorkingTreeFile, side: "unstaged" | "staged") => {
@@ -2556,105 +2575,52 @@ export default function App({
                             </div>
                           </div>
                         ) : (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                            <div className="flex shrink-0 flex-wrap items-end gap-2 border-b border-base-300/80 px-3 py-2">
-                              <label className="form-control max-w-full min-w-48 flex-1">
-                                <span className="label-text mb-0 text-[0.65rem] font-medium uppercase opacity-70">
-                                  Author
-                                </span>
-                                <input
-                                  type="text"
-                                  className="input-bordered input input-xs w-full font-mono text-xs"
-                                  placeholder="Name or email"
-                                  autoComplete="off"
-                                  spellCheck={false}
-                                  value={graphAuthorFilter}
-                                  onChange={(e) => {
-                                    setGraphAuthorFilter(e.target.value);
-                                  }}
-                                />
-                              </label>
-                              <label className="form-control w-38 min-w-0">
-                                <span className="label-text mb-0 text-[0.65rem] font-medium uppercase opacity-70">
-                                  From
-                                </span>
-                                <input
-                                  type="date"
-                                  className="input-bordered input input-xs w-full font-mono text-xs"
-                                  value={graphDateFrom}
-                                  onChange={(e) => {
-                                    setGraphDateFrom(e.target.value);
-                                  }}
-                                />
-                              </label>
-                              <label className="form-control w-38 min-w-0">
-                                <span className="label-text mb-0 text-[0.65rem] font-medium uppercase opacity-70">
-                                  To
-                                </span>
-                                <input
-                                  type="date"
-                                  className="input-bordered input input-xs w-full font-mono text-xs"
-                                  value={graphDateTo}
-                                  onChange={(e) => {
-                                    setGraphDateTo(e.target.value);
-                                  }}
-                                />
-                              </label>
-                              {graphCommitFiltersActive ? (
-                                <button
-                                  type="button"
-                                  className="btn shrink-0 btn-ghost btn-xs"
-                                  onClick={() => {
-                                    setGraphAuthorFilter("");
-                                    setGraphDateFrom("");
-                                    setGraphDateTo("");
-                                  }}
-                                >
-                                  Clear filters
-                                </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                className="btn ml-auto shrink-0 btn-outline btn-xs"
-                                disabled={graphFilteredCommits.length === 0}
-                                onClick={() => {
-                                  void exportFilteredCommitsList();
-                                }}
-                              >
-                                Export list…
-                              </button>
-                            </div>
-                            <CommitGraphSection
-                              commits={graphFilteredCommits}
-                              commitGraphLayout={commitGraphLayout}
-                              localBranches={localBranches}
-                              remoteBranches={remoteBranches}
-                              graphBranchVisible={graphBranchVisible}
-                              currentBranchName={currentBranchName}
-                              currentBranchTipHash={currentBranchTipHash}
-                              commitBrowseHash={commitBrowseHash}
-                              branchBusy={branchBusy}
-                              stashBusy={stashBusy}
-                              commitsSectionTitle={commitsSectionTitle}
-                              emptyMessage={
-                                commits.length === 0
-                                  ? "No commits to show"
-                                  : "No commits match the current filters"
-                              }
-                              graphCommitsHasMore={graphCommitsHasMore}
-                              loadingMoreGraphCommits={loadingMoreGraphCommits}
-                              loadMoreGraphCommits={() => {
-                                void loadMoreGraphCommits();
-                              }}
-                              onRowCommitSelect={(hash) => {
-                                void selectCommit(hash);
-                              }}
-                              openGraphBranchLocalMenu={openGraphBranchLocalMenu}
-                              openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
-                              openGraphStashMenu={openGraphStashMenu}
-                              openGraphCommitMenu={openGraphCommitMenu}
-                            />
-                          </div>
+                          <CommitGraphSection
+                            commits={graphFilteredCommits}
+                            commitGraphLayout={commitGraphLayout}
+                            localBranches={localBranches}
+                            remoteBranches={remoteBranches}
+                            graphBranchVisible={graphBranchVisible}
+                            currentBranchName={currentBranchName}
+                            currentBranchTipHash={currentBranchTipHash}
+                            commitBrowseHash={commitBrowseHash}
+                            branchBusy={branchBusy}
+                            stashBusy={stashBusy}
+                            commitsSectionTitle={commitsSectionTitle}
+                            emptyMessage={
+                              commits.length === 0
+                                ? "No commits to show"
+                                : "No commits match the current filters"
+                            }
+                            graphCommitsHasMore={graphCommitsHasMore}
+                            loadingMoreGraphCommits={loadingMoreGraphCommits}
+                            loadMoreGraphCommits={() => {
+                              void loadMoreGraphCommits();
+                            }}
+                            onRowCommitSelect={(hash) => {
+                              void selectCommit(hash);
+                            }}
+                            openGraphBranchLocalMenu={openGraphBranchLocalMenu}
+                            openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
+                            openGraphStashMenu={openGraphStashMenu}
+                            openGraphCommitMenu={openGraphCommitMenu}
+                            graphAuthorFilter={graphAuthorFilter}
+                            onGraphAuthorFilterChange={setGraphAuthorFilter}
+                            graphDateFrom={graphDateFrom}
+                            graphDateTo={graphDateTo}
+                            onGraphDateFromChange={setGraphDateFrom}
+                            onGraphDateToChange={setGraphDateTo}
+                            graphFiltersActive={graphCommitFiltersActive}
+                            onClearGraphFilters={() => {
+                              setGraphAuthorFilter("");
+                              setGraphDateFrom("");
+                              setGraphDateTo("");
+                            }}
+                            onExportGraphCommits={() => {
+                              void exportFilteredCommitsList();
+                            }}
+                            exportGraphCommitsDisabled={graphExportCommits.length === 0}
+                          />
                         )}
                       </div>
                     </div>
