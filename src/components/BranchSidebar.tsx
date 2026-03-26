@@ -78,33 +78,43 @@ function BranchPanel({
   isLastSection: boolean;
 }) {
   return (
-    <details
-      open={open}
-      onToggle={(e) => {
-        onOpenChange(e.currentTarget.open);
-      }}
-      className={`collapse-arrow collapse flex min-h-0 min-w-0 flex-none flex-col border-base-300 bg-transparent [&[open]]:min-h-0 [&[open]]:flex-1 [&[open]]:flex-col ${
-        isLastSection ? "" : "border-b border-base-300"
-      }`}
+    <div
+      className={`flex min-h-0 min-w-0 flex-col ${
+        open ? "min-h-0 flex-1" : "shrink-0"
+      } ${isLastSection ? "" : "border-b border-base-300"}`}
     >
-      <summary className="collapse-title min-h-0 shrink-0 list-none px-0 py-0 [&::-webkit-details-marker]:hidden">
-        <h2 className="m-0 card-title border-b border-base-300/80 px-3 py-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-          {title} <span className="tabular-nums opacity-90">({entityCount})</span>
-        </h2>
-      </summary>
-      <div className="collapse-content flex min-h-0 flex-1 flex-col p-0">
-        {belowHeader ? (
-          <div className="shrink-0 border-b border-base-300">{belowHeader}</div>
-        ) : null}
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          {empty ? (
-            <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
-          ) : (
-            children
-          )}
+      <div
+        className={`collapse-arrow collapse border-0 bg-transparent shadow-none ${
+          open ? "min-h-0 flex-1" : ""
+        }`}
+      >
+        <input
+          type="checkbox"
+          checked={open}
+          onChange={(e) => {
+            onOpenChange(e.target.checked);
+          }}
+          aria-label={`Show or hide ${title}`}
+        />
+        <div className="collapse-title !block min-h-0 min-w-0 border-b border-base-300/80 !px-3 !py-2 !pr-9 !text-left">
+          <h2 className="m-0 card-title text-xs font-semibold tracking-wide uppercase opacity-70">
+            {title} <span className="tabular-nums opacity-90">({entityCount})</span>
+          </h2>
+        </div>
+        <div className="collapse-content !flex !min-h-0 flex-col gap-0 !overflow-hidden !px-0 !pb-0">
+          {belowHeader ? (
+            <div className="shrink-0 border-b border-base-300">{belowHeader}</div>
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
+            {empty ? (
+              <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
+            ) : (
+              children
+            )}
+          </div>
         </div>
       </div>
-    </details>
+    </div>
   );
 }
 
