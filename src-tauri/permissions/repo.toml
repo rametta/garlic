@@ -11,6 +11,7 @@ commands.allow = [
   "checkout_local_branch",
   "create_local_branch",
   "create_branch_at_commit",
+  "create_tag",
   "create_branch_from_remote",
   "delete_local_branch",
   "delete_remote_branch",

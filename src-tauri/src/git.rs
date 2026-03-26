@@ -746,6 +746,41 @@ pub fn create_branch_at_commit(path: String, branch: String, commit: String) -> 
     Ok(())
 }
 
+/// Create a tag at `commit`. With a non-empty `message`, creates an annotated tag (`git tag -a`).
+#[tauri::command]
+pub fn create_tag(
+    path: String,
+    tag: String,
+    commit: String,
+    message: Option<String>,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return Err("Tag name cannot be empty.".to_string());
+    }
+    let commit = commit.trim();
+    if commit.is_empty() {
+        return Err("Commit cannot be empty.".to_string());
+    }
+    let verify_spec = format!("{commit}^{{commit}}");
+    git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+    let msg = message
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    if let Some(m) = msg {
+        git_output(
+            &path_buf,
+            &["tag", "-a", tag, "-m", m, commit],
+        )?;
+    } else {
+        git_output(&path_buf, &["tag", tag, commit])?;
+    }
+    Ok(())
+}
+
 /// Create a local branch from `remote_ref` (e.g. `origin/feature/foo`) and switch to it.
 #[tauri::command]
 pub fn create_branch_from_remote(path: String, remote_ref: String) -> Result<(), String> {

@@ -96,6 +96,7 @@ pub fn run() {
             git::checkout_local_branch,
             git::create_local_branch,
             git::create_branch_at_commit,
+            git::create_tag,
             git::create_branch_from_remote,
             git::delete_local_branch,
             git::delete_remote_branch,

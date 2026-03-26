@@ -172,6 +172,12 @@ function branchNameValidationError(name: string): string | null {
   return null;
 }
 
+function tagNameValidationError(name: string): string | null {
+  const err = branchNameValidationError(name);
+  if (err === null) return null;
+  return err.replace(/Branch names/g, "Tag names");
+}
+
 /** Tauri `invoke` may reject with a string or a non-Error object; normalize for display. */
 function invokeErrorMessage(e: unknown): string {
   if (typeof e === "string") return e;
@@ -524,6 +530,12 @@ export default function App({
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
   /** When set, the create-branch dialog starts the branch at this commit instead of HEAD. */
   const [createBranchStartCommit, setCreateBranchStartCommit] = useState<string | null>(null);
+  const createTagDialogRef = useRef<HTMLDialogElement>(null);
+  const createTagNameInputRef = useRef<HTMLInputElement>(null);
+  const [createTagCommit, setCreateTagCommit] = useState<string | null>(null);
+  const [newTagName, setNewTagName] = useState("");
+  const [createTagMessage, setCreateTagMessage] = useState("");
+  const [createTagFieldError, setCreateTagFieldError] = useState<string | null>(null);
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
@@ -1504,6 +1516,17 @@ export default function App({
             newBranchInputRef.current?.focus();
           });
         },
+        onCreateTag: () => {
+          setCreateTagCommit(hash);
+          setNewTagName("");
+          setCreateTagMessage("");
+          setCreateTagFieldError(null);
+          setOperationError(null);
+          createTagDialogRef.current?.showModal();
+          requestAnimationFrame(() => {
+            createTagNameInputRef.current?.focus();
+          });
+        },
         onCopyFull: () => void navigator.clipboard.writeText(hash),
         onCopyShort: () => void navigator.clipboard.writeText(shortHash),
       });
@@ -1640,6 +1663,39 @@ export default function App({
         });
       }
       createBranchDialogRef.current?.close();
+      await refreshAfterMutation();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }
+
+  async function submitCreateTag() {
+    const trimmed = newTagName.trim();
+    if (!repo?.path || repo.error) return;
+    if (!createTagCommit) return;
+    if (!trimmed) {
+      setCreateTagFieldError("Enter a tag name.");
+      return;
+    }
+    const nameErr = tagNameValidationError(trimmed);
+    if (nameErr) {
+      setCreateTagFieldError(nameErr);
+      return;
+    }
+    setCreateTagFieldError(null);
+    setBranchBusy("tag");
+    setOperationError(null);
+    try {
+      const msg = createTagMessage.trim();
+      await invoke("create_tag", {
+        path: repo.path,
+        tag: trimmed,
+        commit: createTagCommit,
+        message: msg.length > 0 ? msg : null,
+      });
+      createTagDialogRef.current?.close();
       await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
@@ -1899,10 +1955,20 @@ export default function App({
   const canSubmitNewBranch =
     newBranchTrimmed.length > 0 && !newBranchNameInvalid && branchBusy !== "create";
 
+  const newTagTrimmed = newTagName.trim();
+  const newTagNameInvalid =
+    newTagTrimmed.length > 0 && tagNameValidationError(newTagTrimmed) !== null;
+  const canSubmitNewTag = newTagTrimmed.length > 0 && !newTagNameInvalid && branchBusy !== "tag";
+
   const createBranchStartEntry = useMemo(() => {
     if (!createBranchStartCommit) return null;
     return commits.find((c) => c.hash === createBranchStartCommit) ?? null;
   }, [commits, createBranchStartCommit]);
+
+  const createTagStartEntry = useMemo(() => {
+    if (!createTagCommit) return null;
+    return commits.find((c) => c.hash === createTagCommit) ?? null;
+  }, [commits, createTagCommit]);
 
   /** Branch/stash sidebar hidden; main column spans 9 — when viewing a commit, file diff, history, or blame. */
   const showExpandedDiff =
@@ -2027,6 +2093,108 @@ export default function App({
                     <span className="loading loading-sm loading-spinner" />
                   ) : (
                     "Create"
+                  )}
+                </button>
+              </div>
+            </div>
+          </dialog>
+
+          <dialog
+            ref={createTagDialogRef}
+            className="modal"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                e.currentTarget.close();
+              }
+            }}
+            onClose={() => {
+              setNewTagName("");
+              setCreateTagMessage("");
+              setCreateTagFieldError(null);
+              setCreateTagCommit(null);
+            }}
+          >
+            <div
+              className="modal-box"
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              <h3 className="m-0 text-lg font-bold">Create tag</h3>
+              <p className="mt-1 mb-0 text-sm text-base-content/70">
+                Creates a lightweight tag at this commit. Add an optional message to create an
+                annotated tag instead.
+              </p>
+              {createTagCommit ? (
+                <p className="mt-2 mb-0 text-xs text-base-content/70">
+                  <span className="font-mono text-base-content/80">
+                    {createTagStartEntry?.shortHash ?? createTagCommit.slice(0, 7)}
+                  </span>
+                  {createTagStartEntry?.subject ? (
+                    <span className="block truncate pt-0.5">{createTagStartEntry.subject}</span>
+                  ) : null}
+                </p>
+              ) : null}
+              <label className="form-control mt-4 w-full">
+                <span className="label-text mb-1">Tag name</span>
+                <input
+                  ref={createTagNameInputRef}
+                  type="text"
+                  className="input-bordered input w-full font-mono text-sm"
+                  value={newTagName}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={branchBusy === "tag"}
+                  onChange={(e) => {
+                    setNewTagName(e.target.value);
+                    if (createTagFieldError) setCreateTagFieldError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void submitCreateTag();
+                    }
+                  }}
+                />
+                {createTagFieldError ? (
+                  <span className="label-text-alt text-error">{createTagFieldError}</span>
+                ) : newTagNameInvalid ? (
+                  <span className="label-text-alt text-error">
+                    {tagNameValidationError(newTagTrimmed)}
+                  </span>
+                ) : null}
+              </label>
+              <label className="form-control mt-3 w-full">
+                <span className="label-text mb-1">Annotation message (optional)</span>
+                <textarea
+                  className="textarea-bordered textarea min-h-[4.5rem] w-full font-mono text-sm textarea-sm"
+                  value={createTagMessage}
+                  placeholder="Leave empty for a lightweight tag"
+                  disabled={branchBusy === "tag"}
+                  onChange={(e) => {
+                    setCreateTagMessage(e.target.value);
+                  }}
+                />
+              </label>
+              <div className="modal-action">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={branchBusy === "tag"}
+                  onClick={() => createTagDialogRef.current?.close()}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={!canSubmitNewTag}
+                  onClick={() => void submitCreateTag()}
+                >
+                  {branchBusy === "tag" ? (
+                    <span className="loading loading-sm loading-spinner" />
+                  ) : (
+                    "Create tag"
                   )}
                 </button>
               </div>

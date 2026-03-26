@@ -247,6 +247,7 @@ export async function popupGraphCommitContextMenu(
     onBrowse: () => void;
     onCherryPick: () => void;
     onCreateBranch: () => void;
+    onCreateTag: () => void;
     onCopyFull: () => void;
     onCopyShort: () => void;
   },
@@ -276,6 +277,14 @@ export async function popupGraphCommitContextMenu(
         enabled: !args.branchBusy,
         action: () => {
           args.onCreateBranch();
+        },
+      },
+      {
+        id: "commit_tag",
+        text: "Create tag…",
+        enabled: !args.branchBusy,
+        action: () => {
+          args.onCreateTag();
         },
       },
       {
