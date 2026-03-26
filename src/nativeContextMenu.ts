@@ -33,6 +33,7 @@ export async function popupBranchContextMenu(
     onRebaseInteractive: () => void;
     onDelete: () => void;
     onForceDelete: () => void;
+    onDeleteRemote?: () => void;
   },
 ): Promise<void> {
   if (!isTauri()) return;
@@ -102,6 +103,17 @@ export async function popupBranchContextMenu(
         },
       },
     );
+  }
+
+  if (args.kind === "remote" && args.onDeleteRemote) {
+    items.push({
+      id: "remote_branch_delete",
+      text: "Delete remote branch…",
+      enabled: !args.branchBusy,
+      action: () => {
+        args.onDeleteRemote!();
+      },
+    });
   }
 
   try {

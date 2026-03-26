@@ -773,6 +773,27 @@ pub fn delete_local_branch(path: String, branch: String, force: bool) -> Result<
     Ok(())
 }
 
+/// Delete a branch on the remote (`git push <remote> --delete <branch>`). `remote_ref` is e.g. `origin/feature/foo`.
+#[tauri::command]
+pub fn delete_remote_branch(path: String, remote_ref: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let remote_ref = remote_ref.trim();
+    let Some(slash) = remote_ref.find('/') else {
+        return Err("Invalid remote branch ref.".to_string());
+    };
+    let remote = remote_ref[..slash].trim();
+    let branch_on_remote = remote_ref[slash + 1..].trim();
+    if remote.is_empty() || branch_on_remote.is_empty() {
+        return Err("Invalid remote branch ref.".to_string());
+    }
+    git_output(
+        &path_buf,
+        &["push", remote, "--delete", branch_on_remote],
+    )?;
+    Ok(())
+}
+
 /// Rebase the current branch onto `onto` (local branch name or remote ref such as `origin/main`).
 /// With `interactive`, runs `git rebase -i` using the user's configured sequence/core editor.
 #[tauri::command]

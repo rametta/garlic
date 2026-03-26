@@ -748,7 +748,10 @@ function RemoteBranchRow({
   onRemoteBranchContextMenu: (remoteRef: string, clientX: number, clientY: number) => void;
   graph: BranchGraphControls;
 }) {
-  const busy = branchBusy === `remote:${fullRef}` || branchBusy === "rebase";
+  const busy =
+    branchBusy === `remote:${fullRef}` ||
+    branchBusy === `delete-remote:${fullRef}` ||
+    branchBusy === "rebase";
   const graphVisible = graph.graphVisibleRemote(fullRef);
 
   return (
@@ -1455,6 +1458,37 @@ export default function App({
     [repo, refreshAfterMutation],
   );
 
+  const deleteRemoteBranch = useCallback(
+    async (fullRef: string) => {
+      if (!repo?.path || repo.error) return;
+      let ok = false;
+      try {
+        ok = await ask(
+          `Delete remote branch "${fullRef}"? This runs git push --delete on the server.`,
+          { title: "Garlic", kind: "warning" },
+        );
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+        return;
+      }
+      if (!ok) return;
+      setBranchBusy(`delete-remote:${fullRef}`);
+      setOperationError(null);
+      try {
+        await invoke("delete_remote_branch", {
+          path: repo.path,
+          remoteRef: fullRef,
+        });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, refreshAfterMutation],
+  );
+
   const rebaseCurrentBranchOnto = useCallback(
     async (onto: string, interactive: boolean) => {
       if (!repo?.path || repo.error) return;
@@ -1542,6 +1576,8 @@ export default function App({
           if (spec.kind !== "local") return;
           void deleteLocalBranch(spec.branchName, true);
         },
+        onDeleteRemote:
+          spec.kind === "remote" ? () => void deleteRemoteBranch(spec.fullRef) : undefined,
       });
     },
     [
@@ -1551,6 +1587,7 @@ export default function App({
       mergeBranchIntoCurrent,
       rebaseCurrentBranchOnto,
       deleteLocalBranch,
+      deleteRemoteBranch,
     ],
   );
 

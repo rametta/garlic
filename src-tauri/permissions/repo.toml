@@ -13,6 +13,7 @@ commands.allow = [
   "create_branch_at_commit",
   "create_branch_from_remote",
   "delete_local_branch",
+  "delete_remote_branch",
   "rebase_current_branch_onto",
   "list_working_tree_files",
   "stage_paths",
