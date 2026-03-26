@@ -2322,8 +2322,13 @@ export default function App({
                             </div>
                             <div className="shrink-0 border-b border-base-300 pb-1.5">
                               <div className="min-w-0">
-                                <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                  Files in commit
+                                <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                  <span>Files in commit</span>
+                                  {!commitBrowseLoading ? (
+                                    <span className="font-mono text-[0.65rem] font-normal tracking-normal text-base-content/45 normal-case tabular-nums">
+                                      ({commitBrowseFiles.length})
+                                    </span>
+                                  ) : null}
                                 </h2>
                                 <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
                                   {commitBrowseMeta?.subject ?? commitBrowseHash.slice(0, 7)}
