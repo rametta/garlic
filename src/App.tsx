@@ -2042,7 +2042,7 @@ export default function App({
                   ) : null}
                 </p>
               ) : null}
-              <label className="form-control mt-4 w-full">
+              <label className="form-control mt-4 block w-full">
                 <span className="label-text mb-1">Branch name</span>
                 <input
                   ref={newBranchInputRef}
@@ -2067,9 +2067,11 @@ export default function App({
                   }}
                 />
                 {createBranchFieldError ? (
-                  <span className="label-text-alt text-error">{createBranchFieldError}</span>
+                  <span className="label-text-alt mt-1 block w-full text-error">
+                    {createBranchFieldError}
+                  </span>
                 ) : newBranchNameInvalid ? (
-                  <span className="label-text-alt text-error">
+                  <span className="label-text-alt mt-1 block w-full text-error">
                     {branchNameValidationError(newBranchTrimmed)}
                   </span>
                 ) : null}
@@ -2135,7 +2137,7 @@ export default function App({
                   ) : null}
                 </p>
               ) : null}
-              <label className="form-control mt-4 w-full">
+              <label className="form-control mt-4 block w-full">
                 <span className="label-text mb-1">Tag name</span>
                 <input
                   ref={createTagNameInputRef}
@@ -2157,14 +2159,16 @@ export default function App({
                   }}
                 />
                 {createTagFieldError ? (
-                  <span className="label-text-alt text-error">{createTagFieldError}</span>
+                  <span className="label-text-alt mt-1 block w-full text-error">
+                    {createTagFieldError}
+                  </span>
                 ) : newTagNameInvalid ? (
-                  <span className="label-text-alt text-error">
+                  <span className="label-text-alt mt-1 block w-full text-error">
                     {tagNameValidationError(newTagTrimmed)}
                   </span>
                 ) : null}
               </label>
-              <label className="form-control mt-3 w-full">
+              <label className="form-control mt-3 block w-full">
                 <span className="label-text mb-1">Annotation message (optional)</span>
                 <textarea
                   className="textarea-bordered textarea min-h-[4.5rem] w-full font-mono text-sm textarea-sm"
