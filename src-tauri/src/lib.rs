@@ -89,6 +89,7 @@ pub fn run() {
             git::list_working_tree_files,
             git::stage_paths,
             git::unstage_paths,
+            git::discard_path_changes,
             git::commit_staged,
             git::amend_last_commit,
             git::merge_branch,

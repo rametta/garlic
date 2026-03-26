@@ -322,8 +322,13 @@ function StagePanelFileRow({
   onSelect: () => void;
   onStage: () => void;
   onUnstage: () => void;
-  /** Right-click: history / blame for this path. */
-  onFileContextMenu?: (path: string, clientX: number, clientY: number) => void;
+  /** Right-click: history / blame / discard (worktree). */
+  onFileContextMenu?: (
+    path: string,
+    variant: "staged" | "unstaged",
+    clientX: number,
+    clientY: number,
+  ) => void;
 }) {
   const selectable = f.staged || f.unstaged;
   return (
@@ -353,7 +358,7 @@ function StagePanelFileRow({
           ? (e) => {
               e.preventDefault();
               e.stopPropagation();
-              onFileContextMenu(f.path, e.clientX, e.clientY);
+              onFileContextMenu(f.path, variant, e.clientX, e.clientY);
             }
           : undefined
       }
@@ -924,11 +929,22 @@ export default function App({
   const [fileBlameText, setFileBlameText] = useState<string | null>(null);
   const [fileBlameLoading, setFileBlameLoading] = useState(false);
   const [fileBlameError, setFileBlameError] = useState<string | null>(null);
-  const [fileRowContextMenu, setFileRowContextMenu] = useState<{
-    path: string;
-    x: number;
-    y: number;
-  } | null>(null);
+  const [fileRowContextMenu, setFileRowContextMenu] = useState<
+    | {
+        path: string;
+        x: number;
+        y: number;
+        source: "worktree";
+        variant: "staged" | "unstaged";
+      }
+    | {
+        path: string;
+        x: number;
+        y: number;
+        source: "commitBrowse";
+      }
+    | null
+  >(null);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
@@ -1565,12 +1581,54 @@ export default function App({
     [repo, commits, refreshAfterMutation],
   );
 
-  const openFileRowMenu = useCallback((path: string, clientX: number, clientY: number) => {
-    setBranchContextMenu(null);
-    setStashContextMenu(null);
-    setGraphCommitContextMenu(null);
-    setFileRowContextMenu({ path, x: clientX, y: clientY });
-  }, []);
+  const openFileRowMenu = useCallback(
+    (
+      path: string,
+      clientX: number,
+      clientY: number,
+      opts?: { source: "worktree"; variant: "staged" | "unstaged" } | { source: "commitBrowse" },
+    ) => {
+      setBranchContextMenu(null);
+      setStashContextMenu(null);
+      setGraphCommitContextMenu(null);
+      setFileRowContextMenu({
+        path,
+        x: clientX,
+        y: clientY,
+        ...(opts ?? { source: "commitBrowse" as const }),
+      });
+    },
+    [],
+  );
+
+  const discardPathChanges = useCallback(
+    async (filePath: string, fromUnstaged: boolean) => {
+      if (!repo?.path || repo.error) return;
+      const ok = await ask(
+        fromUnstaged
+          ? `Discard unstaged changes for "${filePath}"? Untracked files will be permanently deleted.`
+          : `Discard staged changes for "${filePath}" and restore this path to the last commit?`,
+        { title: "Garlic", kind: "warning" },
+      );
+      if (!ok) return;
+      setFileRowContextMenu(null);
+      setStageCommitBusy(true);
+      setOperationError(null);
+      try {
+        await invoke("discard_path_changes", {
+          path: repo.path,
+          filePath,
+          fromUnstaged,
+        });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setStageCommitBusy(false);
+      }
+    },
+    [repo, refreshAfterMutation],
+  );
 
   const openFileHistory = useCallback(
     async (filePath: string) => {
@@ -2059,6 +2117,12 @@ export default function App({
       ),
     [commits, graphBranchTips, currentBranchName],
   );
+
+  /** Tip commit of the checked-out branch — used to highlight that row in the graph. */
+  const currentBranchTipHash = useMemo(() => {
+    if (!currentBranchName) return null;
+    return localBranches.find((b) => b.name === currentBranchName)?.tipHash ?? null;
+  }, [currentBranchName, localBranches]);
 
   return (
     <main className="box-border flex min-h-screen flex-col bg-base-200 px-4 pt-6 pb-8 text-base-content antialiased [font-synthesis:none]">
@@ -2854,6 +2918,9 @@ export default function App({
                                     </span>
                                   ) : null;
                                   const isBrowsing = commitBrowseHash === c.hash;
+                                  const isHeadBranchTipRow =
+                                    currentBranchTipHash !== null &&
+                                    c.hash === currentBranchTipHash;
                                   const rel = formatRelativeShort(c.date);
                                   const fullTitle = [
                                     stashRef
@@ -2869,7 +2936,9 @@ export default function App({
                                   return (
                                     <Fragment key={c.hash}>
                                       <div
-                                        className={`flex min-h-0 min-w-0 items-center px-0.5 ${rowRule}`}
+                                        className={`flex min-h-0 min-w-0 items-center px-0.5 ${rowRule} ${
+                                          isHeadBranchTipRow ? "bg-primary/12" : ""
+                                        }`}
                                         style={{ gridColumn: 1, gridRow: idx + 1 }}
                                       >
                                         {branchCell}
@@ -2880,7 +2949,9 @@ export default function App({
                                         className={`grid h-full min-h-0 w-full grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left text-[0.6875rem] leading-tight transition-colors ${rowRule} ${
                                           isBrowsing
                                             ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
-                                            : "hover:bg-base-300/40"
+                                            : isHeadBranchTipRow
+                                              ? "bg-primary/12 hover:bg-primary/18"
+                                              : "hover:bg-base-300/40"
                                         }`}
                                         style={{ gridColumn: "3 / 6", gridRow: idx + 1 }}
                                         onClick={() => void selectCommit(c.hash)}
@@ -2916,15 +2987,30 @@ export default function App({
                                     gridRow: `1 / span ${commits.length}`,
                                   }}
                                 >
-                                  <CommitGraphColumn
-                                    layout={commitGraphLayout}
-                                    commitCount={commits.length}
-                                  />
+                                  {commits.map((c, rowIdx) => (
+                                    <div
+                                      key={`graph-row-bg-${c.hash}`}
+                                      className={`pointer-events-none absolute inset-x-0 z-0 ${
+                                        currentBranchTipHash === c.hash ? "bg-primary/12" : ""
+                                      }`}
+                                      style={{
+                                        top: rowIdx * COMMIT_GRAPH_ROW_HEIGHT,
+                                        height: COMMIT_GRAPH_ROW_HEIGHT,
+                                      }}
+                                      aria-hidden
+                                    />
+                                  ))}
+                                  <div className="relative z-[1]">
+                                    <CommitGraphColumn
+                                      layout={commitGraphLayout}
+                                      commitCount={commits.length}
+                                    />
+                                  </div>
                                   {commits.map((c, rowIdx) => (
                                     <div
                                       key={`graph-ctx-${c.hash}`}
                                       role="presentation"
-                                      className="absolute left-0 z-[1] w-full cursor-context-menu"
+                                      className="absolute left-0 z-[2] w-full cursor-context-menu"
                                       style={{
                                         top: rowIdx * COMMIT_GRAPH_ROW_HEIGHT,
                                         height: COMMIT_GRAPH_ROW_HEIGHT,
@@ -3021,8 +3107,8 @@ export default function App({
                           onUnstage={() => void onUnstagePaths([f.path])}
                           onFileContextMenu={
                             canShowBranches
-                              ? (path, x, y) => {
-                                  openFileRowMenu(path, x, y);
+                              ? (path, variant, x, y) => {
+                                  openFileRowMenu(path, x, y, { source: "worktree", variant });
                                 }
                               : undefined
                           }
@@ -3078,8 +3164,8 @@ export default function App({
                           onUnstage={() => void onUnstagePaths([f.path])}
                           onFileContextMenu={
                             canShowBranches
-                              ? (path, x, y) => {
-                                  openFileRowMenu(path, x, y);
+                              ? (path, variant, x, y) => {
+                                  openFileRowMenu(path, x, y, { source: "worktree", variant });
                                 }
                               : undefined
                           }
@@ -3364,7 +3450,10 @@ export default function App({
               className="menu fixed z-[101] min-w-[13rem] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
               style={{
                 left: Math.min(Math.max(8, fileRowContextMenu.x), window.innerWidth - 228),
-                top: Math.min(Math.max(8, fileRowContextMenu.y), window.innerHeight - 120),
+                top: Math.min(
+                  Math.max(8, fileRowContextMenu.y),
+                  window.innerHeight - (fileRowContextMenu.source === "worktree" ? 180 : 120),
+                ),
               }}
             >
               <li role="none">
@@ -3397,6 +3486,30 @@ export default function App({
                   Blame
                 </button>
               </li>
+              {fileRowContextMenu.source === "worktree" ? (
+                <li role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="rounded text-error"
+                    disabled={Boolean(branchBusy) || stageCommitBusy}
+                    title={
+                      fileRowContextMenu.variant === "unstaged"
+                        ? "Restore this file from the index, or remove it if untracked"
+                        : "Reset this path to the last commit (index and working tree)"
+                    }
+                    onClick={() => {
+                      const m = fileRowContextMenu;
+                      if (m.source !== "worktree") return;
+                      void discardPathChanges(m.path, m.variant === "unstaged");
+                    }}
+                  >
+                    {fileRowContextMenu.variant === "unstaged"
+                      ? "Discard unstaged changes…"
+                      : "Discard staged changes…"}
+                  </button>
+                </li>
+              ) : null}
             </ul>
           ) : null}
           {graphCommitContextMenu

@@ -17,6 +17,7 @@ commands.allow = [
   "list_working_tree_files",
   "stage_paths",
   "unstage_paths",
+  "discard_path_changes",
   "commit_staged",
   "amend_last_commit",
   "merge_branch",

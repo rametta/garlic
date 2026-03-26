@@ -982,6 +982,37 @@ pub fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// Discard local changes for one path. `from_unstaged` selects the sidebar column:
+/// - **Unstaged:** restore the working tree from the index for tracked files (`git restore --worktree`);
+///   remove untracked paths (`git clean -f`).
+/// - **Staged:** reset index and working tree to `HEAD` for this path (`git restore --source=HEAD --staged --worktree`).
+#[tauri::command]
+pub fn discard_path_changes(
+    path: String,
+    file_path: String,
+    from_unstaged: bool,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    if from_unstaged {
+        if git_path_known_to_git(&path_buf, rel) {
+            git_output(&path_buf, &["restore", "--worktree", "--", rel])?;
+        } else {
+            git_output(&path_buf, &["clean", "-f", "--", rel])?;
+        }
+    } else {
+        git_output(
+            &path_buf,
+            &["restore", "--source=HEAD", "--staged", "--worktree", "--", rel],
+        )?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn commit_staged(path: String, message: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
