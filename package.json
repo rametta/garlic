@@ -13,10 +13,13 @@
     "fmt:check": "oxfmt --check ."
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.48",
     "@tanstack/react-virtual": "^3.13.23",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-opener": "^2",
+    "ai": "^6.0.138",
+    "openai": "^6.33.0",
     "react": "^19.1.0",
     "react-diff-view": "^3.3.2",
     "react-dom": "^19.1.0",

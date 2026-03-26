@@ -102,6 +102,7 @@ pub fn run() {
             git::list_file_history,
             git::get_file_blame,
             git::get_staged_diff,
+            git::get_staged_diff_all,
             git::get_unstaged_diff,
             git::list_commit_files,
             git::get_commit_signature_status,
@@ -119,6 +120,7 @@ pub fn run() {
             settings::restore_app_bootstrap,
             set_last_repo_path,
             settings::set_theme,
+            settings::set_openai_settings,
         ])
         .setup(|app| {
             app.manage(active_repo::ActiveRepoPath::default());
@@ -149,6 +151,16 @@ pub fn run() {
                     &recent_items[4] as &dyn IsMenuItem<Wry>,
                 ],
             )?;
+
+            let configure_openai_key = MenuItem::with_id(
+                app,
+                "configure_openai_key",
+                "Configure OpenAI API Key…",
+                true,
+                None::<&str>,
+            )?;
+            let garlic_menu =
+                Submenu::with_items(app, "Garlic", true, &[&configure_openai_key])?;
 
             let file_menu = Submenu::with_items(app, "File", true, &[&open_repo, &recent_submenu])?;
 
@@ -219,7 +231,7 @@ pub fn run() {
 
             let menu = Menu::with_items(
                 app,
-                &[&file_menu, &edit_menu, &repo_menu, &theme_submenu],
+                &[&garlic_menu, &file_menu, &edit_menu, &repo_menu, &theme_submenu],
             )?;
             menu.set_as_app_menu()?;
             Ok(())
@@ -235,6 +247,15 @@ pub fn run() {
                         }
                     }
                 }
+                return;
+            }
+            if menu_id_is(&event, "configure_openai_key") {
+                // Defer emit so the native menu handler returns before the webview runs JS
+                // (`showModal` + focus); synchronous emit from the menu callback can deadlock on macOS.
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = handle.emit("open-openai-settings", ());
+                });
                 return;
             }
             if menu_id_is(&event, "open_repo") {

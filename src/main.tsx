@@ -3,11 +3,14 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App, { type RestoreLastRepo } from "./App";
 import "./index.css";
+import { DEFAULT_OPENAI_MODEL } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
 
 export interface AppBootstrap {
   repo: RestoreLastRepo;
   theme: string | null;
+  openaiApiKey: string | null;
+  openaiModel: string;
 }
 
 export const emptyAppBootstrap: AppBootstrap = {
@@ -23,6 +26,8 @@ export const emptyAppBootstrap: AppBootstrap = {
     listsError: null,
   },
   theme: null,
+  openaiApiKey: null,
+  openaiModel: "gpt-5.4-mini",
 };
 
 async function bootstrap() {
@@ -37,7 +42,12 @@ async function bootstrap() {
 
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-      <App startup={data.repo} themePreference={data.theme ?? "light"} />
+      <App
+        startup={data.repo}
+        themePreference={data.theme ?? "light"}
+        openaiApiKey={data.openaiApiKey ?? null}
+        openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}
+      />
     </React.StrictMode>,
   );
 }

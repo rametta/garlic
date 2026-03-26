@@ -1201,6 +1201,14 @@ pub fn get_staged_diff(path: String, file_path: String) -> Result<String, String
     git_output(&path_buf, &["diff", "--cached", "-U1", "--", rel])
 }
 
+/// Full staged diff for the index (`git diff --cached`).
+#[tauri::command]
+pub fn get_staged_diff_all(path: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    git_output(&path_buf, &["diff", "--cached", "-U3"])
+}
+
 /// Unstaged diff for a path (`git diff -- <path>`), or full file vs empty for untracked paths.
 #[tauri::command]
 pub fn get_unstaged_diff(path: String, file_path: String) -> Result<String, String> {

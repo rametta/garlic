@@ -53,6 +53,12 @@ struct AppSettings {
     recent_repo_paths: Vec<String>,
     #[serde(default)]
     theme: Option<String>,
+    /// User-supplied OpenAI API key for AI commit messages (stored locally).
+    #[serde(default)]
+    openai_api_key: Option<String>,
+    /// OpenAI model id for commit messages (`None` → default in bootstrap).
+    #[serde(default)]
+    openai_model: Option<String>,
 }
 
 fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -213,6 +219,9 @@ fn restore_repo_snapshot(
 pub struct AppBootstrap {
     pub repo: RestoreLastRepo,
     pub theme: Option<String>,
+    pub openai_api_key: Option<String>,
+    /// Resolved model id (defaults to `gpt-5.4-mini` when unset).
+    pub openai_model: String,
 }
 
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
@@ -220,11 +229,38 @@ pub struct AppBootstrap {
 pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
     let settings = load_settings(&app)?;
     let theme = settings.theme.clone();
+    let openai_api_key = settings.openai_api_key.clone();
+    let openai_model = resolve_openai_model(&settings);
     let repo = restore_repo_snapshot(&app, &settings)?;
     if repo.metadata.is_none() {
         window_title::set_main_window_title(&app, window_title::DEFAULT_WINDOW_TITLE);
     }
-    Ok(AppBootstrap { repo, theme })
+    Ok(AppBootstrap {
+        repo,
+        theme,
+        openai_api_key,
+        openai_model,
+    })
+}
+
+fn resolve_openai_model(settings: &AppSettings) -> String {
+    const DEFAULT: &str = "gpt-5.4-mini";
+    settings
+        .openai_model
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| DEFAULT.to_string())
+}
+
+/// Persists OpenAI API key and model for AI-generated commit messages.
+#[tauri::command]
+pub fn set_openai_settings(app: AppHandle, key: Option<String>, model: Option<String>) -> Result<(), String> {
+    let mut s = load_settings(&app)?;
+    s.openai_api_key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    s.openai_model = model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+    save_settings(&app, &s)
 }
 
 /// Persists the last opened repository path and updates the recent list (`None` clears last only).

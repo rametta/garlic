@@ -1,4 +1,5 @@
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask, open } from "@tauri-apps/plugin-dialog";
@@ -17,6 +18,7 @@ import {
   popupStashContextMenu,
 } from "./nativeContextMenu";
 import type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, StashEntry } from "./repoTypes";
+import { DEFAULT_OPENAI_MODEL, generateCommitTitleFromStagedDiff } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
 
 export type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, StashEntry } from "./repoTypes";
@@ -351,10 +353,16 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
 export default function App({
   startup,
   themePreference: initialThemePreference,
+  openaiApiKey: initialOpenaiApiKey,
+  openaiModel: initialOpenaiModel,
 }: {
   startup: RestoreLastRepo;
   /** Persisted value: `auto` or a DaisyUI theme name. */
   themePreference: string;
+  /** Saved OpenAI API key for AI commit messages (may be empty). */
+  openaiApiKey: string | null;
+  /** OpenAI model id for commit suggestions (defaults to `gpt-5.4-mini`). */
+  openaiModel: string;
 }) {
   const [themePreference, setThemePreference] = useState(initialThemePreference);
   const [repo, setRepo] = useState<RepoMetadata | null>(() => startup.metadata ?? null);
@@ -427,6 +435,75 @@ export default function App({
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const editOriginUrlDialogRef = useRef<HTMLDialogElement>(null);
   const editOriginUrlInputRef = useRef<HTMLInputElement>(null);
+  const openaiKeyInputRef = useRef<HTMLInputElement>(null);
+  const [openaiApiKey, setOpenaiApiKey] = useState(() => initialOpenaiApiKey?.trim() ?? "");
+  const [openaiKeyDraft, setOpenaiKeyDraft] = useState(() => initialOpenaiApiKey?.trim() ?? "");
+  const [openaiModel, setOpenaiModel] = useState(
+    () => initialOpenaiModel.trim() || DEFAULT_OPENAI_MODEL,
+  );
+  const [openaiModelDraft, setOpenaiModelDraft] = useState(
+    () => initialOpenaiModel.trim() || DEFAULT_OPENAI_MODEL,
+  );
+  const [openaiSettingsOpen, setOpenaiSettingsOpen] = useState(false);
+  const [openaiSettingsBusy, setOpenaiSettingsBusy] = useState(false);
+  const [aiCommitBusy, setAiCommitBusy] = useState(false);
+
+  const closeOpenAiSettingsDialog = useCallback(() => {
+    setOpenaiSettingsOpen(false);
+    setOpenaiKeyDraft(openaiApiKey);
+    setOpenaiModelDraft(openaiModel);
+  }, [openaiApiKey, openaiModel]);
+
+  const openOpenAiSettingsDialog = useCallback(() => {
+    setOpenaiKeyDraft(openaiApiKey);
+    setOpenaiModelDraft(openaiModel);
+    setOpenaiSettingsOpen(true);
+  }, [openaiApiKey, openaiModel]);
+
+  useEffect(() => {
+    if (!openaiSettingsOpen) return;
+    const id = requestAnimationFrame(() => {
+      openaiKeyInputRef.current?.focus();
+      openaiKeyInputRef.current?.select();
+    });
+    return () => {
+      cancelAnimationFrame(id);
+    };
+  }, [openaiSettingsOpen]);
+
+  useEffect(() => {
+    if (!openaiSettingsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeOpenAiSettingsDialog();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [openaiSettingsOpen, closeOpenAiSettingsDialog]);
+
+  async function saveOpenAiSettings() {
+    setOpenaiSettingsBusy(true);
+    setOperationError(null);
+    try {
+      const trimmed = openaiKeyDraft.trim();
+      const modelTrim = openaiModelDraft.trim();
+      await invoke("set_openai_settings", {
+        key: trimmed.length > 0 ? trimmed : null,
+        model: modelTrim.length > 0 ? modelTrim : null,
+      });
+      setOpenaiApiKey(trimmed);
+      setOpenaiModel(modelTrim || DEFAULT_OPENAI_MODEL);
+      setOpenaiSettingsOpen(false);
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setOpenaiSettingsBusy(false);
+    }
+  }
   const [editOriginUrl, setEditOriginUrl] = useState("");
   /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
   const lastFullBranchListRefreshAtRef = useRef(0);
@@ -1358,6 +1435,9 @@ export default function App({
 
   useEffect(() => {
     const promise = Promise.all([
+      listen("open-openai-settings", () => {
+        openOpenAiSettingsDialog();
+      }),
       listen("open-repo-request", () => {
         void (async () => {
           const selected = await open({
@@ -1410,7 +1490,7 @@ export default function App({
         }
       });
     };
-  }, [loadRepo, refreshAfterMutation]);
+  }, [loadRepo, openOpenAiSettingsDialog, refreshAfterMutation]);
 
   useEffect(() => {
     if (themePreference !== "auto") return;
@@ -1686,6 +1766,47 @@ export default function App({
     !commitPushBusy &&
     !pushBusy;
   const canCommitAndPush = canCommit && !repo?.detached && !pushBusy && !amendLastCommit;
+
+  async function onAiGenerateCommitMessage() {
+    if (!repo?.path || repo.error) return;
+    if (!hasStagedFiles) return;
+    const key = openaiApiKey.trim();
+    if (!key) return;
+    setAiCommitBusy(true);
+    setOperationError(null);
+    try {
+      const stagedDiff = await invoke<string>("get_staged_diff_all", {
+        path: repo.path,
+      });
+      if (!stagedDiff.trim()) {
+        setOperationError("Staged diff is empty; nothing to summarize.");
+        return;
+      }
+      const title = await generateCommitTitleFromStagedDiff({
+        apiKey: key,
+        model: openaiModel.trim() || DEFAULT_OPENAI_MODEL,
+        stagedDiff,
+      });
+      if (!title) {
+        setOperationError("The model returned an empty message.");
+        return;
+      }
+      setCommitMessage(title);
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setAiCommitBusy(false);
+    }
+  }
+
+  const hasOpenAiApiKey = openaiApiKey.trim().length > 0;
+  const canUseAiCommit =
+    hasOpenAiApiKey &&
+    Boolean(repo?.path && !repo.error && !loading) &&
+    hasStagedFiles &&
+    !stageCommitBusy &&
+    !commitPushBusy &&
+    !aiCommitBusy;
 
   const newBranchTrimmed = newBranchName.trim();
   const newBranchNameInvalid =
@@ -2620,18 +2741,35 @@ export default function App({
                         "Commit & Push"
                       )}
                     </button>
-                    <button
-                      type="button"
-                      className="btn ml-auto btn-sm btn-primary"
-                      disabled={!canCommit}
-                      onClick={() => void onCommit()}
-                    >
-                      {stageCommitBusy ? (
-                        <span className="loading loading-xs loading-spinner" />
-                      ) : (
-                        "Commit"
-                      )}
-                    </button>
+                    <div className="ml-auto flex flex-wrap items-center gap-2">
+                      {hasOpenAiApiKey ? (
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          disabled={!canUseAiCommit}
+                          title="Generate a commit message from staged changes using OpenAI"
+                          onClick={() => void onAiGenerateCommitMessage()}
+                        >
+                          {aiCommitBusy ? (
+                            <span className="loading loading-xs loading-spinner" />
+                          ) : (
+                            "AI"
+                          )}
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        disabled={!canCommit}
+                        onClick={() => void onCommit()}
+                      >
+                        {stageCommitBusy ? (
+                          <span className="loading loading-xs loading-spinner" />
+                        ) : (
+                          "Commit"
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -2639,6 +2777,107 @@ export default function App({
           </div>
         </aside>
       </div>
+      {createPortal(
+        openaiSettingsOpen ? (
+          <div
+            className="modal-open modal pointer-events-auto z-[9999]"
+            role="presentation"
+            onClick={() => {
+              closeOpenAiSettingsDialog();
+            }}
+          >
+            <div
+              className="modal-box"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="openai-settings-title"
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              <h3 id="openai-settings-title" className="m-0 text-lg font-bold">
+                OpenAI settings
+              </h3>
+              <p className="mt-1 mb-0 text-sm text-base-content/70">
+                Stored only on this device in Garlic settings. Used to suggest commit messages from
+                your staged diff via the OpenAI API.
+              </p>
+              <label className="form-control mt-4 w-full">
+                <span className="label-text mb-1">API key</span>
+                <input
+                  ref={openaiKeyInputRef}
+                  type="password"
+                  className="input-bordered input w-full font-mono text-sm"
+                  value={openaiKeyDraft}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={openaiSettingsBusy}
+                  placeholder="sk-…"
+                  onChange={(e) => {
+                    setOpenaiKeyDraft(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void saveOpenAiSettings();
+                    }
+                  }}
+                />
+              </label>
+              <label className="form-control mt-3 w-full">
+                <span className="label-text mb-1">Model</span>
+                <input
+                  type="text"
+                  className="input-bordered input w-full font-mono text-sm"
+                  value={openaiModelDraft}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={openaiSettingsBusy}
+                  placeholder={DEFAULT_OPENAI_MODEL}
+                  title="OpenAI model id (e.g. gpt-5.4-mini)"
+                  onChange={(e) => {
+                    setOpenaiModelDraft(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void saveOpenAiSettings();
+                    }
+                  }}
+                />
+                <span className="label-text-alt text-base-content/60">
+                  Default is {DEFAULT_OPENAI_MODEL} (fast). Leave empty to use the default.
+                </span>
+              </label>
+              <div className="modal-action">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={openaiSettingsBusy}
+                  onClick={() => {
+                    closeOpenAiSettingsDialog();
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={openaiSettingsBusy}
+                  onClick={() => void saveOpenAiSettings()}
+                >
+                  {openaiSettingsBusy ? (
+                    <span className="loading loading-sm loading-spinner" />
+                  ) : (
+                    "Save"
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null,
+        document.body,
+      )}
     </main>
   );
 }

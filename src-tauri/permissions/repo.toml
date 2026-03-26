@@ -28,6 +28,7 @@ commands.allow = [
   "list_file_history",
   "get_file_blame",
   "get_staged_diff",
+  "get_staged_diff_all",
   "get_unstaged_diff",
   "list_commit_files",
   "get_commit_signature_status",
@@ -45,4 +46,5 @@ commands.allow = [
   "restore_app_bootstrap",
   "set_last_repo_path",
   "set_theme",
+  "set_openai_settings",
 ]
