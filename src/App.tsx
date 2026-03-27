@@ -12,13 +12,18 @@ import type { BranchSidebarSectionsState } from "./repoTypes";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { formatAuthorDisplay, formatDate, formatRelativeShort } from "./appFormat";
 import { collectLocalBranchNamesInSubtree, collectRemoteRefsInSubtree } from "./branchTrie";
 import { BranchSidebar, type BranchGraphControls } from "./components/BranchSidebar";
 import { CommitGraphSection } from "./components/CommitGraphSection";
 import { UnifiedDiff } from "./components/UnifiedDiff";
-import { computeCommitGraphLayout, type BranchTip } from "./commitGraphLayout";
+import {
+  computeCommitGraphLayout,
+  type BranchTip,
+  type CommitGraphLayout,
+} from "./commitGraphLayout";
 import { base64ToObjectUrl, mimeTypeForImagePath, pathLooksLikeRenderableImage } from "./diffImage";
 import {
   nativeContextMenusAvailable,
@@ -58,6 +63,9 @@ export type {
 
 /** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
 const FOCUS_REFRESH_DEBOUNCE_MS = 350;
+
+/** Initial row height for virtualized “files in commit” list (`measureElement` refines). */
+const COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX = 44;
 /**
  * On window focus, skip `list_local_branches` / `list_remote_branches` unless HEAD changed or this
  * many ms have passed since the last full branch list refresh (reduces subprocess churn).
@@ -429,6 +437,11 @@ export default function App({
     () => ({ ...initialBranchSidebarSections }),
   );
   const [repo, setRepo] = useState<RepoMetadata | null>(() => startup.metadata ?? null);
+  /** Guards async work: ignore results if `repo.path` changed while awaiting (e.g. refresh vs. open other repo). */
+  const activeRepoPathRef = useRef<string | null>(null);
+  activeRepoPathRef.current = repo?.path ?? null;
+  /** Latest `loadRepo` target; supersede in-flight loads when opening another path. */
+  const pendingLoadRepoRef = useRef<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(() => startup.loadError ?? null);
   /** Mutations (checkout, commit, refresh, …) while a repo is open — shown inline, not as a full-panel error. */
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -500,6 +513,13 @@ export default function App({
   const [fileBlameLoading, setFileBlameLoading] = useState(false);
   const [fileBlameError, setFileBlameError] = useState<string | null>(null);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
+  const commitBrowseFileListScrollRef = useRef<HTMLDivElement>(null);
+  const commitBrowseFileVirtualizer = useVirtualizer({
+    count: commitBrowseFiles.length,
+    getScrollElement: () => commitBrowseFileListScrollRef.current,
+    estimateSize: () => COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX,
+    overscan: 12,
+  });
   const cloneRepoDialogRef = useRef<HTMLDialogElement>(null);
   const cloneRepoUrlInputRef = useRef<HTMLInputElement>(null);
   const [cloneRepoUrlDraft, setCloneRepoUrlDraft] = useState("https://github.com/");
@@ -666,21 +686,22 @@ export default function App({
 
   useEffect(() => {
     if (!repo?.path || repo.error) return;
+    const pathAtStart = repo.path;
     let cancelled = false;
     void (async () => {
       try {
         const page = await invoke<GraphCommitsPage>("list_graph_commits", {
-          path: repo.path,
+          path: pathAtStart,
           refs: graphRefs,
           skip: 0,
         });
-        if (!cancelled) {
-          setCommits(page.commits);
-          setGraphCommitsHasMore(page.hasMore);
-          setListsError(null);
-        }
+        if (cancelled || activeRepoPathRef.current !== pathAtStart) return;
+        setCommits(page.commits);
+        setGraphCommitsHasMore(page.hasMore);
+        setListsError(null);
       } catch (e) {
-        if (!cancelled) setListsError(invokeErrorMessage(e));
+        if (cancelled || activeRepoPathRef.current !== pathAtStart) return;
+        setListsError(invokeErrorMessage(e));
       }
     })();
     return () => {
@@ -690,17 +711,22 @@ export default function App({
 
   const loadMoreGraphCommits = useCallback(async () => {
     if (!repo?.path || repo.error || !graphCommitsHasMore || loadingMoreGraphCommits) return;
+    const pathAtStart = repo.path;
+    const skip = commits.length;
     setLoadingMoreGraphCommits(true);
     try {
       const page = await invoke<GraphCommitsPage>("list_graph_commits", {
-        path: repo.path,
+        path: pathAtStart,
         refs: graphRefs,
-        skip: commits.length,
+        skip,
       });
+      if (activeRepoPathRef.current !== pathAtStart) return;
       setCommits((prev) => [...prev, ...page.commits]);
       setGraphCommitsHasMore(page.hasMore);
     } catch (e) {
-      setListsError(invokeErrorMessage(e));
+      if (activeRepoPathRef.current === pathAtStart) {
+        setListsError(invokeErrorMessage(e));
+      }
     } finally {
       setLoadingMoreGraphCommits(false);
     }
@@ -831,6 +857,10 @@ export default function App({
     }
   }, [graphFilteredCommits, commitBrowseHash, clearCommitBrowse]);
 
+  useEffect(() => {
+    commitBrowseFileListScrollRef.current?.scrollTo(0, 0);
+  }, [commitBrowseHash]);
+
   const exportFilteredCommitsList = useCallback(async () => {
     if (!repo?.path || repo.error) return;
     if (graphExportCommits.length === 0) return;
@@ -865,6 +895,7 @@ export default function App({
       if (!repo?.path || repo.error) return;
       if (side === "unstaged" && !f.unstaged) return;
       if (side === "staged" && !f.staged) return;
+      const pathAtStart = repo.path;
       clearCommitBrowse();
       setSelectedDiffPath(f.path);
       setSelectedDiffSide(side);
@@ -876,43 +907,55 @@ export default function App({
       try {
         if (side === "unstaged") {
           const unstaged = await invoke<string>("get_unstaged_diff", {
-            path: repo.path,
+            path: pathAtStart,
             filePath: f.path,
           });
+          if (activeRepoPathRef.current !== pathAtStart) return;
           setDiffUnstagedText(unstaged);
           if (pathLooksLikeRenderableImage(f.path)) {
             try {
               const pair = await invoke<FileBlobPair>("get_unstaged_file_blob_pair", {
-                path: repo.path,
+                path: pathAtStart,
                 filePath: f.path,
               });
+              if (activeRepoPathRef.current !== pathAtStart) return;
               setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
             } catch {
-              setDiffImagePreview(null);
+              if (activeRepoPathRef.current === pathAtStart) {
+                setDiffImagePreview(null);
+              }
             }
           }
         } else {
           const staged = await invoke<string>("get_staged_diff", {
-            path: repo.path,
+            path: pathAtStart,
             filePath: f.path,
           });
+          if (activeRepoPathRef.current !== pathAtStart) return;
           setDiffStagedText(staged);
           if (pathLooksLikeRenderableImage(f.path)) {
             try {
               const pair = await invoke<FileBlobPair>("get_staged_file_blob_pair", {
-                path: repo.path,
+                path: pathAtStart,
                 filePath: f.path,
               });
+              if (activeRepoPathRef.current !== pathAtStart) return;
               setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
             } catch {
-              setDiffImagePreview(null);
+              if (activeRepoPathRef.current === pathAtStart) {
+                setDiffImagePreview(null);
+              }
             }
           }
         }
       } catch (e) {
-        setDiffError(invokeErrorMessage(e));
+        if (activeRepoPathRef.current === pathAtStart) {
+          setDiffError(invokeErrorMessage(e));
+        }
       } finally {
-        setDiffLoading(false);
+        if (activeRepoPathRef.current === pathAtStart) {
+          setDiffLoading(false);
+        }
       }
     },
     [repo, clearCommitBrowse],
@@ -921,6 +964,7 @@ export default function App({
   const selectCommit = useCallback(
     async (hash: string) => {
       if (!repo?.path || repo.error) return;
+      const pathAtStart = repo.path;
       clearFileToolView();
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
@@ -938,14 +982,16 @@ export default function App({
       setCommitSignature({ loading: true, verified: null });
       const [filesSettled, sigSettled] = await Promise.allSettled([
         invoke<CommitFileEntry[]>("list_commit_files", {
-          path: repo.path,
+          path: pathAtStart,
           commitHash: hash,
         }),
         invoke<CommitSignatureStatus>("get_commit_signature_status", {
-          path: repo.path,
+          path: pathAtStart,
           commitHash: hash,
         }),
       ]);
+
+      if (activeRepoPathRef.current !== pathAtStart) return;
 
       if (filesSettled.status === "fulfilled") {
         setCommitBrowseFiles(filesSettled.value);
@@ -967,6 +1013,7 @@ export default function App({
   const loadCommitFileDiff = useCallback(
     async (filePath: string, commitHash: string) => {
       if (!repo?.path || repo.error || !commitHash.trim()) return;
+      const pathAtStart = repo.path;
       setCommitDiffPath(filePath);
       setCommitDiffLoading(true);
       setCommitDiffError(null);
@@ -974,27 +1021,35 @@ export default function App({
       setCommitDiffImagePreview(null);
       try {
         const text = await invoke<string>("get_commit_file_diff", {
-          path: repo.path,
+          path: pathAtStart,
           commitHash,
           filePath,
         });
+        if (activeRepoPathRef.current !== pathAtStart) return;
         setCommitDiffText(text);
         if (pathLooksLikeRenderableImage(filePath)) {
           try {
             const pair = await invoke<FileBlobPair>("get_commit_file_blob_pair", {
-              path: repo.path,
+              path: pathAtStart,
               commitHash,
               filePath,
             });
+            if (activeRepoPathRef.current !== pathAtStart) return;
             setCommitDiffImagePreview(blobPairToPreviewUrls(pair, filePath));
           } catch {
-            setCommitDiffImagePreview(null);
+            if (activeRepoPathRef.current === pathAtStart) {
+              setCommitDiffImagePreview(null);
+            }
           }
         }
       } catch (e) {
-        setCommitDiffError(invokeErrorMessage(e));
+        if (activeRepoPathRef.current === pathAtStart) {
+          setCommitDiffError(invokeErrorMessage(e));
+        }
       } finally {
-        setCommitDiffLoading(false);
+        if (activeRepoPathRef.current === pathAtStart) {
+          setCommitDiffLoading(false);
+        }
       }
     },
     [repo],
@@ -1021,6 +1076,12 @@ export default function App({
 
   const loadRepo = useCallback(
     async (selected: string) => {
+      const target = selected.trim();
+      if (!target) {
+        setLoading(false);
+        return;
+      }
+      pendingLoadRepoRef.current = target;
       setLoading(true);
       setLoadError(null);
       setOperationError(null);
@@ -1030,14 +1091,18 @@ export default function App({
       setDiffStagedText(null);
       setDiffUnstagedText(null);
       setDiffError(null);
+      setDiffLoading(false);
       try {
         const meta = await invoke<RepoMetadata>("get_repo_metadata", {
-          path: selected,
+          path: target,
         });
+        if (pendingLoadRepoRef.current !== target) return;
         setRepo(meta);
         if (!meta.error) {
-          await invoke("set_last_repo_path", { path: selected });
-          await refreshLists(selected);
+          await invoke("set_last_repo_path", { path: target });
+          if (pendingLoadRepoRef.current !== target) return;
+          await refreshLists(target);
+          if (pendingLoadRepoRef.current !== target) return;
           lastFullBranchListRefreshAtRef.current = Date.now();
         } else {
           setLocalBranches([]);
@@ -1049,6 +1114,7 @@ export default function App({
           setWorkingTreeFiles([]);
         }
       } catch (e) {
+        if (pendingLoadRepoRef.current !== target) return;
         setRepo(null);
         setLocalBranches([]);
         setRemoteBranches([]);
@@ -1060,7 +1126,9 @@ export default function App({
         setLoadError(invokeErrorMessage(e));
         void invoke("reset_main_window_title").catch(() => {});
       } finally {
-        setLoading(false);
+        if (pendingLoadRepoRef.current === target) {
+          setLoading(false);
+        }
       }
     },
     [refreshLists, clearCommitBrowse],
@@ -1113,12 +1181,14 @@ export default function App({
     async (options?: { fromFocus?: boolean }) => {
       const fromFocus = options?.fromFocus ?? false;
       if (!repo?.path || repo.error) return;
+      const pathAtStart = repo.path;
       const prevBranch = repo.branch;
       const prevDetached = repo.detached;
       try {
         const meta = await invoke<RepoMetadata>("get_repo_metadata", {
-          path: repo.path,
+          path: pathAtStart,
         });
+        if (activeRepoPathRef.current !== pathAtStart) return;
         const branchContextChanged = meta.branch !== prevBranch || meta.detached !== prevDetached;
         setRepo(meta);
         if (!meta.error) {
@@ -1130,7 +1200,7 @@ export default function App({
 
           if (!fromFocus) {
             lastFullBranchListRefreshAtRef.current = Date.now();
-            files = await refreshLists(repo.path);
+            files = await refreshLists(pathAtStart);
           } else {
             const now = Date.now();
             const needFullBranchList =
@@ -1138,25 +1208,30 @@ export default function App({
               now - lastFullBranchListRefreshAtRef.current >= BRANCH_LIST_FULL_REFRESH_INTERVAL_MS;
             if (needFullBranchList) {
               lastFullBranchListRefreshAtRef.current = Date.now();
-              files = await refreshLists(repo.path);
+              files = await refreshLists(pathAtStart);
             } else {
               try {
                 const [worktree, stashList] = await Promise.all([
                   invoke<WorkingTreeFile[]>("list_working_tree_files", {
-                    path: repo.path,
+                    path: pathAtStart,
                   }),
-                  invoke<StashEntry[]>("list_stashes", { path: repo.path }),
+                  invoke<StashEntry[]>("list_stashes", { path: pathAtStart }),
                 ]);
+                if (activeRepoPathRef.current !== pathAtStart) return;
                 setWorkingTreeFiles(worktree);
                 setStashes(stashList);
                 setListsError(null);
                 files = worktree;
               } catch (e) {
-                setListsError(invokeErrorMessage(e));
+                if (activeRepoPathRef.current === pathAtStart) {
+                  setListsError(invokeErrorMessage(e));
+                }
                 files = null;
               }
             }
           }
+
+          if (activeRepoPathRef.current !== pathAtStart) return;
 
           if (selectedDiffPath && files) {
             const next = files.find((w) => w.path === selectedDiffPath);
@@ -1187,7 +1262,9 @@ export default function App({
           }
         }
       } catch (e) {
-        setOperationError(invokeErrorMessage(e));
+        if (activeRepoPathRef.current === pathAtStart) {
+          setOperationError(invokeErrorMessage(e));
+        }
       }
     },
     [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse],
@@ -2196,15 +2273,24 @@ export default function App({
     !listsError &&
     Boolean(repo && !repo.error);
 
-  const commitGraphLayout = useMemo(
-    () =>
-      computeCommitGraphLayout(
-        graphFilteredCommits.map((c) => ({ hash: c.hash, parentHashes: c.parentHashes })),
-        graphBranchTips,
-        currentBranchName,
-      ),
-    [graphFilteredCommits, graphBranchTips, currentBranchName],
-  );
+  const commitGraphLayout = useMemo((): CommitGraphLayout | null => {
+    if (commitBrowseHash || selectedDiffPath || fileBlamePath || fileHistoryPath) {
+      return null;
+    }
+    return computeCommitGraphLayout(
+      graphFilteredCommits.map((c) => ({ hash: c.hash, parentHashes: c.parentHashes })),
+      graphBranchTips,
+      currentBranchName,
+    );
+  }, [
+    commitBrowseHash,
+    selectedDiffPath,
+    fileBlamePath,
+    fileHistoryPath,
+    graphFilteredCommits,
+    graphBranchTips,
+    currentBranchName,
+  ]);
 
   /** Tip commit of the checked-out branch — used to highlight that row in the graph. */
   const currentBranchTipHash = useMemo(() => {
@@ -3004,40 +3090,62 @@ export default function App({
                                   No files changed in this commit
                                 </p>
                               ) : (
-                                <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-2 overflow-y-auto py-1 pr-0.5">
-                                  {commitBrowseFiles.map((entry) => (
-                                    <li key={entry.path}>
-                                      <button
-                                        type="button"
-                                        className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
-                                        onClick={() =>
-                                          void loadCommitFileDiff(
-                                            entry.path,
-                                            commitBrowseHash ?? "",
-                                          )
-                                        }
-                                        onContextMenu={(e) => {
-                                          if (!nativeContextMenusAvailable()) return;
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          openFileRowMenu(entry.path, e.clientX, e.clientY);
-                                        }}
-                                      >
-                                        <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
-                                          {entry.path}
-                                        </code>
-                                        <DiffLineStatBadge stat={entry.stats} />
-                                      </button>
-                                    </li>
-                                  ))}
-                                </ul>
+                                <div
+                                  ref={commitBrowseFileListScrollRef}
+                                  className="m-0 min-h-0 flex-1 overflow-y-auto py-1 pr-0.5"
+                                >
+                                  <div
+                                    className="relative w-full"
+                                    style={{ height: commitBrowseFileVirtualizer.getTotalSize() }}
+                                  >
+                                    {commitBrowseFileVirtualizer
+                                      .getVirtualItems()
+                                      .map((virtualRow) => {
+                                        const entry = commitBrowseFiles[virtualRow.index];
+                                        if (!entry) return null;
+                                        return (
+                                          <div
+                                            key={virtualRow.key}
+                                            data-index={virtualRow.index}
+                                            ref={commitBrowseFileVirtualizer.measureElement}
+                                            className="absolute top-0 left-0 w-full pb-2"
+                                            style={{
+                                              transform: `translateY(${virtualRow.start}px)`,
+                                            }}
+                                          >
+                                            <button
+                                              type="button"
+                                              className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
+                                              onClick={() =>
+                                                void loadCommitFileDiff(
+                                                  entry.path,
+                                                  commitBrowseHash ?? "",
+                                                )
+                                              }
+                                              onContextMenu={(e) => {
+                                                if (!nativeContextMenusAvailable()) return;
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                openFileRowMenu(entry.path, e.clientX, e.clientY);
+                                              }}
+                                            >
+                                              <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
+                                                {entry.path}
+                                              </code>
+                                              <DiffLineStatBadge stat={entry.stats} />
+                                            </button>
+                                          </div>
+                                        );
+                                      })}
+                                  </div>
+                                </div>
                               )}
                             </div>
                           </div>
                         ) : (
                           <CommitGraphSection
                             commits={graphFilteredCommits}
-                            commitGraphLayout={commitGraphLayout}
+                            commitGraphLayout={commitGraphLayout!}
                             localBranches={localBranches}
                             remoteBranches={remoteBranches}
                             tags={tags}
