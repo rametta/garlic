@@ -13,6 +13,15 @@
 #
 # Tag push is the usual trigger for app releases: it is explicit, maps cleanly to SemVer,
 # and matches how GitHub Releases are tied to git tags.
+#
+# macOS signing + notarization (see https://v2.tauri.app/distribute/sign/macos/ ):
+#   APPLE_CERTIFICATE              base64 .p12 (openssl base64 -A -in cert.p12 -out -)
+#   APPLE_CERTIFICATE_PASSWORD     .p12 export password
+#   KEYCHAIN_PASSWORD              random string (ephemeral CI keychain)
+#   APPLE_SIGNING_IDENTITY         full "Developer ID Application: … (TEAMID)" string
+#   APPLE_API_ISSUER               App Store Connect API issuer ID
+#   APPLE_API_KEY                  API Key ID (short id from the key row, not the .p8 contents)
+#   APP_STORE_CONNECT_PRIVATE_KEY  full contents of the downloaded .p8 private key
 
 name: Release
 
@@ -101,9 +110,54 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
+      - name: Import Apple Developer certificate (macOS)
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_OVERRIDE: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security find-identity -v -p codesigning build.keychain
+          if [[ -n "${APPLE_SIGNING_IDENTITY_OVERRIDE}" ]]; then
+            echo "APPLE_SIGNING_IDENTITY=${APPLE_SIGNING_IDENTITY_OVERRIDE}" >> "$GITHUB_ENV"
+          else
+            CERT_ID=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+            if [[ -z "${CERT_ID}" ]]; then
+              echo "No Developer ID Application identity found after import."
+              exit 1
+            fi
+            echo "APPLE_SIGNING_IDENTITY=${CERT_ID}" >> "$GITHUB_ENV"
+          fi
+          rm -f certificate.p12
+
+      - name: Write App Store Connect API key (macOS)
+        if: matrix.platform == 'macos-latest'
+        env:
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          API_KEY_PATH="${{ runner.temp }}/AuthKey.p8"
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$API_KEY_PATH"
+          chmod 600 "$API_KEY_PATH"
+          test -s "$API_KEY_PATH"
+          echo "APPLE_API_KEY_PATH=$API_KEY_PATH" >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Garlic ${{ github.ref_name }}
