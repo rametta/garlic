@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::Emitter;
 
@@ -339,21 +339,53 @@ fn run_git_clone_with_progress(
     let reader = BufReader::new(stderr);
     let mut stderr_acc = String::new();
 
+    // Git prints progress with `\r` on one line; split so the UI can show separate lines.
+    // Throttle to ~20 emits/s so large clones do not flood the IPC thread.
+    const EMIT_MIN_INTERVAL: Duration = Duration::from_millis(50);
+    let mut last_emit = Instant::now() - Duration::from_secs(1);
+    let mut latest_msg = String::new();
+    let mut latest_percent: Option<u32> = None;
+
     for line in reader.lines() {
         let line = line.map_err(|e| format!("Could not read git clone output: {e}"))?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+        for segment in line.split('\r') {
+            let trimmed = segment.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            stderr_acc.push_str(trimmed);
+            stderr_acc.push('\n');
+            let p = parse_git_clone_progress_percent(trimmed);
+            latest_msg = trimmed.to_string();
+            latest_percent = match (latest_percent, p) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            };
+
+            let now = Instant::now();
+            if now.duration_since(last_emit) >= EMIT_MIN_INTERVAL && !latest_msg.is_empty() {
+                let _ = app.emit(
+                    "clone-progress",
+                    CloneProgressEvent {
+                        session_id,
+                        message: latest_msg.clone(),
+                        percent: latest_percent,
+                    },
+                );
+                last_emit = now;
+            }
         }
-        stderr_acc.push_str(trimmed);
-        stderr_acc.push('\n');
-        let percent = parse_git_clone_progress_percent(trimmed);
+    }
+
+    if !latest_msg.is_empty() {
         let _ = app.emit(
             "clone-progress",
             CloneProgressEvent {
                 session_id,
-                message: trimmed.to_string(),
-                percent,
+                message: latest_msg,
+                percent: latest_percent,
             },
         );
     }

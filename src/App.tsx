@@ -132,10 +132,26 @@ interface CloneProgressPayload {
 }
 
 /** Emitted when a background clone finishes (`start_clone_repository`). */
-interface CloneCompletePayload {
+interface CloneDonePayload {
   sessionId: number;
   path?: string | null;
   error?: string | null;
+}
+
+/** Largest `NN%` in a line (matches Rust `parse_git_clone_progress_percent`). */
+function parseGitCloneProgressPercent(line: string): number | null {
+  let best: number | null = null;
+  for (const token of line.split(/\s+/)) {
+    const t = token.replace(/[,;).]+$/, "");
+    if (t.endsWith("%")) {
+      const n = Number.parseInt(t.slice(0, -1), 10);
+      if (!Number.isNaN(n)) {
+        const v = Math.min(100, Math.max(0, n));
+        best = best === null ? v : Math.max(best, v);
+      }
+    }
+  }
+  return best;
 }
 
 /** Emitted after `start_commit_signature_check` (Rust thread; does not block invoke). */
@@ -473,10 +489,12 @@ export default function App({
   } | null>(null);
   /** Lines shown in the fixed-height clone log (throttled updates). */
   const [cloneLogLines, setCloneLogLines] = useState<string[]>([]);
+  /** Set when a clone succeeds; user must click Open before `loadRepo` runs. */
+  const [cloneReadyPath, setCloneReadyPath] = useState<string | null>(null);
   /** Matches `start_clone_repository` return value; filters `clone-progress` / `clone-complete`. */
   const pendingCloneSessionRef = useRef<number | null>(null);
   /** `clone-complete` can arrive before `invoke` resolves; flush after session id is known. */
-  const cloneCompleteQueuedRef = useRef<CloneCompletePayload | null>(null);
+  const cloneCompleteQueuedRef = useRef<CloneDonePayload | null>(null);
   const cloneLogLinesRef = useRef<string[]>([]);
   const cloneProgressMaxPercentRef = useRef<number | null>(null);
   const cloneProgressRafRef = useRef<number | null>(null);
@@ -1182,34 +1200,39 @@ export default function App({
     });
   }, []);
 
-  const handleCloneCompletePayload = useCallback(
-    (p: CloneCompletePayload) => {
-      if (cloneProgressRafRef.current != null) {
-        cancelAnimationFrame(cloneProgressRafRef.current);
-        cloneProgressRafRef.current = null;
-      }
-      cloneLogLinesRef.current = [];
-      cloneProgressMaxPercentRef.current = null;
-      pendingCloneSessionRef.current = null;
-      setCloneLogLines([]);
-      if (p.error) {
-        setCloneProgress(null);
-        setOperationError(p.error);
-        setLoading(false);
-        return;
-      }
-      const path = p.path?.trim();
-      if (!path) {
-        setCloneProgress(null);
-        setOperationError("Clone finished without a path.");
-        setLoading(false);
-        return;
-      }
+  const handleCloneCompletePayload = useCallback((p: CloneDonePayload) => {
+    if (cloneProgressRafRef.current != null) {
+      cancelAnimationFrame(cloneProgressRafRef.current);
+      cloneProgressRafRef.current = null;
+    }
+    cloneLogLinesRef.current = [];
+    cloneProgressMaxPercentRef.current = null;
+    pendingCloneSessionRef.current = null;
+    setCloneLogLines([]);
+    if (p.error) {
       setCloneProgress(null);
-      void loadRepo(path);
-    },
-    [loadRepo],
-  );
+      setOperationError(p.error);
+      setLoading(false);
+      return;
+    }
+    const path = p.path?.trim();
+    if (!path) {
+      setCloneProgress(null);
+      setOperationError("Clone finished without a path.");
+      setLoading(false);
+      return;
+    }
+    setCloneProgress(null);
+    setCloneReadyPath(path);
+    setLoading(false);
+  }, []);
+
+  const openClonedRepository = useCallback(() => {
+    const path = cloneReadyPath?.trim();
+    if (!path) return;
+    setCloneReadyPath(null);
+    void loadRepo(path);
+  }, [cloneReadyPath, loadRepo]);
 
   useLayoutEffect(() => {
     if (!cloneProgress || cloneLogLines.length === 0) return;
@@ -1242,6 +1265,7 @@ export default function App({
     if (parent === null || Array.isArray(parent)) return;
     pendingCloneSessionRef.current = null;
     cloneCompleteQueuedRef.current = null;
+    setCloneReadyPath(null);
     if (cloneProgressRafRef.current != null) {
       cancelAnimationFrame(cloneProgressRafRef.current);
       cloneProgressRafRef.current = null;
@@ -1254,13 +1278,13 @@ export default function App({
     setLoadError(null);
     setOperationError(null);
     try {
-      const sessionId = await invoke<number>("start_clone_repository", {
+      const startSessionId = await invoke<number>("start_clone_repository", {
         parentPath: parent,
         remoteUrl: trimmed,
       });
-      pendingCloneSessionRef.current = sessionId;
-      const queued = cloneCompleteQueuedRef.current;
-      if (queued && queued.sessionId === sessionId) {
+      pendingCloneSessionRef.current = startSessionId;
+      const queued = cloneCompleteQueuedRef.current as CloneDonePayload | null;
+      if (queued !== null && queued.sessionId === startSessionId) {
         cloneCompleteQueuedRef.current = null;
         handleCloneCompletePayload(queued);
       }
@@ -1949,24 +1973,33 @@ export default function App({
           return;
         }
         pendingCloneSessionRef.current = p.sessionId;
-        const pctRaw =
+        const segments = p.message
+          .split(/\r/)
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+        if (segments.length === 0) return;
+        const pctFromPayload =
           p.percent !== undefined && p.percent !== null && !Number.isNaN(p.percent)
             ? Math.min(100, Math.max(0, Math.round(p.percent)))
             : null;
-        if (pctRaw != null) {
-          cloneProgressMaxPercentRef.current = Math.max(
-            cloneProgressMaxPercentRef.current ?? 0,
-            pctRaw,
-          );
-        }
-        const lines = cloneLogLinesRef.current;
-        const last = lines.length > 0 ? lines[lines.length - 1] : "";
-        if (last !== p.message) {
-          cloneLogLinesRef.current = [...lines, p.message].slice(-200);
+        for (const segment of segments) {
+          const segPct = parseGitCloneProgressPercent(segment);
+          const pctRaw = segPct ?? (segments.length === 1 ? pctFromPayload : null);
+          if (pctRaw != null) {
+            cloneProgressMaxPercentRef.current = Math.max(
+              cloneProgressMaxPercentRef.current ?? 0,
+              pctRaw,
+            );
+          }
+          const lines = cloneLogLinesRef.current;
+          const last = lines.length > 0 ? lines[lines.length - 1] : "";
+          if (last !== segment) {
+            cloneLogLinesRef.current = [...lines, segment].slice(-200);
+          }
         }
         scheduleCloneProgressUiFlush();
       }),
-      listen<CloneCompletePayload>("clone-complete", (e) => {
+      listen<CloneDonePayload>("clone-complete", (e) => {
         const p = e.payload;
         if (
           pendingCloneSessionRef.current !== null &&
@@ -2874,527 +2907,610 @@ export default function App({
                     <span>{loadError}</span>
                   </DismissibleAlert>
                 </div>
-              ) : repo ? (
+              ) : (
                 <>
-                  {repo.error ? (
-                    <div className="px-4 pt-4 pb-4">
-                      <DismissibleAlert
-                        role="status"
-                        className="alert text-sm alert-warning"
-                        onDismiss={() => {
-                          setRepo((r) => (r ? { ...r, error: null } : null));
-                        }}
-                      >
-                        <span>{repo.error}</span>
-                      </DismissibleAlert>
-                      <dl className="m-0 mt-4 flex flex-col gap-2.5">
-                        <MetaRow label="Path">{repo.path}</MetaRow>
-                      </dl>
-                    </div>
-                  ) : (
-                    <div className="flex min-h-0 flex-1 flex-col">
-                      {listsError || operationError ? (
-                        <div className="shrink-0 space-y-2 px-3 pt-3">
-                          {listsError ? (
-                            <DismissibleAlert
-                              className="alert text-sm alert-error"
-                              onDismiss={() => {
-                                setListsError(null);
-                              }}
-                            >
-                              <span>{listsError}</span>
-                            </DismissibleAlert>
-                          ) : null}
-                          {operationError ? (
-                            <DismissibleAlert
-                              className="alert text-sm alert-error"
-                              onDismiss={() => {
-                                setOperationError(null);
-                              }}
-                            >
-                              <span className="wrap-break-word whitespace-pre-wrap">
-                                {operationError}
-                              </span>
-                            </DismissibleAlert>
-                          ) : null}
+                  {cloneReadyPath && repo ? (
+                    <div className="shrink-0 border-b border-base-300 bg-success/10 px-4 py-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0 flex-1">
+                          <p className="m-0 text-sm font-medium text-base-content">
+                            Clone finished
+                          </p>
+                          <code className="mt-1 block truncate font-mono text-xs text-base-content/80">
+                            {cloneReadyPath}
+                          </code>
                         </div>
-                      ) : null}
-
-                      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                        {!listsError && selectedDiffPath ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
-                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
-                              <div className="min-w-0">
-                                <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
-                                  Diff
-                                </h2>
-                                <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
-                                  {selectedDiffPath}
-                                </code>
-                                {selectedDiffSide ? (
-                                  <p className="mt-1 mb-0 text-xs text-base-content/65">
-                                    {selectedDiffSide === "staged"
-                                      ? "Staged changes"
-                                      : "Unstaged changes"}
-                                  </p>
-                                ) : null}
-                              </div>
-                              <button
-                                type="button"
-                                className="btn shrink-0 btn-sm btn-primary"
-                                onClick={clearDiffSelection}
-                              >
-                                Back to commits
-                              </button>
-                            </div>
-                            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                              {diffLoading ? (
-                                <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
-                                  <span className="loading loading-md loading-spinner text-primary" />
-                                  <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
-                                </div>
-                              ) : diffError ? (
-                                <DismissibleAlert
-                                  className="alert text-sm alert-error"
-                                  onDismiss={() => {
-                                    setDiffError(null);
-                                  }}
-                                >
-                                  <span className="wrap-break-word">{diffError}</span>
-                                </DismissibleAlert>
-                              ) : (
-                                <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
-                                  {diffStagedText !== null ? (
-                                    <div className="mb-8 last:mb-0">
-                                      <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                                        Staged
-                                      </div>
-                                      <UnifiedDiff
-                                        text={diffStagedText}
-                                        emptyLabel="(no staged diff)"
-                                        binaryImagePreview={
-                                          selectedDiffSide === "staged" &&
-                                          diffImagePreview &&
-                                          selectedDiffPath &&
-                                          pathLooksLikeRenderableImage(selectedDiffPath) &&
-                                          (diffImagePreview.before || diffImagePreview.after)
-                                            ? {
-                                                beforeUrl: diffImagePreview.before,
-                                                afterUrl: diffImagePreview.after,
-                                                fileLabel: selectedDiffPath,
-                                              }
-                                            : null
-                                        }
-                                      />
-                                    </div>
-                                  ) : null}
-                                  {diffUnstagedText !== null ? (
-                                    <div>
-                                      <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                                        Unstaged
-                                      </div>
-                                      <UnifiedDiff
-                                        text={diffUnstagedText}
-                                        emptyLabel="(no unstaged diff)"
-                                        binaryImagePreview={
-                                          selectedDiffSide === "unstaged" &&
-                                          diffImagePreview &&
-                                          selectedDiffPath &&
-                                          pathLooksLikeRenderableImage(selectedDiffPath) &&
-                                          (diffImagePreview.before || diffImagePreview.after)
-                                            ? {
-                                                beforeUrl: diffImagePreview.before,
-                                                afterUrl: diffImagePreview.after,
-                                                fileLabel: selectedDiffPath,
-                                              }
-                                            : null
-                                        }
-                                      />
-                                    </div>
-                                  ) : null}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ) : !listsError && fileBlamePath ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
-                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
-                              <div className="min-w-0">
-                                <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                  Blame
-                                </h2>
-                                <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
-                                  {fileBlamePath}
-                                </code>
-                              </div>
-                              <button
-                                type="button"
-                                className="btn shrink-0 btn-sm btn-primary"
-                                onClick={() => {
-                                  clearFileToolView();
-                                }}
-                              >
-                                Back to commits
-                              </button>
-                            </div>
-                            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                              {fileBlameLoading ? (
-                                <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
-                                  <span className="loading loading-md loading-spinner text-primary" />
-                                  <p className="m-0 text-sm text-base-content/70">Loading blame…</p>
-                                </div>
-                              ) : fileBlameError ? (
-                                <DismissibleAlert
-                                  className="alert text-sm alert-error"
-                                  onDismiss={() => {
-                                    setFileBlameError(null);
-                                  }}
-                                >
-                                  <span className="wrap-break-word">{fileBlameError}</span>
-                                </DismissibleAlert>
-                              ) : (
-                                <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
-                                  {fileBlameText ?? ""}
-                                </pre>
-                              )}
-                            </div>
-                          </div>
-                        ) : !listsError && fileHistoryPath ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
-                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
-                              <div className="min-w-0">
-                                <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                  File history
-                                </h2>
-                                <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
-                                  {fileHistoryPath}
-                                </code>
-                                <p className="mt-1 mb-0 text-xs text-base-content/60">
-                                  Commits that touched this path (newest first). Click a row to open
-                                  the diff for that revision.
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                className="btn shrink-0 btn-sm btn-primary"
-                                onClick={() => {
-                                  clearFileToolView();
-                                }}
-                              >
-                                Back to commits
-                              </button>
-                            </div>
-                            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                              {fileHistoryLoading ? (
-                                <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
-                                  <span className="loading loading-md loading-spinner text-primary" />
-                                  <p className="m-0 text-sm text-base-content/70">
-                                    Loading history…
-                                  </p>
-                                </div>
-                              ) : fileHistoryError ? (
-                                <DismissibleAlert
-                                  className="alert text-sm alert-error"
-                                  onDismiss={() => {
-                                    setFileHistoryError(null);
-                                  }}
-                                >
-                                  <span className="wrap-break-word">{fileHistoryError}</span>
-                                </DismissibleAlert>
-                              ) : fileHistoryCommits.length === 0 ? (
-                                <p className="m-0 text-center text-sm text-base-content/60">
-                                  No commits found for this file
-                                </p>
-                              ) : (
-                                <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1.5 overflow-y-auto pr-0.5">
-                                  {fileHistoryCommits.map((c) => (
-                                    <li key={c.hash}>
-                                      <button
-                                        type="button"
-                                        className="flex w-full flex-col gap-0.5 rounded-lg border border-base-300/50 bg-base-200/40 px-3 py-2 text-left transition-colors hover:border-base-300 hover:bg-base-300/35"
-                                        onClick={() => void onPickFileHistoryCommit(c.hash)}
-                                      >
-                                        <span className="font-mono text-[0.65rem] text-base-content/70">
-                                          {c.shortHash}
-                                        </span>
-                                        <span className="text-sm leading-snug text-base-content/95">
-                                          {c.subject}
-                                        </span>
-                                        <span className="text-[0.65rem] text-base-content/55">
-                                          {formatAuthorDisplay(c.author)} ·{" "}
-                                          {formatRelativeShort(c.date) ?? formatDate(c.date) ?? "—"}
-                                        </span>
-                                      </button>
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </div>
-                          </div>
-                        ) : !listsError && commitDiffPath && commitBrowseHash ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 px-4 pt-3 pb-4">
-                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-1.5">
-                              <button
-                                type="button"
-                                className="btn shrink-0 btn-xs btn-primary"
-                                onClick={backFromCommitFileDiff}
-                              >
-                                Back to files
-                              </button>
-                              <div className="min-w-0 flex-1 text-right">
-                                <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                  Commit diff
-                                </h2>
-                                <code className="mt-0.5 block font-mono text-[0.65rem] leading-tight wrap-break-word text-base-content/85">
-                                  {commitDiffPath}
-                                </code>
-                                <p className="mt-0.5 mb-0 font-mono text-[0.6rem] text-base-content/50">
-                                  {commits.find((x) => x.hash === commitBrowseHash)?.shortHash ??
-                                    commitBrowseHash.slice(0, 7)}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                              {commitDiffLoading ? (
-                                <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
-                                  <span className="loading loading-md loading-spinner text-primary" />
-                                  <p className="m-0 text-xs text-base-content/70">Loading diff…</p>
-                                </div>
-                              ) : commitDiffError ? (
-                                <DismissibleAlert
-                                  className="alert py-2 text-xs alert-error"
-                                  onDismiss={() => {
-                                    setCommitDiffError(null);
-                                  }}
-                                >
-                                  <span className="wrap-break-word">{commitDiffError}</span>
-                                </DismissibleAlert>
-                              ) : (
-                                <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
-                                  <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
-                                    Patch
-                                  </div>
-                                  <UnifiedDiff
-                                    text={commitDiffText ?? ""}
-                                    emptyLabel="(no diff for this file)"
-                                    binaryImagePreview={
-                                      commitDiffImagePreview &&
-                                      commitDiffPath &&
-                                      pathLooksLikeRenderableImage(commitDiffPath) &&
-                                      (commitDiffImagePreview.before ||
-                                        commitDiffImagePreview.after)
-                                        ? {
-                                            beforeUrl: commitDiffImagePreview.before,
-                                            afterUrl: commitDiffImagePreview.after,
-                                            fileLabel: commitDiffPath,
-                                          }
-                                        : null
-                                    }
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ) : !listsError && commitBrowseHash ? (
-                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden px-4 pt-3 pb-4">
-                            <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
-                              <button
-                                type="button"
-                                className="btn shrink-0 btn-xs btn-primary"
-                                onClick={clearCommitBrowse}
-                              >
-                                Back to commits
-                              </button>
-                              <div className="max-w-[min(100%,20rem)] min-w-0 flex-1 text-right">
-                                {commitBrowseMeta?.author.trim() ? (
-                                  <p className="m-0 text-[0.7rem] leading-snug font-medium text-base-content/90">
-                                    {commitBrowseMeta.author.trim()}
-                                  </p>
-                                ) : null}
-                                {commitBrowseMeta?.authorEmail.trim() ? (
-                                  <code className="mt-0.5 block font-mono text-[0.6rem] leading-snug wrap-break-word text-base-content/65">
-                                    {commitBrowseMeta.authorEmail.trim()}
-                                  </code>
-                                ) : null}
-                                {commitSignature.loading ? (
-                                  <p
-                                    className={`mb-0 text-[0.6rem] text-base-content/50 ${
-                                      commitBrowseMeta?.author.trim() ||
-                                      commitBrowseMeta?.authorEmail.trim()
-                                        ? "mt-1"
-                                        : "mt-0"
-                                    }`}
-                                  >
-                                    Signature: checking…
-                                  </p>
-                                ) : (
-                                  <p
-                                    className={`mb-0 text-[0.6rem] text-base-content/60 ${
-                                      commitBrowseMeta?.author.trim() ||
-                                      commitBrowseMeta?.authorEmail.trim()
-                                        ? "mt-1"
-                                        : "mt-0"
-                                    }`}
-                                  >
-                                    Signature:{" "}
-                                    {commitSignature.verified === true ? (
-                                      <span className="text-success">verified</span>
-                                    ) : commitSignature.verified === false ? (
-                                      <span className="text-base-content/70">not verified</span>
-                                    ) : (
-                                      <span className="text-base-content/50">unknown</span>
-                                    )}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                            <div className="shrink-0 border-b border-base-300 pb-1.5">
-                              <div className="min-w-0">
-                                <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                  <span>Files in commit</span>
-                                  {!commitBrowseLoading ? (
-                                    <span className="font-mono text-[0.65rem] font-normal tracking-normal text-base-content/45 normal-case tabular-nums">
-                                      ({commitBrowseFiles.length})
-                                    </span>
-                                  ) : null}
-                                </h2>
-                                <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
-                                  {commitBrowseMeta?.subject ?? commitBrowseHash.slice(0, 7)}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="flex min-h-0 flex-1 flex-col">
-                              {commitBrowseLoading ? (
-                                <div className="flex flex-col items-center justify-center gap-2 py-8">
-                                  <span className="loading loading-md loading-spinner text-primary" />
-                                  <p className="m-0 text-xs text-base-content/70">Loading files…</p>
-                                </div>
-                              ) : commitBrowseError ? (
-                                <DismissibleAlert
-                                  className="alert py-2 text-xs alert-error"
-                                  onDismiss={() => {
-                                    setCommitBrowseError(null);
-                                  }}
-                                >
-                                  <span className="wrap-break-word">{commitBrowseError}</span>
-                                </DismissibleAlert>
-                              ) : commitBrowseFiles.length === 0 ? (
-                                <p className="m-0 text-center text-xs text-base-content/60">
-                                  No files changed in this commit
-                                </p>
-                              ) : (
-                                <div
-                                  ref={commitBrowseFileListScrollRef}
-                                  className="m-0 min-h-0 flex-1 overflow-y-auto py-1 pr-0.5"
-                                >
-                                  <div
-                                    className="relative w-full"
-                                    style={{ height: commitBrowseFileVirtualizer.getTotalSize() }}
-                                  >
-                                    {commitBrowseFileVirtualizer
-                                      .getVirtualItems()
-                                      .map((virtualRow) => {
-                                        const entry = commitBrowseFiles[virtualRow.index];
-                                        if (!entry) return null;
-                                        return (
-                                          <div
-                                            key={virtualRow.key}
-                                            data-index={virtualRow.index}
-                                            ref={commitBrowseFileVirtualizer.measureElement}
-                                            className="absolute top-0 left-0 w-full pb-2"
-                                            style={{
-                                              transform: `translateY(${virtualRow.start}px)`,
-                                            }}
-                                          >
-                                            <button
-                                              type="button"
-                                              className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
-                                              onClick={() =>
-                                                void loadCommitFileDiff(
-                                                  entry.path,
-                                                  commitBrowseHash ?? "",
-                                                )
-                                              }
-                                              onContextMenu={(e) => {
-                                                if (!nativeContextMenusAvailable()) return;
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                openFileRowMenu(entry.path, e.clientX, e.clientY);
-                                              }}
-                                            >
-                                              <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
-                                                {entry.path}
-                                              </code>
-                                              <DiffLineStatBadge stat={entry.stats} />
-                                            </button>
-                                          </div>
-                                        );
-                                      })}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ) : (
-                          <CommitGraphSection
-                            commits={graphFilteredCommits}
-                            commitGraphLayout={commitGraphLayout!}
-                            localBranches={localBranches}
-                            remoteBranches={remoteBranches}
-                            tags={tags}
-                            graphBranchVisible={graphBranchVisible}
-                            currentBranchName={currentBranchName}
-                            currentBranchTipHash={currentBranchTipHash}
-                            commitBrowseHash={commitBrowseHash}
-                            branchBusy={branchBusy}
-                            stashBusy={stashBusy}
-                            commitsSectionTitle={commitsSectionTitle}
-                            emptyMessage={
-                              commits.length === 0
-                                ? "No commits to show"
-                                : "No commits match the current filters"
-                            }
-                            graphCommitsHasMore={graphCommitsHasMore}
-                            loadingMoreGraphCommits={loadingMoreGraphCommits}
-                            loadMoreGraphCommits={() => {
-                              void loadMoreGraphCommits();
+                        <div className="flex shrink-0 flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            onClick={() => {
+                              openClonedRepository();
                             }}
-                            onRowCommitSelect={(hash) => {
-                              void selectCommit(hash);
+                          >
+                            Open repository
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => {
+                              setCloneReadyPath(null);
                             }}
-                            openGraphBranchLocalMenu={openGraphBranchLocalMenu}
-                            openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
-                            openGraphStashMenu={openGraphStashMenu}
-                            openGraphCommitMenu={openGraphCommitMenu}
-                            openGraphTagMenu={openGraphTagMenu}
-                            pushBusy={pushBusy}
-                            graphAuthorFilter={graphAuthorFilter}
-                            onGraphAuthorFilterChange={setGraphAuthorFilter}
-                            graphDateFrom={graphDateFrom}
-                            graphDateTo={graphDateTo}
-                            onGraphDateFromChange={setGraphDateFrom}
-                            onGraphDateToChange={setGraphDateTo}
-                            graphFiltersActive={graphCommitFiltersActive}
-                            onClearGraphFilters={() => {
-                              setGraphAuthorFilter("");
-                              setGraphDateFrom("");
-                              setGraphDateTo("");
-                            }}
-                            onExportGraphCommits={() => {
-                              void exportFilteredCommitsList();
-                            }}
-                            exportGraphCommitsDisabled={graphExportCommits.length === 0}
-                            wipChangedFileCount={wipChangedFileCount}
-                          />
-                        )}
+                          >
+                            Dismiss
+                          </button>
+                        </div>
                       </div>
                     </div>
+                  ) : null}
+                  {repo ? (
+                    <>
+                      {repo.error ? (
+                        <div className="px-4 pt-4 pb-4">
+                          <DismissibleAlert
+                            role="status"
+                            className="alert text-sm alert-warning"
+                            onDismiss={() => {
+                              setRepo((r) => (r ? { ...r, error: null } : null));
+                            }}
+                          >
+                            <span>{repo.error}</span>
+                          </DismissibleAlert>
+                          <dl className="m-0 mt-4 flex flex-col gap-2.5">
+                            <MetaRow label="Path">{repo.path}</MetaRow>
+                          </dl>
+                        </div>
+                      ) : (
+                        <div className="flex min-h-0 flex-1 flex-col">
+                          {listsError || operationError ? (
+                            <div className="shrink-0 space-y-2 px-3 pt-3">
+                              {listsError ? (
+                                <DismissibleAlert
+                                  className="alert text-sm alert-error"
+                                  onDismiss={() => {
+                                    setListsError(null);
+                                  }}
+                                >
+                                  <span>{listsError}</span>
+                                </DismissibleAlert>
+                              ) : null}
+                              {operationError ? (
+                                <DismissibleAlert
+                                  className="alert text-sm alert-error"
+                                  onDismiss={() => {
+                                    setOperationError(null);
+                                  }}
+                                >
+                                  <span className="wrap-break-word whitespace-pre-wrap">
+                                    {operationError}
+                                  </span>
+                                </DismissibleAlert>
+                              ) : null}
+                            </div>
+                          ) : null}
+
+                          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                            {!listsError && selectedDiffPath ? (
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
+                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                                  <div className="min-w-0">
+                                    <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+                                      Diff
+                                    </h2>
+                                    <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
+                                      {selectedDiffPath}
+                                    </code>
+                                    {selectedDiffSide ? (
+                                      <p className="mt-1 mb-0 text-xs text-base-content/65">
+                                        {selectedDiffSide === "staged"
+                                          ? "Staged changes"
+                                          : "Unstaged changes"}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="btn shrink-0 btn-sm btn-primary"
+                                    onClick={clearDiffSelection}
+                                  >
+                                    Back to commits
+                                  </button>
+                                </div>
+                                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                                  {diffLoading ? (
+                                    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                      <span className="loading loading-md loading-spinner text-primary" />
+                                      <p className="m-0 text-sm text-base-content/70">
+                                        Loading diff…
+                                      </p>
+                                    </div>
+                                  ) : diffError ? (
+                                    <DismissibleAlert
+                                      className="alert text-sm alert-error"
+                                      onDismiss={() => {
+                                        setDiffError(null);
+                                      }}
+                                    >
+                                      <span className="wrap-break-word">{diffError}</span>
+                                    </DismissibleAlert>
+                                  ) : (
+                                    <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
+                                      {diffStagedText !== null ? (
+                                        <div className="mb-8 last:mb-0">
+                                          <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                            Staged
+                                          </div>
+                                          <UnifiedDiff
+                                            text={diffStagedText}
+                                            emptyLabel="(no staged diff)"
+                                            binaryImagePreview={
+                                              selectedDiffSide === "staged" &&
+                                              diffImagePreview &&
+                                              selectedDiffPath &&
+                                              pathLooksLikeRenderableImage(selectedDiffPath) &&
+                                              (diffImagePreview.before || diffImagePreview.after)
+                                                ? {
+                                                    beforeUrl: diffImagePreview.before,
+                                                    afterUrl: diffImagePreview.after,
+                                                    fileLabel: selectedDiffPath,
+                                                  }
+                                                : null
+                                            }
+                                          />
+                                        </div>
+                                      ) : null}
+                                      {diffUnstagedText !== null ? (
+                                        <div>
+                                          <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                            Unstaged
+                                          </div>
+                                          <UnifiedDiff
+                                            text={diffUnstagedText}
+                                            emptyLabel="(no unstaged diff)"
+                                            binaryImagePreview={
+                                              selectedDiffSide === "unstaged" &&
+                                              diffImagePreview &&
+                                              selectedDiffPath &&
+                                              pathLooksLikeRenderableImage(selectedDiffPath) &&
+                                              (diffImagePreview.before || diffImagePreview.after)
+                                                ? {
+                                                    beforeUrl: diffImagePreview.before,
+                                                    afterUrl: diffImagePreview.after,
+                                                    fileLabel: selectedDiffPath,
+                                                  }
+                                                : null
+                                            }
+                                          />
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ) : !listsError && fileBlamePath ? (
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
+                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                                  <div className="min-w-0">
+                                    <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                      Blame
+                                    </h2>
+                                    <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
+                                      {fileBlamePath}
+                                    </code>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="btn shrink-0 btn-sm btn-primary"
+                                    onClick={() => {
+                                      clearFileToolView();
+                                    }}
+                                  >
+                                    Back to commits
+                                  </button>
+                                </div>
+                                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                                  {fileBlameLoading ? (
+                                    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                      <span className="loading loading-md loading-spinner text-primary" />
+                                      <p className="m-0 text-sm text-base-content/70">
+                                        Loading blame…
+                                      </p>
+                                    </div>
+                                  ) : fileBlameError ? (
+                                    <DismissibleAlert
+                                      className="alert text-sm alert-error"
+                                      onDismiss={() => {
+                                        setFileBlameError(null);
+                                      }}
+                                    >
+                                      <span className="wrap-break-word">{fileBlameError}</span>
+                                    </DismissibleAlert>
+                                  ) : (
+                                    <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
+                                      {fileBlameText ?? ""}
+                                    </pre>
+                                  )}
+                                </div>
+                              </div>
+                            ) : !listsError && fileHistoryPath ? (
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
+                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+                                  <div className="min-w-0">
+                                    <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                      File history
+                                    </h2>
+                                    <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
+                                      {fileHistoryPath}
+                                    </code>
+                                    <p className="mt-1 mb-0 text-xs text-base-content/60">
+                                      Commits that touched this path (newest first). Click a row to
+                                      open the diff for that revision.
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="btn shrink-0 btn-sm btn-primary"
+                                    onClick={() => {
+                                      clearFileToolView();
+                                    }}
+                                  >
+                                    Back to commits
+                                  </button>
+                                </div>
+                                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                                  {fileHistoryLoading ? (
+                                    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                      <span className="loading loading-md loading-spinner text-primary" />
+                                      <p className="m-0 text-sm text-base-content/70">
+                                        Loading history…
+                                      </p>
+                                    </div>
+                                  ) : fileHistoryError ? (
+                                    <DismissibleAlert
+                                      className="alert text-sm alert-error"
+                                      onDismiss={() => {
+                                        setFileHistoryError(null);
+                                      }}
+                                    >
+                                      <span className="wrap-break-word">{fileHistoryError}</span>
+                                    </DismissibleAlert>
+                                  ) : fileHistoryCommits.length === 0 ? (
+                                    <p className="m-0 text-center text-sm text-base-content/60">
+                                      No commits found for this file
+                                    </p>
+                                  ) : (
+                                    <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1.5 overflow-y-auto pr-0.5">
+                                      {fileHistoryCommits.map((c) => (
+                                        <li key={c.hash}>
+                                          <button
+                                            type="button"
+                                            className="flex w-full flex-col gap-0.5 rounded-lg border border-base-300/50 bg-base-200/40 px-3 py-2 text-left transition-colors hover:border-base-300 hover:bg-base-300/35"
+                                            onClick={() => void onPickFileHistoryCommit(c.hash)}
+                                          >
+                                            <span className="font-mono text-[0.65rem] text-base-content/70">
+                                              {c.shortHash}
+                                            </span>
+                                            <span className="text-sm leading-snug text-base-content/95">
+                                              {c.subject}
+                                            </span>
+                                            <span className="text-[0.65rem] text-base-content/55">
+                                              {formatAuthorDisplay(c.author)} ·{" "}
+                                              {formatRelativeShort(c.date) ??
+                                                formatDate(c.date) ??
+                                                "—"}
+                                            </span>
+                                          </button>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              </div>
+                            ) : !listsError && commitDiffPath && commitBrowseHash ? (
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 px-4 pt-3 pb-4">
+                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-1.5">
+                                  <button
+                                    type="button"
+                                    className="btn shrink-0 btn-xs btn-primary"
+                                    onClick={backFromCommitFileDiff}
+                                  >
+                                    Back to files
+                                  </button>
+                                  <div className="min-w-0 flex-1 text-right">
+                                    <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                      Commit diff
+                                    </h2>
+                                    <code className="mt-0.5 block font-mono text-[0.65rem] leading-tight wrap-break-word text-base-content/85">
+                                      {commitDiffPath}
+                                    </code>
+                                    <p className="mt-0.5 mb-0 font-mono text-[0.6rem] text-base-content/50">
+                                      {commits.find((x) => x.hash === commitBrowseHash)
+                                        ?.shortHash ?? commitBrowseHash.slice(0, 7)}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                                  {commitDiffLoading ? (
+                                    <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
+                                      <span className="loading loading-md loading-spinner text-primary" />
+                                      <p className="m-0 text-xs text-base-content/70">
+                                        Loading diff…
+                                      </p>
+                                    </div>
+                                  ) : commitDiffError ? (
+                                    <DismissibleAlert
+                                      className="alert py-2 text-xs alert-error"
+                                      onDismiss={() => {
+                                        setCommitDiffError(null);
+                                      }}
+                                    >
+                                      <span className="wrap-break-word">{commitDiffError}</span>
+                                    </DismissibleAlert>
+                                  ) : (
+                                    <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
+                                      <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                        Patch
+                                      </div>
+                                      <UnifiedDiff
+                                        text={commitDiffText ?? ""}
+                                        emptyLabel="(no diff for this file)"
+                                        binaryImagePreview={
+                                          commitDiffImagePreview &&
+                                          commitDiffPath &&
+                                          pathLooksLikeRenderableImage(commitDiffPath) &&
+                                          (commitDiffImagePreview.before ||
+                                            commitDiffImagePreview.after)
+                                            ? {
+                                                beforeUrl: commitDiffImagePreview.before,
+                                                afterUrl: commitDiffImagePreview.after,
+                                                fileLabel: commitDiffPath,
+                                              }
+                                            : null
+                                        }
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ) : !listsError && commitBrowseHash ? (
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden px-4 pt-3 pb-4">
+                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
+                                  <button
+                                    type="button"
+                                    className="btn shrink-0 btn-xs btn-primary"
+                                    onClick={clearCommitBrowse}
+                                  >
+                                    Back to commits
+                                  </button>
+                                  <div className="max-w-[min(100%,20rem)] min-w-0 flex-1 text-right">
+                                    {commitBrowseMeta?.author.trim() ? (
+                                      <p className="m-0 text-[0.7rem] leading-snug font-medium text-base-content/90">
+                                        {commitBrowseMeta.author.trim()}
+                                      </p>
+                                    ) : null}
+                                    {commitBrowseMeta?.authorEmail.trim() ? (
+                                      <code className="mt-0.5 block font-mono text-[0.6rem] leading-snug wrap-break-word text-base-content/65">
+                                        {commitBrowseMeta.authorEmail.trim()}
+                                      </code>
+                                    ) : null}
+                                    {commitSignature.loading ? (
+                                      <p
+                                        className={`mb-0 text-[0.6rem] text-base-content/50 ${
+                                          commitBrowseMeta?.author.trim() ||
+                                          commitBrowseMeta?.authorEmail.trim()
+                                            ? "mt-1"
+                                            : "mt-0"
+                                        }`}
+                                      >
+                                        Signature: checking…
+                                      </p>
+                                    ) : (
+                                      <p
+                                        className={`mb-0 text-[0.6rem] text-base-content/60 ${
+                                          commitBrowseMeta?.author.trim() ||
+                                          commitBrowseMeta?.authorEmail.trim()
+                                            ? "mt-1"
+                                            : "mt-0"
+                                        }`}
+                                      >
+                                        Signature:{" "}
+                                        {commitSignature.verified === true ? (
+                                          <span className="text-success">verified</span>
+                                        ) : commitSignature.verified === false ? (
+                                          <span className="text-base-content/70">not verified</span>
+                                        ) : (
+                                          <span className="text-base-content/50">unknown</span>
+                                        )}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="shrink-0 border-b border-base-300 pb-1.5">
+                                  <div className="min-w-0">
+                                    <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                      <span>Files in commit</span>
+                                      {!commitBrowseLoading ? (
+                                        <span className="font-mono text-[0.65rem] font-normal tracking-normal text-base-content/45 normal-case tabular-nums">
+                                          ({commitBrowseFiles.length})
+                                        </span>
+                                      ) : null}
+                                    </h2>
+                                    <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
+                                      {commitBrowseMeta?.subject ?? commitBrowseHash.slice(0, 7)}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="flex min-h-0 flex-1 flex-col">
+                                  {commitBrowseLoading ? (
+                                    <div className="flex flex-col items-center justify-center gap-2 py-8">
+                                      <span className="loading loading-md loading-spinner text-primary" />
+                                      <p className="m-0 text-xs text-base-content/70">
+                                        Loading files…
+                                      </p>
+                                    </div>
+                                  ) : commitBrowseError ? (
+                                    <DismissibleAlert
+                                      className="alert py-2 text-xs alert-error"
+                                      onDismiss={() => {
+                                        setCommitBrowseError(null);
+                                      }}
+                                    >
+                                      <span className="wrap-break-word">{commitBrowseError}</span>
+                                    </DismissibleAlert>
+                                  ) : commitBrowseFiles.length === 0 ? (
+                                    <p className="m-0 text-center text-xs text-base-content/60">
+                                      No files changed in this commit
+                                    </p>
+                                  ) : (
+                                    <div
+                                      ref={commitBrowseFileListScrollRef}
+                                      className="m-0 min-h-0 flex-1 overflow-y-auto py-1 pr-0.5"
+                                    >
+                                      <div
+                                        className="relative w-full"
+                                        style={{
+                                          height: commitBrowseFileVirtualizer.getTotalSize(),
+                                        }}
+                                      >
+                                        {commitBrowseFileVirtualizer
+                                          .getVirtualItems()
+                                          .map((virtualRow) => {
+                                            const entry = commitBrowseFiles[virtualRow.index];
+                                            if (!entry) return null;
+                                            return (
+                                              <div
+                                                key={virtualRow.key}
+                                                data-index={virtualRow.index}
+                                                ref={commitBrowseFileVirtualizer.measureElement}
+                                                className="absolute top-0 left-0 w-full pb-2"
+                                                style={{
+                                                  transform: `translateY(${virtualRow.start}px)`,
+                                                }}
+                                              >
+                                                <button
+                                                  type="button"
+                                                  className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
+                                                  onClick={() =>
+                                                    void loadCommitFileDiff(
+                                                      entry.path,
+                                                      commitBrowseHash ?? "",
+                                                    )
+                                                  }
+                                                  onContextMenu={(e) => {
+                                                    if (!nativeContextMenusAvailable()) return;
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    openFileRowMenu(
+                                                      entry.path,
+                                                      e.clientX,
+                                                      e.clientY,
+                                                    );
+                                                  }}
+                                                >
+                                                  <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
+                                                    {entry.path}
+                                                  </code>
+                                                  <DiffLineStatBadge stat={entry.stats} />
+                                                </button>
+                                              </div>
+                                            );
+                                          })}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <CommitGraphSection
+                                commits={graphFilteredCommits}
+                                commitGraphLayout={commitGraphLayout!}
+                                localBranches={localBranches}
+                                remoteBranches={remoteBranches}
+                                tags={tags}
+                                graphBranchVisible={graphBranchVisible}
+                                currentBranchName={currentBranchName}
+                                currentBranchTipHash={currentBranchTipHash}
+                                commitBrowseHash={commitBrowseHash}
+                                branchBusy={branchBusy}
+                                stashBusy={stashBusy}
+                                commitsSectionTitle={commitsSectionTitle}
+                                emptyMessage={
+                                  commits.length === 0
+                                    ? "No commits to show"
+                                    : "No commits match the current filters"
+                                }
+                                graphCommitsHasMore={graphCommitsHasMore}
+                                loadingMoreGraphCommits={loadingMoreGraphCommits}
+                                loadMoreGraphCommits={() => {
+                                  void loadMoreGraphCommits();
+                                }}
+                                onRowCommitSelect={(hash) => {
+                                  void selectCommit(hash);
+                                }}
+                                openGraphBranchLocalMenu={openGraphBranchLocalMenu}
+                                openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
+                                openGraphStashMenu={openGraphStashMenu}
+                                openGraphCommitMenu={openGraphCommitMenu}
+                                openGraphTagMenu={openGraphTagMenu}
+                                pushBusy={pushBusy}
+                                graphAuthorFilter={graphAuthorFilter}
+                                onGraphAuthorFilterChange={setGraphAuthorFilter}
+                                graphDateFrom={graphDateFrom}
+                                graphDateTo={graphDateTo}
+                                onGraphDateFromChange={setGraphDateFrom}
+                                onGraphDateToChange={setGraphDateTo}
+                                graphFiltersActive={graphCommitFiltersActive}
+                                onClearGraphFilters={() => {
+                                  setGraphAuthorFilter("");
+                                  setGraphDateFrom("");
+                                  setGraphDateTo("");
+                                }}
+                                onExportGraphCommits={() => {
+                                  void exportFilteredCommitsList();
+                                }}
+                                exportGraphCommitsDisabled={graphExportCommits.length === 0}
+                                wipChangedFileCount={wipChangedFileCount}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : cloneReadyPath ? (
+                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 py-10">
+                      <p className="m-0 text-center text-[0.9375rem] font-medium text-base-content/90">
+                        Repository cloned
+                      </p>
+                      <code className="max-w-full truncate px-2 text-center font-mono text-sm text-base-content/80">
+                        {cloneReadyPath}
+                      </code>
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => {
+                            openClonedRepository();
+                          }}
+                        >
+                          Open repository
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => {
+                            setCloneReadyPath(null);
+                          }}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="m-0 flex min-h-0 flex-1 items-center justify-center text-center text-[0.9375rem] text-base-content/60">
+                      No repository open
+                    </p>
                   )}
                 </>
-              ) : (
-                <p className="m-0 flex min-h-0 flex-1 items-center justify-center text-center text-[0.9375rem] text-base-content/60">
-                  No repository open
-                </p>
               )}
             </div>
           </section>
