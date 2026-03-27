@@ -193,6 +193,70 @@ fn repo_name_from_path(path: &str) -> String {
         .unwrap_or_else(|| trimmed.to_string())
 }
 
+/// Default directory name `git clone <url>` uses when run with `current_dir` set to the parent folder.
+fn clone_dir_name_from_url(url: &str) -> String {
+    let mut s = url.trim();
+    if let Some(rest) = s.strip_prefix("git@") {
+        if let Some(idx) = rest.find(':') {
+            s = &rest[idx + 1..];
+        }
+    }
+    s = s.trim_end_matches(['/', '\\']);
+    if let Some(stripped) = s.strip_suffix(".git") {
+        s = stripped.trim_end_matches(['/', '\\']);
+    }
+    if let Some(idx) = s.rfind('/') {
+        s = &s[idx + 1..];
+    } else if let Some(idx) = s.rfind('\\') {
+        s = &s[idx + 1..];
+    }
+    let name = s.trim();
+    if name.is_empty() {
+        return "repo".to_string();
+    }
+    name.to_string()
+}
+
+/// Clone `remote_url` into a new subdirectory of `parent_path` (same default folder name as `git clone`).
+#[tauri::command]
+pub fn clone_repository(parent_path: String, remote_url: String) -> Result<String, String> {
+    let parent = PathBuf::from(parent_path.trim());
+    if !parent.is_dir() {
+        return Err("That folder does not exist.".to_string());
+    }
+    let url = remote_url.trim();
+    if url.is_empty() {
+        return Err("Remote URL is empty.".to_string());
+    }
+    let dir_name = clone_dir_name_from_url(url);
+    let dest = parent.join(&dir_name);
+    if dest.exists() {
+        return Err(format!(
+            "A folder named \"{dir_name}\" already exists in that location."
+        ));
+    }
+    let output = Command::new("git")
+        .current_dir(&parent)
+        .args(["clone", url])
+        .output()
+        .map_err(|e| format!("Could not run git: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "git clone failed.".to_string()
+        } else {
+            stderr
+        });
+    }
+    if !dest.is_dir() {
+        return Err(
+            "Clone finished but the expected folder was not created. Check the remote URL."
+                .to_string(),
+        );
+    }
+    Ok(dest.to_string_lossy().to_string())
+}
+
 fn parse_remotes(text: &str) -> Vec<RemoteEntry> {
     let mut seen: Vec<(String, String)> = Vec::new();
     for line in text.lines() {

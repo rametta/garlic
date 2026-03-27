@@ -89,6 +89,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             window_title::reset_main_window_title,
             git::get_repo_metadata,
+            git::clone_repository,
             git::list_local_branches,
             git::list_remote_branches,
             git::list_tags,
@@ -152,6 +153,13 @@ pub fn run() {
                 true,
                 Some("CmdOrCtrl+O"),
             )?;
+            let clone_repo = MenuItem::with_id(
+                app,
+                "clone_repo",
+                "Clone Repository…",
+                true,
+                None::<&str>,
+            )?;
 
             let mut recent_items: Vec<MenuItem<Wry>> = Vec::new();
             for i in 0..RECENT_MENU_SLOTS {
@@ -193,7 +201,8 @@ pub fn run() {
                 &[&configure_openai_key, &reveal_settings_file],
             )?;
 
-            let file_menu = Submenu::with_items(app, "File", true, &[&open_repo, &recent_submenu])?;
+            let file_menu =
+                Submenu::with_items(app, "File", true, &[&open_repo, &clone_repo, &recent_submenu])?;
 
             let edit_menu = Submenu::with_items(
                 app,
@@ -311,6 +320,13 @@ pub fn run() {
             }
             if menu_id_is(&event, "open_repo") {
                 let _ = app.emit("open-repo-request", ());
+                return;
+            }
+            if menu_id_is(&event, "clone_repo") {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = handle.emit("clone-repo-request", ());
+                });
                 return;
             }
             if menu_id_is(&event, "new_branch") {

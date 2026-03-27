@@ -1,5 +1,5 @@
 import { getTokenStyleObject } from "@shikijs/core";
-import { useMemo, type ReactNode } from "react";
+import { useMemo, type CSSProperties, type ReactNode } from "react";
 import {
   computeNewLineNumber,
   computeOldLineNumber,
@@ -15,6 +15,18 @@ import type { BundledLanguage, Highlighter } from "shiki";
 
 import { diffFileDisplayPath, pathToShikiLang } from "../diffLanguage";
 import { useDiffShikiTheme, useShikiHighlighter } from "../diffShiki";
+
+/** Shiki returns CSS kebab-case keys; React `style` expects camelCase. */
+function shikiTokenStyleToReact(style: Record<string, string>): CSSProperties {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(style)) {
+    const reactKey = key.includes("-")
+      ? key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
+      : key;
+    out[reactKey] = value;
+  }
+  return out as CSSProperties;
+}
 
 export type BinaryImagePreview = {
   beforeUrl: string | null;
@@ -190,7 +202,7 @@ function DiffGridRow({
       >
         {lineTokens
           ? lineTokens.map((tok, i) => (
-              <span key={i} style={getTokenStyleObject(tok)}>
+              <span key={i} style={shikiTokenStyleToReact(getTokenStyleObject(tok))}>
                 {tok.content}
               </span>
             ))

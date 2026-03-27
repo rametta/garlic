@@ -16,14 +16,14 @@ Design goal: **simple** over exhaustive—explicit actions for risky operations,
 
 ## Tech stack
 
-| Layer | Choices |
-| --- | --- |
-| **App shell** | [Tauri 2](https://v2.tauri.app/) — Rust backend (`src-tauri/`), native window, `invoke` commands for Git |
-| **UI** | [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) (`src/`) |
-| **Build** | [Vite](https://vite.dev/) |
-| **Styling** | [Tailwind CSS v4](https://tailwindcss.com/) (Vite plugin), [DaisyUI](https://daisyui.com/) |
-| **Package manager** | [Bun](https://bun.sh/) — `bun run …` for scripts |
-| **Lint / format** | [oxlint](https://oxc.rs/docs/guide/usage/linter.html), [oxfmt](https://oxc.rs/docs/guide/usage/formatter.html) |
+| Layer               | Choices                                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **App shell**       | [Tauri 2](https://v2.tauri.app/) — Rust backend (`src-tauri/`), native window, `invoke` commands for Git       |
+| **UI**              | [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) (`src/`)                           |
+| **Build**           | [Vite](https://vite.dev/)                                                                                      |
+| **Styling**         | [Tailwind CSS v4](https://tailwindcss.com/) (Vite plugin), [DaisyUI](https://daisyui.com/)                     |
+| **Package manager** | [Bun](https://bun.sh/) — `bun run …` for scripts                                                               |
+| **Lint / format**   | [oxlint](https://oxc.rs/docs/guide/usage/linter.html), [oxfmt](https://oxc.rs/docs/guide/usage/formatter.html) |
 
 Git work runs in the Rust layer (CLI `git` or Rust libraries), with results passed to the UI via typed Tauri commands.
 

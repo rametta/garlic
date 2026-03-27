@@ -1,4 +1,13 @@
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  type MouseEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { BranchSidebarSectionsState } from "./repoTypes";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -60,6 +69,21 @@ function remoteNameFromRemoteRef(fullRef: string): string | null {
   const i = fullRef.indexOf("/");
   if (i <= 0) return null;
   return fullRef.slice(0, i);
+}
+
+/** Close only when mousedown and mouseup both happen on the backdrop (not after text-selection drags). */
+function useDialogBackdropClose() {
+  const downOnBackdrop = useRef(false);
+  const onMouseDown = useCallback((e: MouseEvent<HTMLDialogElement>) => {
+    downOnBackdrop.current = e.target === e.currentTarget;
+  }, []);
+  const onMouseUp = useCallback((e: MouseEvent<HTMLDialogElement>) => {
+    if (e.target === e.currentTarget && downOnBackdrop.current) {
+      e.currentTarget.close();
+    }
+    downOnBackdrop.current = false;
+  }, []);
+  return { onMouseDown, onMouseUp };
 }
 
 interface RemoteEntry {
@@ -476,6 +500,9 @@ export default function App({
   const [fileBlameLoading, setFileBlameLoading] = useState(false);
   const [fileBlameError, setFileBlameError] = useState<string | null>(null);
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
+  const cloneRepoDialogRef = useRef<HTMLDialogElement>(null);
+  const cloneRepoUrlInputRef = useRef<HTMLInputElement>(null);
+  const [cloneRepoUrlDraft, setCloneRepoUrlDraft] = useState("https://github.com/");
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const editOriginUrlDialogRef = useRef<HTMLDialogElement>(null);
   const editOriginUrlInputRef = useRef<HTMLInputElement>(null);
@@ -1038,6 +1065,49 @@ export default function App({
     },
     [refreshLists, clearCommitBrowse],
   );
+
+  const openCloneRepoDialog = useCallback(() => {
+    setCloneRepoUrlDraft("https://github.com/");
+    setOperationError(null);
+    cloneRepoDialogRef.current?.showModal();
+    requestAnimationFrame(() => {
+      const el = cloneRepoUrlInputRef.current;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    });
+  }, []);
+
+  const submitCloneRepository = useCallback(async () => {
+    const trimmed = cloneRepoUrlDraft.trim();
+    if (!trimmed) return;
+    cloneRepoDialogRef.current?.close();
+    const parent = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose folder to clone into",
+    });
+    if (parent === null || Array.isArray(parent)) return;
+    setLoading(true);
+    setLoadError(null);
+    setOperationError(null);
+    try {
+      const clonedPath = await invoke<string>("clone_repository", {
+        parentPath: parent,
+        remoteUrl: trimmed,
+      });
+      await loadRepo(clonedPath);
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+      setLoading(false);
+    }
+  }, [cloneRepoUrlDraft, loadRepo]);
+
+  const cloneRepoDialogBackdropClose = useDialogBackdropClose();
+  const createBranchDialogBackdropClose = useDialogBackdropClose();
+  const createTagDialogBackdropClose = useDialogBackdropClose();
+  const editOriginUrlDialogBackdropClose = useDialogBackdropClose();
 
   const refreshAfterMutation = useCallback(
     async (options?: { fromFocus?: boolean }) => {
@@ -1642,6 +1712,9 @@ export default function App({
           await loadRepo(selected);
         })();
       }),
+      listen("clone-repo-request", () => {
+        openCloneRepoDialog();
+      }),
       listen<string>("open-recent-repo", (e) => {
         const path = e.payload.trim();
         if (path) void loadRepo(path);
@@ -1700,6 +1773,7 @@ export default function App({
     openCreateBranchDialog,
     openOpenAiSettingsDialog,
     refreshAfterMutation,
+    openCloneRepoDialog,
   ]);
 
   useEffect(() => {
@@ -2151,13 +2225,71 @@ export default function App({
           }`}
         >
           <dialog
+            ref={cloneRepoDialogRef}
+            className="modal"
+            onMouseDown={cloneRepoDialogBackdropClose.onMouseDown}
+            onMouseUp={cloneRepoDialogBackdropClose.onMouseUp}
+            onClose={() => {
+              setCloneRepoUrlDraft("https://github.com/");
+            }}
+          >
+            <div
+              className="modal-box"
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              <h3 className="m-0 text-lg font-bold">Clone repository</h3>
+              <p className="mt-1 mb-0 text-sm text-base-content/70">
+                Enter the remote URL, then choose a folder where the new repository directory should
+                be created.
+              </p>
+              <label className="form-control mt-4 block w-full">
+                <span className="label-text mb-1">Remote URL</span>
+                <input
+                  ref={cloneRepoUrlInputRef}
+                  type="text"
+                  inputMode="url"
+                  className="input-bordered input w-full font-mono text-sm"
+                  value={cloneRepoUrlDraft}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(e) => {
+                    setCloneRepoUrlDraft(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void submitCloneRepository();
+                    }
+                  }}
+                />
+              </label>
+              <div className="modal-action">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => cloneRepoDialogRef.current?.close()}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={!cloneRepoUrlDraft.trim()}
+                  onClick={() => void submitCloneRepository()}
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          </dialog>
+
+          <dialog
             ref={createBranchDialogRef}
             className="modal"
-            onClick={(e) => {
-              if (e.target === e.currentTarget) {
-                e.currentTarget.close();
-              }
-            }}
+            onMouseDown={createBranchDialogBackdropClose.onMouseDown}
+            onMouseUp={createBranchDialogBackdropClose.onMouseUp}
             onClose={() => {
               setNewBranchName("");
               setCreateBranchFieldError(null);
@@ -2248,11 +2380,8 @@ export default function App({
           <dialog
             ref={createTagDialogRef}
             className="modal"
-            onClick={(e) => {
-              if (e.target === e.currentTarget) {
-                e.currentTarget.close();
-              }
-            }}
+            onMouseDown={createTagDialogBackdropClose.onMouseDown}
+            onMouseUp={createTagDialogBackdropClose.onMouseUp}
             onClose={() => {
               setNewTagName("");
               setCreateTagMessage("");
@@ -2352,11 +2481,8 @@ export default function App({
           <dialog
             ref={editOriginUrlDialogRef}
             className="modal"
-            onClick={(e) => {
-              if (e.target === e.currentTarget) {
-                e.currentTarget.close();
-              }
-            }}
+            onMouseDown={editOriginUrlDialogBackdropClose.onMouseDown}
+            onMouseUp={editOriginUrlDialogBackdropClose.onMouseUp}
             onClose={() => {
               setEditOriginUrl("");
             }}

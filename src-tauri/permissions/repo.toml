@@ -4,6 +4,7 @@ description = "Allows reading Git metadata, branch lists, commit log, working tr
 commands.allow = [
   "reset_main_window_title",
   "get_repo_metadata",
+  "clone_repository",
   "list_local_branches",
   "list_remote_branches",
   "list_tags",
