@@ -249,16 +249,19 @@ fn clone_dir_name_from_url(url: &str) -> String {
     name.to_string()
 }
 
+/// Prefer the largest `NN%` on the line (some `remote:` lines include multiple percentages).
 fn parse_git_clone_progress_percent(line: &str) -> Option<u32> {
+    let mut best: Option<u32> = None;
     for token in line.split_whitespace() {
         let t = token.trim_end_matches([',', ';', ')', '.']);
         if let Some(num) = t.strip_suffix('%') {
             if let Ok(n) = num.parse::<u32>() {
-                return Some(n.min(100));
+                let n = n.min(100);
+                best = Some(best.map(|b| b.max(n)).unwrap_or(n));
             }
         }
     }
-    None
+    best
 }
 
 /// Clone `remote_url` into a new subdirectory of `parent_path` (same default folder name as `git clone`).

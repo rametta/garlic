@@ -4,6 +4,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -470,10 +471,16 @@ export default function App({
     message: string;
     percent: number | null;
   } | null>(null);
+  /** Lines shown in the fixed-height clone log (throttled updates). */
+  const [cloneLogLines, setCloneLogLines] = useState<string[]>([]);
   /** Matches `start_clone_repository` return value; filters `clone-progress` / `clone-complete`. */
   const pendingCloneSessionRef = useRef<number | null>(null);
   /** `clone-complete` can arrive before `invoke` resolves; flush after session id is known. */
   const cloneCompleteQueuedRef = useRef<CloneCompletePayload | null>(null);
+  const cloneLogLinesRef = useRef<string[]>([]);
+  const cloneProgressMaxPercentRef = useRef<number | null>(null);
+  const cloneProgressRafRef = useRef<number | null>(null);
+  const cloneLogScrollRef = useRef<HTMLDivElement | null>(null);
   const [localBranches, setLocalBranches] = useState<LocalBranchEntry[]>(
     () => startup.localBranches,
   );
@@ -1162,9 +1169,29 @@ export default function App({
     [refreshLists, clearCommitBrowse],
   );
 
+  /** Coalesce rapid `clone-progress` events to one React update per frame (avoids UI freeze). */
+  const scheduleCloneProgressUiFlush = useCallback(() => {
+    if (cloneProgressRafRef.current != null) return;
+    cloneProgressRafRef.current = requestAnimationFrame(() => {
+      cloneProgressRafRef.current = null;
+      const lines = cloneLogLinesRef.current;
+      const maxPct = cloneProgressMaxPercentRef.current;
+      const lastMsg = lines.length > 0 ? lines[lines.length - 1] : "";
+      setCloneProgress({ message: lastMsg, percent: maxPct });
+      setCloneLogLines(lines.slice());
+    });
+  }, []);
+
   const handleCloneCompletePayload = useCallback(
     (p: CloneCompletePayload) => {
+      if (cloneProgressRafRef.current != null) {
+        cancelAnimationFrame(cloneProgressRafRef.current);
+        cloneProgressRafRef.current = null;
+      }
+      cloneLogLinesRef.current = [];
+      cloneProgressMaxPercentRef.current = null;
       pendingCloneSessionRef.current = null;
+      setCloneLogLines([]);
       if (p.error) {
         setCloneProgress(null);
         setOperationError(p.error);
@@ -1183,6 +1210,12 @@ export default function App({
     },
     [loadRepo],
   );
+
+  useLayoutEffect(() => {
+    if (!cloneProgress || cloneLogLines.length === 0) return;
+    const el = cloneLogScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [cloneLogLines, cloneProgress]);
 
   const openCloneRepoDialog = useCallback(() => {
     setCloneRepoUrlDraft("https://github.com/");
@@ -1209,6 +1242,13 @@ export default function App({
     if (parent === null || Array.isArray(parent)) return;
     pendingCloneSessionRef.current = null;
     cloneCompleteQueuedRef.current = null;
+    if (cloneProgressRafRef.current != null) {
+      cancelAnimationFrame(cloneProgressRafRef.current);
+      cloneProgressRafRef.current = null;
+    }
+    cloneLogLinesRef.current = ["Starting clone…"];
+    cloneProgressMaxPercentRef.current = null;
+    setCloneLogLines(["Starting clone…"]);
     setCloneProgress({ message: "Starting clone…", percent: null });
     setLoading(true);
     setLoadError(null);
@@ -1227,6 +1267,13 @@ export default function App({
     } catch (e) {
       pendingCloneSessionRef.current = null;
       cloneCompleteQueuedRef.current = null;
+      if (cloneProgressRafRef.current != null) {
+        cancelAnimationFrame(cloneProgressRafRef.current);
+        cloneProgressRafRef.current = null;
+      }
+      cloneLogLinesRef.current = [];
+      cloneProgressMaxPercentRef.current = null;
+      setCloneLogLines([]);
       setCloneProgress(null);
       setOperationError(invokeErrorMessage(e));
       setLoading(false);
@@ -1902,11 +1949,22 @@ export default function App({
           return;
         }
         pendingCloneSessionRef.current = p.sessionId;
-        const pct =
+        const pctRaw =
           p.percent !== undefined && p.percent !== null && !Number.isNaN(p.percent)
             ? Math.min(100, Math.max(0, Math.round(p.percent)))
             : null;
-        setCloneProgress({ message: p.message, percent: pct });
+        if (pctRaw != null) {
+          cloneProgressMaxPercentRef.current = Math.max(
+            cloneProgressMaxPercentRef.current ?? 0,
+            pctRaw,
+          );
+        }
+        const lines = cloneLogLinesRef.current;
+        const last = lines.length > 0 ? lines[lines.length - 1] : "";
+        if (last !== p.message) {
+          cloneLogLinesRef.current = [...lines, p.message].slice(-200);
+        }
+        scheduleCloneProgressUiFlush();
       }),
       listen<CloneCompletePayload>("clone-complete", (e) => {
         const p = e.payload;
@@ -1948,6 +2006,7 @@ export default function App({
     refreshAfterMutation,
     handleCloneCompletePayload,
     openCloneRepoDialog,
+    scheduleCloneProgressUiFlush,
   ]);
 
   useEffect(() => {
@@ -2761,13 +2820,13 @@ export default function App({
           <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-md">
             <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
               {loading ? (
-                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 py-5">
+                <div className="flex min-h-0 flex-1 flex-col justify-start gap-4 px-6 py-6">
                   {cloneProgress ? (
                     <>
-                      <p className="m-0 text-center text-[0.9375rem] font-medium text-base-content/90">
-                        Cloning repository…
-                      </p>
-                      <div className="flex w-full max-w-md flex-col gap-2">
+                      <div className="mx-auto flex w-full max-w-lg shrink-0 flex-col gap-3">
+                        <p className="m-0 text-center text-[0.9375rem] font-medium text-base-content/90">
+                          Cloning repository…
+                        </p>
                         {cloneProgress.percent != null ? (
                           <progress
                             className="progress h-3 w-full progress-primary"
@@ -2784,18 +2843,24 @@ export default function App({
                             aria-busy="true"
                           />
                         )}
-                        <p className="m-0 font-mono text-xs leading-snug wrap-break-word text-base-content/90">
-                          {cloneProgress.message}
-                        </p>
+                      </div>
+                      <div
+                        ref={cloneLogScrollRef}
+                        className="mx-auto h-[min(14rem,40vh)] min-h-[6rem] w-full max-w-lg shrink-0 overflow-x-hidden overflow-y-auto rounded-lg border border-base-300 bg-base-200/40 px-3 py-2 font-mono text-[11px] leading-snug [overflow-wrap:anywhere] text-base-content/80 [scrollbar-gutter:stable]"
+                        aria-live="polite"
+                      >
+                        {cloneLogLines.map((line, i) => (
+                          <div key={i}>{line}</div>
+                        ))}
                       </div>
                     </>
                   ) : (
-                    <>
+                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
                       <span className="loading loading-md loading-spinner text-primary" />
                       <p className="m-0 text-center text-[0.9375rem] text-base-content/80">
                         Loading repository…
                       </p>
-                    </>
+                    </div>
                   )}
                 </div>
               ) : loadError ? (
