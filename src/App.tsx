@@ -352,6 +352,50 @@ function DiffLineStatBadge({ stat }: { stat: LineStat }) {
   );
 }
 
+function combineLineStats(a?: LineStat, b?: LineStat): LineStat | undefined {
+  if (!a) return b ? { ...b } : undefined;
+  if (!b) return { ...a };
+  if (a.isBinary || b.isBinary) {
+    return { additions: 0, deletions: 0, isBinary: true };
+  }
+  return {
+    additions: a.additions + b.additions,
+    deletions: a.deletions + b.deletions,
+    isBinary: false,
+  };
+}
+
+function applyOptimisticStageChange(
+  files: WorkingTreeFile[],
+  paths: readonly string[],
+  direction: "stage" | "unstage",
+): WorkingTreeFile[] {
+  const pathSet = new Set(paths);
+  return files.map((file) => {
+    if (!pathSet.has(file.path)) return file;
+    if (direction === "stage") {
+      return {
+        ...file,
+        staged: file.staged || file.unstaged,
+        unstaged: false,
+        stagedStats: file.unstaged
+          ? combineLineStats(file.stagedStats, file.unstagedStats)
+          : file.stagedStats,
+        unstagedStats: undefined,
+      };
+    }
+    return {
+      ...file,
+      staged: false,
+      unstaged: file.unstaged || file.staged,
+      stagedStats: undefined,
+      unstagedStats: file.staged
+        ? combineLineStats(file.unstagedStats, file.stagedStats)
+        : file.unstagedStats,
+    };
+  });
+}
+
 function StagePanelLineStats({
   variant,
   f,
@@ -591,6 +635,7 @@ export default function App({
     after: string | null;
   } | null>(null);
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
+  const [syncingStagePaths, setSyncingStagePaths] = useState<Set<string>>(() => new Set());
   const [pushBusy, setPushBusy] = useState(false);
   const [commitPushBusy, setCommitPushBusy] = useState(false);
   /** Skip local Git hooks (e.g. pre-push) for push actions. */
@@ -1195,14 +1240,6 @@ export default function App({
     },
     [repo, clearFileToolView, loadCommitFileDiff],
   );
-
-  const backFromCommitFileDiff = useCallback(() => {
-    setCommitDiffPath(null);
-    setCommitDiffText(null);
-    setCommitDiffError(null);
-    setCommitDiffLoading(false);
-    setCommitDiffImagePreview(null);
-  }, []);
 
   const clearDiffSelection = useCallback(() => {
     setSelectedDiffPath(null);
@@ -1934,7 +1971,7 @@ export default function App({
           source: "worktree",
           variant: source.variant,
           branchBusy: Boolean(branchBusy),
-          stageCommitBusy: Boolean(stageCommitBusy),
+          stageCommitBusy: Boolean(stageCommitBusy || commitPushBusy || syncingStagePaths.size > 0),
           discardLabel:
             source.variant === "unstaged" ? "Discard unstaged changes…" : "Discard staged changes…",
           onHistory: () => void openFileHistory(path),
@@ -1960,7 +1997,16 @@ export default function App({
         });
       }
     },
-    [branchBusy, stageCommitBusy, openFileHistory, openFileBlame, discardPathChanges, repo],
+    [
+      branchBusy,
+      stageCommitBusy,
+      commitPushBusy,
+      syncingStagePaths,
+      openFileHistory,
+      openFileBlame,
+      discardPathChanges,
+      repo,
+    ],
   );
 
   const onPickFileHistoryCommit = useCallback(
@@ -2440,29 +2486,73 @@ export default function App({
 
   async function onStagePaths(paths: string[]) {
     if (!repo?.path || repo.error || paths.length === 0) return;
-    setStageCommitBusy(true);
+    const nextPaths = [...new Set(paths)].filter((path) => !syncingStagePaths.has(path));
+    if (nextPaths.length === 0) return;
     setOperationError(null);
+    setSyncingStagePaths((prev) => {
+      const next = new Set(prev);
+      for (const path of nextPaths) next.add(path);
+      return next;
+    });
+    setWorkingTreeFiles((prev) => applyOptimisticStageChange(prev, nextPaths, "stage"));
+    if (
+      selectedDiffPath !== null &&
+      nextPaths.includes(selectedDiffPath) &&
+      selectedDiffSide === "unstaged"
+    ) {
+      setSelectedDiffSide("staged");
+      setDiffStagedText(null);
+      setDiffUnstagedText(null);
+      setDiffError(null);
+    }
     try {
-      await invoke("stage_paths", { path: repo.path, paths });
+      await invoke("stage_paths", { path: repo.path, paths: nextPaths });
       await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
+      await refreshAfterMutation();
     } finally {
-      setStageCommitBusy(false);
+      setSyncingStagePaths((prev) => {
+        const next = new Set(prev);
+        for (const path of nextPaths) next.delete(path);
+        return next;
+      });
     }
   }
 
   async function onUnstagePaths(paths: string[]) {
     if (!repo?.path || repo.error || paths.length === 0) return;
-    setStageCommitBusy(true);
+    const nextPaths = [...new Set(paths)].filter((path) => !syncingStagePaths.has(path));
+    if (nextPaths.length === 0) return;
     setOperationError(null);
+    setSyncingStagePaths((prev) => {
+      const next = new Set(prev);
+      for (const path of nextPaths) next.add(path);
+      return next;
+    });
+    setWorkingTreeFiles((prev) => applyOptimisticStageChange(prev, nextPaths, "unstage"));
+    if (
+      selectedDiffPath !== null &&
+      nextPaths.includes(selectedDiffPath) &&
+      selectedDiffSide === "staged"
+    ) {
+      setSelectedDiffSide("unstaged");
+      setDiffStagedText(null);
+      setDiffUnstagedText(null);
+      setDiffError(null);
+    }
     try {
-      await invoke("unstage_paths", { path: repo.path, paths });
+      await invoke("unstage_paths", { path: repo.path, paths: nextPaths });
       await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
+      await refreshAfterMutation();
     } finally {
-      setStageCommitBusy(false);
+      setSyncingStagePaths((prev) => {
+        const next = new Set(prev);
+        for (const path of nextPaths) next.delete(path);
+        return next;
+      });
     }
   }
 
@@ -2557,17 +2647,20 @@ export default function App({
     }
     return paths.size;
   }, [workingTreeFiles]);
+  const stageSyncBusy = syncingStagePaths.size > 0;
   const commitMsgTrimmed = commitMessage.trim();
   const canCommitAmend = amendLastCommit && (commitMsgTrimmed.length > 0 || hasStagedFiles);
   const canCommitNormal = !amendLastCommit && hasStagedFiles && commitMsgTrimmed.length > 0;
   const canCommit =
     Boolean(repo?.path && !repo.error && !loading) &&
     (canCommitAmend || canCommitNormal) &&
+    !stageSyncBusy &&
     !stageCommitBusy &&
     !commitPushBusy;
   const canPush =
     Boolean(repo?.path && !repo.error && !loading) &&
     !repo?.detached &&
+    !stageSyncBusy &&
     !stageCommitBusy &&
     !commitPushBusy &&
     !pushBusy;
@@ -2610,6 +2703,7 @@ export default function App({
     hasOpenAiApiKey &&
     Boolean(repo?.path && !repo.error && !loading) &&
     hasStagedFiles &&
+    !stageSyncBusy &&
     !stageCommitBusy &&
     !commitPushBusy &&
     !aiCommitBusy;
@@ -3734,7 +3828,7 @@ export default function App({
                     <button
                       type="button"
                       className="btn shrink-0 btn-outline btn-xs btn-success"
-                      disabled={stageCommitBusy}
+                      disabled={stageSyncBusy || stageCommitBusy || commitPushBusy}
                       onClick={() => void onStagePaths(unstagedPaths)}
                     >
                       Stage all
@@ -3758,7 +3852,7 @@ export default function App({
                           f={f}
                           variant="unstaged"
                           selected={selectedDiffPath === f.path && selectedDiffSide === "unstaged"}
-                          busy={stageCommitBusy}
+                          busy={stageCommitBusy || commitPushBusy || syncingStagePaths.has(f.path)}
                           onSelect={() => void loadDiffForFile(f, "unstaged")}
                           onStage={() => void onStagePaths([f.path])}
                           onUnstage={() => void onUnstagePaths([f.path])}
@@ -3791,7 +3885,7 @@ export default function App({
                     <button
                       type="button"
                       className="btn shrink-0 btn-outline btn-xs btn-error"
-                      disabled={stageCommitBusy || commitPushBusy}
+                      disabled={stageSyncBusy || stageCommitBusy || commitPushBusy}
                       onClick={() => void onUnstagePaths(stagedPaths)}
                     >
                       Unstage all
@@ -3815,7 +3909,7 @@ export default function App({
                           f={f}
                           variant="staged"
                           selected={selectedDiffPath === f.path && selectedDiffSide === "staged"}
-                          busy={stageCommitBusy}
+                          busy={stageCommitBusy || commitPushBusy || syncingStagePaths.has(f.path)}
                           onSelect={() => void loadDiffForFile(f, "staged")}
                           onStage={() => void onStagePaths([f.path])}
                           onUnstage={() => void onUnstagePaths([f.path])}
@@ -3887,7 +3981,9 @@ export default function App({
                         type="checkbox"
                         className="checkbox checkbox-sm"
                         checked={amendLastCommit}
-                        disabled={!canShowBranches || stageCommitBusy || commitPushBusy}
+                        disabled={
+                          !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy
+                        }
                         onChange={(e) => {
                           setAmendLastCommit(e.target.checked);
                         }}
@@ -3910,7 +4006,9 @@ export default function App({
                           : "Describe your changes…"
                       }
                       value={commitMessage}
-                      disabled={!canShowBranches || stageCommitBusy || commitPushBusy}
+                      disabled={
+                        !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy
+                      }
                       onChange={(e) => {
                         setCommitMessage(e.target.value);
                       }}
