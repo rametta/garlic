@@ -162,6 +162,30 @@ interface CommitSignatureResultPayload {
   verified: boolean | null;
 }
 
+/** Hook-heavy git subprocess (`run_git_streaming`): command line + live stdout/stderr. */
+interface GitCommandStreamStartedPayload {
+  sessionId: number;
+  repoPath: string;
+  operation: string;
+  commandLine: string;
+}
+
+interface GitCommandStreamLinePayload {
+  sessionId: number;
+  repoPath: string;
+  operation: string;
+  stream: string;
+  line: string;
+}
+
+interface GitCommandStreamFinishedPayload {
+  sessionId: number;
+  repoPath: string;
+  operation: string;
+  success: boolean;
+  error?: string | null;
+}
+
 /** Line counts from `git diff --numstat` / `--cached` (or file read for untracked). */
 export interface LineStat {
   additions: number;
@@ -500,6 +524,18 @@ export default function App({
   const cloneProgressMaxPercentRef = useRef<number | null>(null);
   const cloneProgressRafRef = useRef<number | null>(null);
   const cloneLogScrollRef = useRef<HTMLDivElement | null>(null);
+  /** Live output from `run_git_streaming` (commit, push, hooks, etc.). */
+  const [gitCommandStream, setGitCommandStream] = useState<{
+    sessionId: number;
+    operation: string;
+    commandLine: string;
+    lines: { stream: string; text: string }[];
+    finished: boolean;
+    success: boolean | null;
+    error: string | null;
+  } | null>(null);
+  const gitCommandStreamScrollRef = useRef<HTMLDivElement | null>(null);
+  const gitStreamSessionRef = useRef<number | null>(null);
   const [localBranches, setLocalBranches] = useState<LocalBranchEntry[]>(
     () => startup.localBranches,
   );
@@ -944,6 +980,14 @@ export default function App({
     [focusGraphOnCommitHash],
   );
 
+  const onTagSidebarClick = useCallback(
+    (t: TagEntry) => {
+      const h = t.tipHash?.trim();
+      if (h) focusGraphOnCommitHash(h);
+    },
+    [focusGraphOnCommitHash],
+  );
+
   useEffect(() => {
     if (!commitBrowseHash) return;
     if (!graphFilteredCommits.some((c) => c.hash === commitBrowseHash)) {
@@ -1284,6 +1328,30 @@ export default function App({
     const el = cloneLogScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [cloneLogLines, cloneProgress]);
+
+  useEffect(() => {
+    setGitCommandStream(null);
+    gitStreamSessionRef.current = null;
+  }, [repo?.path]);
+
+  useLayoutEffect(() => {
+    if (!gitCommandStream) return;
+    const el = gitCommandStreamScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [gitCommandStream?.lines, gitCommandStream?.finished, gitCommandStream?.sessionId]);
+
+  useEffect(() => {
+    if (!gitCommandStream?.finished || !gitCommandStream.success) return;
+    const sid = gitCommandStream.sessionId;
+    const id = window.setTimeout(() => {
+      setGitCommandStream((s) => {
+        if (s?.sessionId === sid && s.finished && s.success) return null;
+        return s;
+      });
+      gitStreamSessionRef.current = null;
+    }, 4500);
+    return () => window.clearTimeout(id);
+  }, [gitCommandStream?.finished, gitCommandStream?.success, gitCommandStream?.sessionId]);
 
   const openCloneRepoDialog = useCallback(() => {
     setCloneRepoUrlDraft("https://github.com/");
@@ -2083,6 +2151,44 @@ export default function App({
           return;
         }
         handleCloneCompletePayload(p);
+      }),
+      listen<GitCommandStreamStartedPayload>("git-command-stream-started", (e) => {
+        const p = e.payload;
+        if (activeRepoPathRef.current !== p.repoPath) return;
+        gitStreamSessionRef.current = p.sessionId;
+        setGitCommandStream({
+          sessionId: p.sessionId,
+          operation: p.operation,
+          commandLine: p.commandLine,
+          lines: [],
+          finished: false,
+          success: null,
+          error: null,
+        });
+      }),
+      listen<GitCommandStreamLinePayload>("git-command-stream-line", (e) => {
+        const p = e.payload;
+        if (activeRepoPathRef.current !== p.repoPath) return;
+        if (gitStreamSessionRef.current !== p.sessionId) return;
+        setGitCommandStream((prev) => {
+          if (!prev || prev.sessionId !== p.sessionId) return prev;
+          const next = [...prev.lines, { stream: p.stream, text: p.line }].slice(-400);
+          return { ...prev, lines: next };
+        });
+      }),
+      listen<GitCommandStreamFinishedPayload>("git-command-stream-finished", (e) => {
+        const p = e.payload;
+        if (activeRepoPathRef.current !== p.repoPath) return;
+        if (gitStreamSessionRef.current !== p.sessionId) return;
+        setGitCommandStream((prev) => {
+          if (!prev || prev.sessionId !== p.sessionId) return prev;
+          return {
+            ...prev,
+            finished: true,
+            success: p.success,
+            error: p.error ?? null,
+          };
+        });
       }),
     ]);
 
@@ -2917,6 +3023,7 @@ export default function App({
               void onCreateFromRemote(remoteRef);
             }}
             onStashClick={onStashSidebarClick}
+            onTagClick={onTagSidebarClick}
             runBranchSidebarContextMenu={runBranchSidebarContextMenu}
             openGraphStashMenu={openGraphStashMenu}
             openTagSidebarMenu={openTagSidebarMenu}
@@ -3961,6 +4068,66 @@ export default function App({
         ) : null,
         document.body,
       )}
+      {gitCommandStream ? (
+        <div
+          className="pointer-events-auto fixed right-4 bottom-4 z-[9998] w-[min(100%-2rem,22rem)] max-w-[calc(100vw-2rem)] rounded-lg border border-base-300 bg-base-100 p-3 shadow-xl"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="mb-2 flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="m-0 text-sm font-semibold text-base-content">
+                {gitCommandStream.operation}
+              </p>
+              <code
+                className="mt-1 block max-h-10 overflow-y-auto font-mono text-[10px] leading-tight [overflow-wrap:anywhere] text-base-content/70"
+                title={gitCommandStream.commandLine}
+              >
+                {gitCommandStream.commandLine}
+              </code>
+            </div>
+            <button
+              type="button"
+              className="btn shrink-0 btn-ghost btn-xs"
+              onClick={() => {
+                setGitCommandStream(null);
+                gitStreamSessionRef.current = null;
+              }}
+            >
+              Close
+            </button>
+          </div>
+          <div
+            ref={gitCommandStreamScrollRef}
+            className="max-h-[min(12rem,35vh)] min-h-[3rem] overflow-x-hidden overflow-y-auto rounded border border-base-300 bg-base-200/40 px-2 py-1.5 font-mono text-[11px] leading-snug [overflow-wrap:anywhere] [scrollbar-gutter:stable]"
+          >
+            {gitCommandStream.lines.length === 0 && !gitCommandStream.finished ? (
+              <span className="text-base-content/60">Running…</span>
+            ) : null}
+            {gitCommandStream.lines.map((line, i) => (
+              <div
+                key={i}
+                className={line.stream === "stderr" ? "text-warning" : "text-base-content/85"}
+              >
+                {line.text}
+              </div>
+            ))}
+            {gitCommandStream.finished ? (
+              <div
+                className={
+                  gitCommandStream.success
+                    ? "mt-1 border-t border-base-300 pt-1 text-success"
+                    : "mt-1 border-t border-base-300 pt-1 text-error"
+                }
+              >
+                {gitCommandStream.success
+                  ? "Finished."
+                  : gitCommandStream.error?.trim() || "Command failed."}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

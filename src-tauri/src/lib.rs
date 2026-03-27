@@ -425,7 +425,7 @@ pub fn run() {
                         if !confirmed {
                             return;
                         }
-                        match git::force_push_to_origin(path_for_push, false) {
+                        match git::force_push_to_origin(handle_confirm.clone(), path_for_push, false) {
                             Ok(()) => {
                                 let _ = handle_confirm.emit("repository-mutated", ());
                             }

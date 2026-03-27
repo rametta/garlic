@@ -1,11 +1,11 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
@@ -52,6 +52,175 @@ static CLONE_SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn next_clone_session_id() -> u64 {
     CLONE_SESSION_SEQ.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+static GIT_STREAM_SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn next_git_stream_session_id() -> u64 {
+    GIT_STREAM_SESSION_SEQ.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Emitted when a hook-heavy `git` invocation begins (`git-command-stream-started`).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommandStreamStartedEvent {
+    pub session_id: u64,
+    pub repo_path: String,
+    pub operation: String,
+    pub command_line: String,
+}
+
+/// One line from stdout or stderr (`git-command-stream-line`).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommandStreamLineEvent {
+    pub session_id: u64,
+    pub repo_path: String,
+    pub operation: String,
+    pub stream: String,
+    pub line: String,
+}
+
+/// Emitted after the child exits (`git-command-stream-finished`).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommandStreamFinishedEvent {
+    pub session_id: u64,
+    pub repo_path: String,
+    pub operation: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Runs `git` with piped stdout/stderr, streams lines to the webview, writes the audit log, and
+/// returns `Err` with stderr (or a generic message) on failure.
+fn run_git_streaming(
+    app: &AppHandle,
+    repo_path_str: &str,
+    workdir: &Path,
+    args: &[&str],
+    operation: &str,
+) -> Result<(), String> {
+    let session_id = next_git_stream_session_id();
+    let repo_owned = repo_path_str.to_string();
+    let op_owned = operation.to_string();
+    let command_line = format!("git {}", args.join(" "));
+    let _ = app.emit(
+        "git-command-stream-started",
+        GitCommandStreamStartedEvent {
+            session_id,
+            repo_path: repo_owned.clone(),
+            operation: op_owned.clone(),
+            command_line,
+        },
+    );
+
+    let mut cmd = git_cmd(workdir);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("Could not run git: {e}"))?;
+    let stdout = child.stdout.take().ok_or_else(|| "git: no stdout".to_string())?;
+    let stderr = child.stderr.take().ok_or_else(|| "git: no stderr".to_string())?;
+
+    let stderr_acc = Arc::new(Mutex::new(String::new()));
+
+    let app_out = app.clone();
+    let rp_out = repo_owned.clone();
+    let op_out = op_owned.clone();
+    let h_out = std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            let trimmed = line.trim_end().to_string();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let _ = app_out.emit(
+                "git-command-stream-line",
+                GitCommandStreamLineEvent {
+                    session_id,
+                    repo_path: rp_out.clone(),
+                    operation: op_out.clone(),
+                    stream: "stdout".into(),
+                    line: trimmed,
+                },
+            );
+        }
+    });
+
+    let app_err = app.clone();
+    let stderr_acc_clone = stderr_acc.clone();
+    let rp_err = repo_owned.clone();
+    let op_err = op_owned.clone();
+    let h_err = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            let trimmed = line.trim_end().to_string();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let _ = app_err.emit(
+                "git-command-stream-line",
+                GitCommandStreamLineEvent {
+                    session_id,
+                    repo_path: rp_err.clone(),
+                    operation: op_err.clone(),
+                    stream: "stderr".into(),
+                    line: trimmed.clone(),
+                },
+            );
+            if let Ok(mut g) = stderr_acc_clone.lock() {
+                if !g.is_empty() {
+                    g.push('\n');
+                }
+                g.push_str(&trimmed);
+            }
+        }
+    });
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("Could not wait for git: {e}"))?;
+    let _ = h_out.join();
+    let _ = h_err.join();
+
+    let ok = status.success();
+    let stderr_text = stderr_acc
+        .lock()
+        .ok()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    write_git_audit_line(workdir, args, ok, if ok { "" } else { &stderr_text });
+
+    let err_msg = if ok {
+        None
+    } else if stderr_text.is_empty() {
+        Some(format!("git {} failed", args.join(" ")))
+    } else {
+        Some(stderr_text.clone())
+    };
+
+    let _ = app.emit(
+        "git-command-stream-finished",
+        GitCommandStreamFinishedEvent {
+            session_id,
+            repo_path: repo_owned.clone(),
+            operation: op_owned.clone(),
+            success: ok,
+            error: err_msg.clone(),
+        },
+    );
+
+    if ok {
+        Ok(())
+    } else {
+        Err(err_msg.unwrap_or_else(|| format!("git {} failed", args.join(" "))))
+    }
 }
 
 /// Payload for [`start_clone_repository`] → `clone-progress` (stderr lines from `git clone --progress`).
@@ -1317,6 +1486,7 @@ pub fn set_remote_url(path: String, remote_name: String, url: String) -> Result<
 /// With `interactive`, runs `git rebase -i` using the user's configured sequence/core editor.
 #[tauri::command]
 pub fn rebase_current_branch_onto(
+    app: AppHandle,
     path: String,
     onto: String,
     interactive: bool,
@@ -1330,9 +1500,9 @@ pub fn rebase_current_branch_onto(
     let verify_spec = format!("{onto}^{{commit}}");
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
     if interactive {
-        git_output(&path_buf, &["rebase", "-i", onto])?;
+        run_git_streaming(&app, &path, &path_buf, &["rebase", "-i", onto], "rebase")?;
     } else {
-        git_output(&path_buf, &["rebase", onto])?;
+        run_git_streaming(&app, &path, &path_buf, &["rebase", onto], "rebase")?;
     }
     Ok(())
 }
@@ -1635,30 +1805,42 @@ pub fn discard_path_changes(
 }
 
 #[tauri::command]
-pub fn commit_staged(path: String, message: String) -> Result<(), String> {
+pub fn commit_staged(app: AppHandle, path: String, message: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let msg = message.trim();
     if msg.is_empty() {
         return Err("Commit message cannot be empty.".to_string());
     }
-    git_output(&path_buf, &["commit", "-m", msg])?;
+    run_git_streaming(&app, &path, &path_buf, &["commit", "-m", msg], "commit")?;
     Ok(())
 }
 
 /// Amend `HEAD` with staged changes. With a non-empty `message`, replaces the commit message (`git commit --amend -m`).
 /// With `None` or empty message, keeps the previous message (`git commit --amend --no-edit`).
 #[tauri::command]
-pub fn amend_last_commit(path: String, message: Option<String>) -> Result<(), String> {
+pub fn amend_last_commit(app: AppHandle, path: String, message: Option<String>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let trimmed = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
     match trimmed {
         Some(m) => {
-            git_output(&path_buf, &["commit", "--amend", "-m", m])?;
+            run_git_streaming(
+                &app,
+                &path,
+                &path_buf,
+                &["commit", "--amend", "-m", m],
+                "commit --amend",
+            )?;
         }
         None => {
-            git_output(&path_buf, &["commit", "--amend", "--no-edit"])?;
+            run_git_streaming(
+                &app,
+                &path,
+                &path_buf,
+                &["commit", "--amend", "--no-edit"],
+                "commit --amend",
+            )?;
         }
     }
     Ok(())
@@ -1666,7 +1848,7 @@ pub fn amend_last_commit(path: String, message: Option<String>) -> Result<(), St
 
 /// Merge `branch_or_ref` into the current branch (`git merge`).
 #[tauri::command]
-pub fn merge_branch(path: String, branch_or_ref: String) -> Result<(), String> {
+pub fn merge_branch(app: AppHandle, path: String, branch_or_ref: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let onto = branch_or_ref.trim();
@@ -1675,13 +1857,13 @@ pub fn merge_branch(path: String, branch_or_ref: String) -> Result<(), String> {
     }
     let verify_spec = format!("{onto}^{{commit}}");
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
-    git_output(&path_buf, &["merge", onto])?;
+    run_git_streaming(&app, &path, &path_buf, &["merge", onto], "merge")?;
     Ok(())
 }
 
 /// Cherry-pick a single commit onto the current branch.
 #[tauri::command]
-pub fn cherry_pick_commit(path: String, commit_hash: String) -> Result<(), String> {
+pub fn cherry_pick_commit(app: AppHandle, path: String, commit_hash: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let hash = commit_hash.trim();
@@ -1690,7 +1872,7 @@ pub fn cherry_pick_commit(path: String, commit_hash: String) -> Result<(), Strin
     }
     let verify_spec = format!("{hash}^{{commit}}");
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
-    git_output(&path_buf, &["cherry-pick", hash])?;
+    run_git_streaming(&app, &path, &path_buf, &["cherry-pick", hash], "cherry-pick")?;
     Ok(())
 }
 
@@ -2110,41 +2292,29 @@ pub fn list_stashes(path: String) -> Result<Vec<StashEntry>, String> {
 
 /// Stash tracked + untracked changes (`git stash push`).
 #[tauri::command]
-pub fn stash_push(path: String, message: Option<String>) -> Result<(), String> {
+pub fn stash_push(app: AppHandle, path: String, message: Option<String>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let mut cmd = git_cmd(&path_buf);
-    cmd.arg("stash").arg("push");
+    let mut args: Vec<String> = vec!["stash".into(), "push".into()];
     if let Some(m) = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        cmd.arg("-m").arg(m);
+        args.push("-m".into());
+        args.push(m.to_string());
     }
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Could not run git: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            "git stash push failed".to_string()
-        } else {
-            stderr.clone()
-        };
-        write_git_audit_line(&path_buf, &["stash", "push"], false, &msg);
-        return Err(msg);
-    }
-    write_git_audit_line(&path_buf, &["stash", "push"], true, "");
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_git_streaming(&app, &path, &path_buf, &args_ref, "stash push")?;
     Ok(())
 }
 
 /// Apply and remove a stash (`git stash pop stash@{n}`).
 #[tauri::command]
-pub fn stash_pop(path: String, stash_ref: String) -> Result<(), String> {
+pub fn stash_pop(app: AppHandle, path: String, stash_ref: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let s = stash_ref.trim();
     if !is_valid_stash_ref(s) {
         return Err("Invalid stash reference.".to_string());
     }
-    git_output(&path_buf, &["stash", "pop", s])?;
+    run_git_streaming(&app, &path, &path_buf, &["stash", "pop", s], "stash pop")?;
     Ok(())
 }
 
@@ -2165,7 +2335,7 @@ pub fn stash_drop(path: String, stash_ref: String) -> Result<(), String> {
 /// `git fetch` to fast-forward `refs/heads/<branch>` from its configured upstream, or from
 /// `origin` when no upstream is set (same convention as [`push_to_origin`]).
 #[tauri::command]
-pub fn pull_local_branch(path: String, branch: String) -> Result<(), String> {
+pub fn pull_local_branch(app: AppHandle, path: String, branch: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let name = branch.trim();
@@ -2179,23 +2349,34 @@ pub fn pull_local_branch(path: String, branch: String) -> Result<(), String> {
     let head = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let head = head.trim();
     if head == name {
-        git_output(&path_buf, &["pull"])?;
+        run_git_streaming(&app, &path, &path_buf, &["pull"], "pull")?;
         return Ok(());
     }
     if let Some(upstream) = branch_upstream_abbrev(&path_buf, name) {
         let Some((remote, remote_branch)) = upstream.split_once('/') else {
             return Err("Could not parse upstream ref.".to_string());
         };
-        git_output(
+        let refspec = format!("{remote_branch}:{name}");
+        run_git_streaming(
+            &app,
+            &path,
             &path_buf,
-            &["fetch", remote, &format!("{remote_branch}:{name}")],
+            &["fetch", remote, &refspec],
+            "fetch",
         )?;
         return Ok(());
     }
     git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
         "No upstream configured for this branch and no remote named \"origin\".".to_string()
     })?;
-    git_output(&path_buf, &["fetch", "origin", &format!("{name}:{name}")])?;
+    let refspec = format!("{name}:{name}");
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["fetch", "origin", &refspec],
+        "fetch",
+    )?;
     Ok(())
 }
 
@@ -2214,7 +2395,7 @@ pub fn current_branch_name(path: impl AsRef<Path>) -> Result<String, String> {
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).
 /// With `skip_hooks`, passes `--no-verify` so local pre-push hooks are skipped.
 #[tauri::command]
-pub fn push_to_origin(path: String, skip_hooks: bool) -> Result<(), String> {
+pub fn push_to_origin(app: AppHandle, path: String, skip_hooks: bool) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -2226,12 +2407,21 @@ pub fn push_to_origin(path: String, skip_hooks: bool) -> Result<(), String> {
             .to_string()
     })?;
     if skip_hooks {
-        git_output(
+        run_git_streaming(
+            &app,
+            &path,
             &path_buf,
             &["push", "--no-verify", "-u", "origin", "HEAD"],
+            "push",
         )?;
     } else {
-        git_output(&path_buf, &["push", "-u", "origin", "HEAD"])?;
+        run_git_streaming(
+            &app,
+            &path,
+            &path_buf,
+            &["push", "-u", "origin", "HEAD"],
+            "push",
+        )?;
     }
     Ok(())
 }
@@ -2239,7 +2429,7 @@ pub fn push_to_origin(path: String, skip_hooks: bool) -> Result<(), String> {
 /// Force-push the current branch to `origin` with lease (`git push --force-with-lease -u origin HEAD`).
 /// Refuses if `HEAD` is detached or `origin` is missing (same rules as [`push_to_origin`]).
 #[tauri::command]
-pub fn force_push_to_origin(path: String, skip_hooks: bool) -> Result<(), String> {
+pub fn force_push_to_origin(app: AppHandle, path: String, skip_hooks: bool) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -2251,7 +2441,9 @@ pub fn force_push_to_origin(path: String, skip_hooks: bool) -> Result<(), String
             .to_string()
     })?;
     if skip_hooks {
-        git_output(
+        run_git_streaming(
+            &app,
+            &path,
             &path_buf,
             &[
                 "push",
@@ -2261,11 +2453,15 @@ pub fn force_push_to_origin(path: String, skip_hooks: bool) -> Result<(), String
                 "origin",
                 "HEAD",
             ],
+            "push",
         )?;
     } else {
-        git_output(
+        run_git_streaming(
+            &app,
+            &path,
             &path_buf,
             &["push", "--force-with-lease", "-u", "origin", "HEAD"],
+            "push",
         )?;
     }
     Ok(())

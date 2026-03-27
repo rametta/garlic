@@ -543,6 +543,7 @@ export type BranchSidebarProps = {
   onSelectRemoteBranchTip: (fullRef: string) => void;
   onCreateFromRemote: (remoteRef: string) => void;
   onStashClick: (stash: StashEntry) => void;
+  onTagClick: (tag: TagEntry) => void;
   runBranchSidebarContextMenu: (
     target: { kind: "local"; branchName: string } | { kind: "remote"; fullRef: string },
     clientX: number,
@@ -571,6 +572,7 @@ export function BranchSidebar({
   onSelectRemoteBranchTip,
   onCreateFromRemote,
   onStashClick,
+  onTagClick,
   runBranchSidebarContextMenu,
   openGraphStashMenu,
   openTagSidebarMenu,
@@ -763,8 +765,21 @@ export function BranchSidebar({
                 return (
                   <li key={t.name} className="min-w-0">
                     <div
-                      className="flex w-full min-w-0 cursor-context-menu flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
+                      role="button"
+                      tabIndex={0}
+                      className="flex w-full min-w-0 cursor-pointer flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
                       title={`${t.name} → ${t.tipHash}`}
+                      onClick={() => {
+                        if (tagRowBusy) return;
+                        onTagClick(t);
+                      }}
+                      onKeyDown={(e) => {
+                        if (tagRowBusy) return;
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onTagClick(t);
+                        }
+                      }}
                       onContextMenu={(e) => {
                         if (tagRowBusy) return;
                         if (!nativeContextMenusAvailable()) return;
