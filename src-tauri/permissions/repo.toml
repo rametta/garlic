@@ -35,7 +35,7 @@ commands.allow = [
   "get_staged_diff_all",
   "get_unstaged_diff",
   "list_commit_files",
-  "get_commit_signature_status",
+  "start_commit_signature_check",
   "get_commit_file_diff",
   "get_commit_file_blob_pair",
   "get_staged_file_blob_pair",

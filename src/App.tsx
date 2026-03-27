@@ -123,8 +123,11 @@ interface GraphCommitsPage {
   hasMore: boolean;
 }
 
-/** From `get_commit_signature_status` (`git log -1 --format=%G?`). */
-interface CommitSignatureStatus {
+/** Emitted after `start_commit_signature_check` (Rust thread; does not block invoke). */
+interface CommitSignatureResultPayload {
+  path: string;
+  commitHash: string;
+  requestId: number;
   verified: boolean | null;
 }
 
@@ -442,6 +445,8 @@ export default function App({
   activeRepoPathRef.current = repo?.path ?? null;
   /** Latest `loadRepo` target; supersede in-flight loads when opening another path. */
   const pendingLoadRepoRef = useRef<string | null>(null);
+  /** Bumps when clearing browse or starting a new commit selection — drops stale `selectCommit` completions. */
+  const selectCommitSeqRef = useRef(0);
   const [loadError, setLoadError] = useState<string | null>(() => startup.loadError ?? null);
   /** Mutations (checkout, commit, refresh, …) while a repo is open — shown inline, not as a full-panel error. */
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -837,6 +842,7 @@ export default function App({
   }, []);
 
   const clearCommitBrowse = useCallback(() => {
+    selectCommitSeqRef.current += 1;
     setCommitBrowseHash(null);
     setCommitBrowseFiles([]);
     setCommitBrowseLoading(false);
@@ -965,6 +971,7 @@ export default function App({
     async (hash: string) => {
       if (!repo?.path || repo.error) return;
       const pathAtStart = repo.path;
+      const seq = ++selectCommitSeqRef.current;
       clearFileToolView();
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
@@ -980,32 +987,30 @@ export default function App({
       setCommitBrowseLoading(true);
       setCommitBrowseError(null);
       setCommitSignature({ loading: true, verified: null });
-      const [filesSettled, sigSettled] = await Promise.allSettled([
-        invoke<CommitFileEntry[]>("list_commit_files", {
+
+      try {
+        const files = await invoke<CommitFileEntry[]>("list_commit_files", {
           path: pathAtStart,
           commitHash: hash,
-        }),
-        invoke<CommitSignatureStatus>("get_commit_signature_status", {
-          path: pathAtStart,
-          commitHash: hash,
-        }),
-      ]);
-
-      if (activeRepoPathRef.current !== pathAtStart) return;
-
-      if (filesSettled.status === "fulfilled") {
-        setCommitBrowseFiles(filesSettled.value);
-      } else {
+        });
+        if (activeRepoPathRef.current !== pathAtStart || seq !== selectCommitSeqRef.current) return;
+        setCommitBrowseFiles(files);
+        setCommitBrowseError(null);
+      } catch (e) {
+        if (activeRepoPathRef.current !== pathAtStart || seq !== selectCommitSeqRef.current) return;
         setCommitBrowseFiles([]);
-        setCommitBrowseError(invokeErrorMessage(filesSettled.reason));
+        setCommitBrowseError(invokeErrorMessage(e));
+      } finally {
+        if (activeRepoPathRef.current === pathAtStart && seq === selectCommitSeqRef.current) {
+          setCommitBrowseLoading(false);
+        }
       }
 
-      let verified: boolean | null = null;
-      if (sigSettled.status === "fulfilled") {
-        verified = sigSettled.value.verified ?? null;
-      }
-      setCommitSignature({ loading: false, verified });
-      setCommitBrowseLoading(false);
+      void invoke("start_commit_signature_check", {
+        path: pathAtStart,
+        commitHash: hash,
+        requestId: seq,
+      }).catch(() => {});
     },
     [repo, clearFileToolView],
   );
@@ -1825,6 +1830,12 @@ export default function App({
             setTimeout(run, 0);
           }
         }, FOCUS_REFRESH_DEBOUNCE_MS);
+      }),
+      listen<CommitSignatureResultPayload>("commit-signature-result", (e) => {
+        const p = e.payload;
+        if (activeRepoPathRef.current !== p.path) return;
+        if (p.requestId !== selectCommitSeqRef.current) return;
+        setCommitSignature({ loading: false, verified: p.verified });
       }),
     ]);
 

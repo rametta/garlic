@@ -120,7 +120,7 @@ pub fn run() {
             git::get_staged_diff_all,
             git::get_unstaged_diff,
             git::list_commit_files,
-            git::get_commit_signature_status,
+            git::start_commit_signature_check,
             git::get_commit_file_diff,
             git::get_commit_file_blob_pair,
             git::get_staged_file_blob_pair,

@@ -6,6 +6,7 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::Duration;
 use tauri::AppHandle;
+use tauri::Emitter;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,11 +45,13 @@ pub struct GraphCommitsPage {
 /// `git log -n` cap per request. We fetch one extra row to know whether another page exists.
 const GRAPH_COMMITS_PAGE_SIZE: usize = 500;
 
-/// Result of `git log -1 --format=%G?` for one commit (on-demand; not used in bulk log).
-#[derive(Debug, Clone, Serialize)]
+/// Payload for [`start_commit_signature_check`] → `commit-signature-result` (webview listens).
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CommitSignatureStatus {
-    /// `Some(true)` when Git reports a good signature (`G`). `Some(false)` when Git answers and the commit is not good-signed (including `N` = no signature). `None` on timeout or failure.
+pub struct CommitSignatureResultEvent {
+    pub path: String,
+    pub commit_hash: String,
+    pub request_id: u32,
     pub verified: Option<bool>,
 }
 
@@ -1448,13 +1451,47 @@ pub fn list_commit_files(
         .collect())
 }
 
-/// Good-signature check for a single commit using Git's `%G?` trust letter. Runs in a thread with a timeout so gpg/key lookup cannot block the app indefinitely.
+/// Runs `git log -1 --format=%G?` in a helper thread with a short timeout (see below).
+fn commit_signature_verified_flag(workdir: &Path, hash: &str) -> Option<bool> {
+    let workdir = workdir.to_path_buf();
+    let hash_owned = hash.to_string();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(&workdir)
+            .args(["log", "-1", "--format=%G?", &hash_owned])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env_remove("GPG_TTY");
+        let _ = tx.send(cmd.output());
+    });
+
+    match rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(Ok(output)) => {
+            if !output.status.success() {
+                return None;
+            }
+            let flag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if flag.is_empty() {
+                return None;
+            }
+            let ch = flag.chars().next().unwrap_or(' ');
+            if ch == 'G' { Some(true) } else { Some(false) }
+        }
+        Ok(Err(_)) => None,
+        Err(mpsc::RecvTimeoutError::Disconnected) | Err(mpsc::RecvTimeoutError::Timeout) => None,
+    }
+}
+
+/// Starts signature verification in a **detached** thread and returns immediately. When finished,
+/// emits [`CommitSignatureResultEvent`] on `commit-signature-result`. Does not block the IPC handler.
 #[tauri::command]
-pub fn get_commit_signature_status(
+pub fn start_commit_signature_check(
+    app: AppHandle,
     path: String,
     commit_hash: String,
-) -> Result<CommitSignatureStatus, String> {
-    let path_buf = PathBuf::from(&path);
+    request_id: u32,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(path.trim());
     ensure_git_repo(&path_buf)?;
     let hash = commit_hash.trim();
     if hash.is_empty() {
@@ -1463,32 +1500,23 @@ pub fn get_commit_signature_status(
 
     let workdir = path_buf;
     let hash_owned = hash.to_string();
-    let (tx, rx) = mpsc::channel();
+    let path_owned = path.trim().to_string();
+    let app = app.clone();
+
     std::thread::spawn(move || {
-        let out = Command::new("git")
-            .current_dir(&workdir)
-            .args(["log", "-1", "--format=%G?", &hash_owned])
-            .output();
-        let _ = tx.send(out);
+        let verified = commit_signature_verified_flag(&workdir, &hash_owned);
+        let _ = app.emit(
+            "commit-signature-result",
+            CommitSignatureResultEvent {
+                path: path_owned,
+                commit_hash: hash_owned,
+                request_id,
+                verified,
+            },
+        );
     });
 
-    match rx.recv_timeout(Duration::from_secs(15)) {
-        Ok(Ok(output)) => {
-            if !output.status.success() {
-                return Ok(CommitSignatureStatus { verified: None });
-            }
-            let flag = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if flag.is_empty() {
-                return Ok(CommitSignatureStatus { verified: None });
-            }
-            let ch = flag.chars().next().unwrap_or(' ');
-            let verified = if ch == 'G' { Some(true) } else { Some(false) };
-            Ok(CommitSignatureStatus { verified })
-        }
-        Ok(Err(e)) => Err(format!("Could not run git: {e}")),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err("Signature check failed.".to_string()),
-        Err(mpsc::RecvTimeoutError::Timeout) => Ok(CommitSignatureStatus { verified: None }),
-    }
+    Ok(())
 }
 
 /// True when `rev` has at least two parents (merge commit, including stash WIPs).
