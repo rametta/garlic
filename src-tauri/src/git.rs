@@ -469,6 +469,26 @@ fn git_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(out)
 }
 
+fn git_output_raw(workdir: &Path, args: &[&str]) -> Result<String, String> {
+    let output = git_cmd(workdir)
+        .args(args)
+        .output()
+        .map_err(|e| format!("Could not run git: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("git {} failed", args.join(" "))
+        } else {
+            stderr.clone()
+        };
+        write_git_audit_line(workdir, args, false, &msg);
+        return Err(msg);
+    }
+    let out = String::from_utf8_lossy(&output.stdout).to_string();
+    write_git_audit_line(workdir, args, true, "");
+    Ok(out)
+}
+
 /// `git diff` / `git diff --no-index` use exit status 1 when there are differences (POSIX).
 fn git_diff_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
     let output = git_cmd(workdir)
@@ -1620,60 +1640,64 @@ fn parse_porcelain_xy(xy: &str) -> Option<(bool, bool, bool)> {
     Some((staged, unstaged, false))
 }
 
-/// Returns `(path_key, rename_from)` where `path_key` is the path used for diffs / git commands.
-fn parse_porcelain_path_rest(rest: &str) -> (String, Option<String>) {
-    let rest = rest.trim();
-    if let Some(pos) = rest.find(" -> ") {
-        let old = rest[..pos].trim();
-        let new = rest[pos + 4..].trim();
-        if !old.is_empty() && !new.is_empty() {
-            return (new.to_string(), Some(old.to_string()));
-        }
-    }
-    (rest.to_string(), None)
-}
-
-/// Combined working tree file list for the UI (staged / unstaged flags per path).
-/// Uses `git status --porcelain` so renames appear as a single row instead of delete + add.
-#[tauri::command]
-pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, String> {
-    let path_buf = PathBuf::from(&path);
-    ensure_git_repo(&path_buf)?;
-    let porcelain = git_output(&path_buf, &["status", "--porcelain=v1"])?;
-    let mut map: HashMap<String, WtAcc> = HashMap::new();
-    for line in porcelain.lines() {
-        let line = line.trim_end();
-        if line.len() < 3 {
+fn parse_porcelain_v1_z(out: &str) -> Vec<WtAcc> {
+    let mut entries = Vec::new();
+    let mut fields = out.split('\0').filter(|field| !field.is_empty());
+    while let Some(entry) = fields.next() {
+        if entry.len() < 4 {
             continue;
         }
-        let xy = &line[0..2];
-        if line.chars().nth(2) != Some(' ') {
+        let xy = &entry[0..2];
+        if entry.as_bytes().get(2) != Some(&b' ') {
             continue;
         }
         let Some((staged, unstaged, untracked)) = parse_porcelain_xy(xy) else {
             continue;
         };
-        let rest = line[3..].trim();
-        let (path_key, rename_from) = parse_porcelain_path_rest(rest);
-        if path_key.is_empty() {
+        let path = entry[3..].to_string();
+        if path.is_empty() {
             continue;
         }
+        let rename_from = if xy.contains('R') || xy.contains('C') {
+            fields.next().filter(|field| !field.is_empty()).map(str::to_string)
+        } else {
+            None
+        };
+        entries.push(WtAcc {
+            path,
+            rename_from,
+            staged,
+            unstaged,
+            untracked,
+        });
+    }
+    entries
+}
+
+/// Combined working tree file list for the UI (staged / unstaged flags per path).
+/// Uses `git status --porcelain -z --untracked-files=all` so renames appear as a single row
+/// and untracked files inside untracked directories are listed as full paths.
+#[tauri::command]
+pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let porcelain = git_output_raw(
+        &path_buf,
+        &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+    )?;
+    let mut map: HashMap<String, WtAcc> = HashMap::new();
+    for acc in parse_porcelain_v1_z(&porcelain) {
+        let path_key = acc.path.clone();
         map.entry(path_key.clone())
             .and_modify(|e| {
-                e.staged |= staged;
-                e.unstaged |= unstaged;
-                e.untracked |= untracked;
-                if rename_from.is_some() {
-                    e.rename_from = rename_from.clone();
+                e.staged |= acc.staged;
+                e.unstaged |= acc.unstaged;
+                e.untracked |= acc.untracked;
+                if acc.rename_from.is_some() {
+                    e.rename_from = acc.rename_from.clone();
                 }
             })
-            .or_insert_with(|| WtAcc {
-                path: path_key,
-                rename_from,
-                staged,
-                unstaged,
-                untracked,
-            });
+            .or_insert(acc);
     }
 
     let (staged_map, unstaged_map) = std::thread::scope(|s| {
@@ -2529,4 +2553,33 @@ pub fn push_tag_to_origin(path: String, tag: String) -> Result<(), String> {
     git_output(&path_buf, &["rev-parse", "--verify", &tag_ref])?;
     git_output(&path_buf, &["push", "origin", tag])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_porcelain_v1_z, parse_porcelain_xy};
+
+    #[test]
+    fn porcelain_xy_marks_untracked_as_unstaged() {
+        assert_eq!(parse_porcelain_xy("??"), Some((false, true, true)));
+    }
+
+    #[test]
+    fn porcelain_v1_z_preserves_paths_with_spaces() {
+        let entries = parse_porcelain_v1_z(" M a b.txt\0");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "a b.txt");
+        assert!(entries[0].unstaged);
+        assert!(!entries[0].staged);
+        assert_eq!(entries[0].rename_from, None);
+    }
+
+    #[test]
+    fn porcelain_v1_z_parses_rename_pairs() {
+        let entries = parse_porcelain_v1_z("R  new name.txt\0old name.txt\0");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "new name.txt");
+        assert_eq!(entries[0].rename_from.as_deref(), Some("old name.txt"));
+        assert!(entries[0].staged);
+    }
 }
