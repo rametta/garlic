@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -172,6 +172,11 @@ pub struct RepoMetadata {
 
 static GIT_AUDIT_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
+/// Rotate before the log exceeds this size (append of one line can push slightly over until next write).
+const GIT_AUDIT_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+/// After rotation, keep this many bytes from the end of the file (recent entries only).
+const GIT_AUDIT_LOG_KEEP_TAIL_BYTES: u64 = 2 * 1024 * 1024;
+
 /// Set once from Tauri setup (app config dir). When set, every `git` invocation is appended as a line.
 pub fn set_git_audit_log_path(p: Option<PathBuf>) {
     if let Ok(mut g) = GIT_AUDIT_LOG_PATH.lock() {
@@ -211,6 +216,38 @@ fn git_cmd(workdir: &Path) -> Command {
     c
 }
 
+/// Drops older log lines from the start of the file so size stays bounded. Uses seek+read on the
+/// tail only so an accidentally huge file is not read fully into memory.
+fn trim_audit_log_if_needed(path: &Path, incoming_len: usize) -> std::io::Result<()> {
+    let len = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(_) => return Ok(()),
+    };
+    if len + incoming_len as u64 <= GIT_AUDIT_LOG_MAX_BYTES {
+        return Ok(());
+    }
+    let mut f = std::fs::File::open(path)?;
+    if len <= GIT_AUDIT_LOG_KEEP_TAIL_BYTES {
+        return Ok(());
+    }
+    let start = len.saturating_sub(GIT_AUDIT_LOG_KEEP_TAIL_BYTES);
+    f.seek(SeekFrom::Start(start))?;
+    let mut tail = Vec::new();
+    f.read_to_end(&mut tail)?;
+    if let Some(i) = tail.iter().position(|&b| b == b'\n') {
+        tail.drain(..=i);
+    }
+    let header = format!(
+        "# --- audit log truncated at {} (kept last ~{} MiB) ---\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        GIT_AUDIT_LOG_KEEP_TAIL_BYTES / (1024 * 1024)
+    );
+    let mut out = header.into_bytes();
+    out.extend_from_slice(&tail);
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
 fn write_git_audit_line(cwd: &Path, args: &[&str], ok: bool, err: &str) {
     let path = match GIT_AUDIT_LOG_PATH.lock().ok().and_then(|g| g.clone()) {
         Some(p) => p,
@@ -225,11 +262,22 @@ fn write_git_audit_line(cwd: &Path, args: &[&str], ok: bool, err: &str) {
         status,
         err.replace('\n', " ")
     );
+    let line_bytes = line.as_bytes();
+    if let Err(e) = trim_audit_log_if_needed(&path, line_bytes.len()) {
+        let _ = std::fs::write(
+            &path,
+            format!(
+                "# --- audit log reset (rotation failed: {e}) ---\n{}",
+                line
+            ),
+        );
+        return;
+    }
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
-        .and_then(|mut f| f.write_all(line.as_bytes()));
+        .and_then(|mut f| f.write_all(line_bytes));
 }
 
 fn git_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
