@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Garlic",
   "version": "0.1.0",
-  "identifier": "com.garlic.app",
+  "identifier": "com.garlic.desktop",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -14,8 +14,9 @@
       {
         "label": "main",
         "title": "Garlic",
-        "width": 1024,
-        "height": 680
+        "maximized": true,
+        "width": 1440,
+        "height": 900
       }
     ],
     "security": {

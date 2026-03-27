@@ -1683,9 +1683,14 @@ export default function App({
         clearTimeout(focusRefreshDebounceRef.current);
         focusRefreshDebounceRef.current = null;
       }
-      void promise.then((listeners) => {
-        for (const u of listeners) {
-          u();
+      void promise.then((unlisteners) => {
+        for (const unlisten of unlisteners) {
+          try {
+            const p = (unlisten as () => Promise<void>)();
+            void p.catch(() => {});
+          } catch {
+            /* stale registry after HMR / reload */
+          }
         }
       });
     };
