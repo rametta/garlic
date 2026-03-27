@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -335,47 +335,83 @@ fn run_git_clone_with_progress(
         .spawn()
         .map_err(|e| format!("Could not run git: {e}"))?;
 
-    let stderr = child.stderr.take().ok_or_else(|| "git clone: no stderr pipe.".to_string())?;
-    let reader = BufReader::new(stderr);
+    let mut stderr = child.stderr.take().ok_or_else(|| "git clone: no stderr pipe.".to_string())?;
     let mut stderr_acc = String::new();
 
-    // Git prints progress with `\r` on one line; split so the UI can show separate lines.
+    // `BufRead::lines()` waits for `\n`; git progress uses `\r` without newlines for long stretches,
+    // which blocked the reader and froze the UI. Split on `\r` and `\n` as data arrives.
+    fn next_delimiter(buf: &[u8]) -> Option<usize> {
+        let n = buf.iter().position(|&b| b == b'\n');
+        let r = buf.iter().position(|&b| b == b'\r');
+        match (n, r) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+
     // Throttle to ~20 emits/s so large clones do not flood the IPC thread.
     const EMIT_MIN_INTERVAL: Duration = Duration::from_millis(50);
     let mut last_emit = Instant::now() - Duration::from_secs(1);
     let mut latest_msg = String::new();
     let mut latest_percent: Option<u32> = None;
 
-    for line in reader.lines() {
-        let line = line.map_err(|e| format!("Could not read git clone output: {e}"))?;
-        for segment in line.split('\r') {
-            let trimmed = segment.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            stderr_acc.push_str(trimmed);
-            stderr_acc.push('\n');
-            let p = parse_git_clone_progress_percent(trimmed);
-            latest_msg = trimmed.to_string();
-            latest_percent = match (latest_percent, p) {
-                (Some(a), Some(b)) => Some(a.max(b)),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            };
+    let mut process_segment = |trimmed: &str| {
+        if trimmed.is_empty() {
+            return;
+        }
+        stderr_acc.push_str(trimmed);
+        stderr_acc.push('\n');
+        let p = parse_git_clone_progress_percent(trimmed);
+        latest_msg = trimmed.to_string();
+        latest_percent = match (latest_percent, p) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
 
-            let now = Instant::now();
-            if now.duration_since(last_emit) >= EMIT_MIN_INTERVAL && !latest_msg.is_empty() {
-                let _ = app.emit(
-                    "clone-progress",
-                    CloneProgressEvent {
-                        session_id,
-                        message: latest_msg.clone(),
-                        percent: latest_percent,
-                    },
-                );
-                last_emit = now;
+        let now = Instant::now();
+        if now.duration_since(last_emit) >= EMIT_MIN_INTERVAL && !latest_msg.is_empty() {
+            let _ = app.emit(
+                "clone-progress",
+                CloneProgressEvent {
+                    session_id,
+                    message: latest_msg.clone(),
+                    percent: latest_percent,
+                },
+            );
+            last_emit = now;
+        }
+    };
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut read_chunk = [0u8; 16384];
+    loop {
+        let n = stderr
+            .read(&mut read_chunk)
+            .map_err(|e| format!("Could not read git clone output: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&read_chunk[..n]);
+        while let Some(pos) = next_delimiter(&buf) {
+            let piece = buf[..pos].to_vec();
+            buf.drain(..pos + 1);
+            let s = String::from_utf8_lossy(&piece);
+            for segment in s.split('\r') {
+                let trimmed = segment.trim();
+                process_segment(trimmed);
             }
+        }
+    }
+
+    if !buf.is_empty() {
+        let s = String::from_utf8_lossy(&buf);
+        for segment in s.split('\r') {
+            let trimmed = segment.trim();
+            process_segment(trimmed);
         }
     }
 
