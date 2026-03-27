@@ -1,5 +1,4 @@
-# Build Garlic for macOS (Apple Silicon + Intel), Windows, and Linux, then attach
-# bundles to a GitHub Release.
+# Build Garlic for macOS (Apple Silicon + Intel), then attach bundles to a GitHub Release.
 #
 # How to release (recommended):
 #   1. Bump the version in package.json, src-tauri/tauri.conf.json, and src-tauri/Cargo.toml
@@ -17,11 +16,12 @@
 # macOS signing + notarization (see https://v2.tauri.app/distribute/sign/macos/ ):
 #   APPLE_CERTIFICATE              base64 .p12 (openssl base64 -A -in cert.p12 -out -)
 #   APPLE_CERTIFICATE_PASSWORD     .p12 export password
-#   KEYCHAIN_PASSWORD              random string (ephemeral CI keychain)
-#   APPLE_SIGNING_IDENTITY         full "Developer ID Application: … (TEAMID)" string
+#   (Tauri imports the .p12 and passes codesign --keychain; do not rely on manual security import.)
 #   APPLE_API_ISSUER               App Store Connect API issuer ID
 #   APPLE_API_KEY                  API Key ID (short id from the key row, not the .p8 contents)
 #   APP_STORE_CONNECT_PRIVATE_KEY  full contents of the downloaded .p8 private key
+#
+# Caches: Bun download cache (bun.lock) + Rust deps/target (src-tauri/Cargo.lock) via rust-cache.
 
 name: Release
 
@@ -48,10 +48,6 @@ jobs:
             args: "--target aarch64-apple-darwin"
           - platform: macos-latest
             args: "--target x86_64-apple-darwin"
-          - platform: ubuntu-22.04
-            args: ""
-          - platform: windows-latest
-            args: ""
 
     steps:
       - uses: actions/checkout@v6
@@ -99,48 +95,25 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Install system dependencies (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Cache Rust (Cargo registry, git deps, target/)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cache Bun package downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Import Apple Developer certificate (macOS)
-        if: matrix.platform == 'macos-latest'
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_SIGNING_IDENTITY_OVERRIDE: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
-          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
-          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security set-keychain-settings -t 3600 -u build.keychain
-          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
-          security find-identity -v -p codesigning build.keychain
-          if [[ -n "${APPLE_SIGNING_IDENTITY_OVERRIDE}" ]]; then
-            echo "APPLE_SIGNING_IDENTITY=${APPLE_SIGNING_IDENTITY_OVERRIDE}" >> "$GITHUB_ENV"
-          else
-            CERT_ID=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
-            if [[ -z "${CERT_ID}" ]]; then
-              echo "No Developer ID Application identity found after import."
-              exit 1
-            fi
-            echo "APPLE_SIGNING_IDENTITY=${CERT_ID}" >> "$GITHUB_ENV"
-          fi
-          rm -f certificate.p12
-
-      - name: Write App Store Connect API key (macOS)
-        if: matrix.platform == 'macos-latest'
+      - name: Write App Store Connect API key
         env:
           APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
         run: |
@@ -154,7 +127,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
