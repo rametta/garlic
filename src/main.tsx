@@ -6,6 +6,7 @@ import type { BranchSidebarSectionsState } from "./repoTypes";
 import "./index.css";
 import { DEFAULT_OPENAI_MODEL } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
+import { ToastProvider } from "./toastContext";
 
 export interface AppBootstrap {
   repo: RestoreLastRepo;
@@ -51,13 +52,15 @@ async function bootstrap() {
 
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-      <App
-        startup={data.repo}
-        themePreference={data.theme ?? "light"}
-        openaiApiKey={data.openaiApiKey ?? null}
-        openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}
-        branchSidebarSections={data.branchSidebarSections}
-      />
+      <ToastProvider>
+        <App
+          startup={data.repo}
+          themePreference={data.theme ?? "light"}
+          openaiApiKey={data.openaiApiKey ?? null}
+          openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}
+          branchSidebarSections={data.branchSidebarSections}
+        />
+      </ToastProvider>
     </React.StrictMode>,
   );
 }

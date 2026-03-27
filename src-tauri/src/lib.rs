@@ -1,6 +1,7 @@
 mod active_repo;
 mod git;
 mod open_in_cursor;
+mod repo_watch;
 mod settings;
 mod window_title;
 
@@ -9,7 +10,6 @@ use tauri::menu::{
 };
 use tauri::Emitter;
 use tauri::Manager;
-use tauri::WindowEvent;
 use tauri::Wry;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -142,9 +142,15 @@ pub fn run() {
             settings::set_openai_settings,
             write_export_text_file,
             open_in_cursor::open_in_cursor,
+            repo_watch::start_repo_watch,
         ])
         .setup(|app| {
             app.manage(active_repo::ActiveRepoPath::default());
+            app.manage(repo_watch::RepoWatchState::default());
+            if let Ok(dir) = app.path().app_config_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                git::set_git_audit_log_path(Some(dir.join("git-audit.log")));
+            }
 
             let open_repo = MenuItem::with_id(
                 app,
@@ -419,7 +425,7 @@ pub fn run() {
                         if !confirmed {
                             return;
                         }
-                        match git::force_push_to_origin(path_for_push) {
+                        match git::force_push_to_origin(path_for_push, false) {
                             Ok(()) => {
                                 let _ = handle_confirm.emit("repository-mutated", ());
                             }
@@ -453,11 +459,6 @@ pub fn run() {
                 }
             }
             let _ = app.emit("theme-changed", serde_json::json!({ "theme": theme }));
-        })
-        .on_window_event(|window, event| {
-            if let WindowEvent::Focused(true) = event {
-                let _ = window.app_handle().emit("window-focused", ());
-            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

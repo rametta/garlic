@@ -45,6 +45,7 @@ import type {
 } from "./repoTypes";
 import { DEFAULT_OPENAI_MODEL, generateCommitTitleFromStagedDiff } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
+import { useToast } from "./toastContext";
 import {
   buildGraphExportDefaultFilename,
   filterGraphCommits,
@@ -63,7 +64,6 @@ export type {
 } from "./repoTypes";
 
 /** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
-const FOCUS_REFRESH_DEBOUNCE_MS = 350;
 
 /** Initial row height for virtualized “files in commit” list (`measureElement` refines). */
 const COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX = 44;
@@ -198,6 +198,7 @@ function blobPairToPreviewUrls(
 /** One path in the working tree from `list_working_tree_files` / bootstrap. */
 export interface WorkingTreeFile {
   path: string;
+  renameFrom?: string | null;
   staged: boolean;
   unstaged: boolean;
   stagedStats?: LineStat;
@@ -400,7 +401,7 @@ const StagePanelFileRow = memo(function StagePanelFileRow({
     >
       <div className="flex min-h-7 items-center gap-2">
         <code className="min-w-0 flex-1 font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
-          {f.path}
+          {f.renameFrom ? `${f.renameFrom} → ${f.path}` : f.path}
         </code>
         <StagePanelLineStats variant={variant} f={f} />
         <div className="flex shrink-0 items-center gap-0.5">
@@ -556,6 +557,10 @@ export default function App({
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [commitPushBusy, setCommitPushBusy] = useState(false);
+  /** Skip local Git hooks (e.g. pre-push) for push actions. */
+  const [pushSkipHooks, setPushSkipHooks] = useState(false);
+  const [graphFocusHash, setGraphFocusHash] = useState<string | null>(null);
+  const [graphScrollNonce, setGraphScrollNonce] = useState(0);
   const [amendLastCommit, setAmendLastCommit] = useState(false);
   const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null);
   const [fileHistoryCommits, setFileHistoryCommits] = useState<CommitEntry[]>([]);
@@ -591,6 +596,7 @@ export default function App({
   const [openaiSettingsOpen, setOpenaiSettingsOpen] = useState(false);
   const [openaiSettingsBusy, setOpenaiSettingsBusy] = useState(false);
   const [aiCommitBusy, setAiCommitBusy] = useState(false);
+  const toast = useToast();
 
   const closeOpenAiSettingsDialog = useCallback(() => {
     setOpenaiSettingsOpen(false);
@@ -651,7 +657,6 @@ export default function App({
   const [editOriginUrl, setEditOriginUrl] = useState("");
   /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
   const lastFullBranchListRefreshAtRef = useRef(0);
-  const focusRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [newBranchName, setNewBranchName] = useState("");
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
   /** When set, the create-branch dialog starts the branch at this commit instead of HEAD. */
@@ -904,6 +909,41 @@ export default function App({
     clearFileToolView();
   }, [clearFileToolView]);
 
+  const focusGraphOnCommitHash = useCallback(
+    (hash: string) => {
+      clearCommitBrowse();
+      setGraphFocusHash(hash);
+      setGraphScrollNonce((n) => n + 1);
+    },
+    [clearCommitBrowse],
+  );
+
+  const onSelectLocalBranchTip = useCallback(
+    (name: string) => {
+      const b = localBranches.find((x) => x.name === name);
+      if (!b) return;
+      focusGraphOnCommitHash(b.tipHash);
+    },
+    [localBranches, focusGraphOnCommitHash],
+  );
+
+  const onSelectRemoteBranchTip = useCallback(
+    (fullRef: string) => {
+      const r = remoteBranches.find((x) => x.name === fullRef);
+      if (!r) return;
+      focusGraphOnCommitHash(r.tipHash);
+    },
+    [remoteBranches, focusGraphOnCommitHash],
+  );
+
+  const onStashSidebarClick = useCallback(
+    (s: StashEntry) => {
+      const h = s.commitHash?.trim();
+      if (h) focusGraphOnCommitHash(h);
+    },
+    [focusGraphOnCommitHash],
+  );
+
   useEffect(() => {
     if (!commitBrowseHash) return;
     if (!graphFilteredCommits.some((c) => c.hash === commitBrowseHash)) {
@@ -1015,54 +1055,6 @@ export default function App({
     [repo, clearCommitBrowse],
   );
 
-  const selectCommit = useCallback(
-    async (hash: string) => {
-      if (!repo?.path || repo.error) return;
-      const pathAtStart = repo.path;
-      const seq = ++selectCommitSeqRef.current;
-      clearFileToolView();
-      setSelectedDiffPath(null);
-      setSelectedDiffSide(null);
-      setDiffStagedText(null);
-      setDiffUnstagedText(null);
-      setDiffError(null);
-      setCommitBrowseHash(hash);
-      setCommitBrowseFiles([]);
-      setCommitDiffPath(null);
-      setCommitDiffText(null);
-      setCommitDiffError(null);
-      setCommitDiffImagePreview(null);
-      setCommitBrowseLoading(true);
-      setCommitBrowseError(null);
-      setCommitSignature({ loading: true, verified: null });
-
-      try {
-        const files = await invoke<CommitFileEntry[]>("list_commit_files", {
-          path: pathAtStart,
-          commitHash: hash,
-        });
-        if (activeRepoPathRef.current !== pathAtStart || seq !== selectCommitSeqRef.current) return;
-        setCommitBrowseFiles(files);
-        setCommitBrowseError(null);
-      } catch (e) {
-        if (activeRepoPathRef.current !== pathAtStart || seq !== selectCommitSeqRef.current) return;
-        setCommitBrowseFiles([]);
-        setCommitBrowseError(invokeErrorMessage(e));
-      } finally {
-        if (activeRepoPathRef.current === pathAtStart && seq === selectCommitSeqRef.current) {
-          setCommitBrowseLoading(false);
-        }
-      }
-
-      void invoke("start_commit_signature_check", {
-        path: pathAtStart,
-        commitHash: hash,
-        requestId: seq,
-      }).catch(() => {});
-    },
-    [repo, clearFileToolView],
-  );
-
   const loadCommitFileDiff = useCallback(
     async (filePath: string, commitHash: string) => {
       if (!repo?.path || repo.error || !commitHash.trim()) return;
@@ -1106,6 +1098,58 @@ export default function App({
       }
     },
     [repo],
+  );
+
+  const selectCommit = useCallback(
+    async (hash: string) => {
+      if (!repo?.path || repo.error) return;
+      const pathAtStart = repo.path;
+      const seq = ++selectCommitSeqRef.current;
+      setGraphFocusHash(null);
+      clearFileToolView();
+      setSelectedDiffPath(null);
+      setSelectedDiffSide(null);
+      setDiffStagedText(null);
+      setDiffUnstagedText(null);
+      setDiffError(null);
+      setCommitBrowseHash(hash);
+      setCommitBrowseFiles([]);
+      setCommitDiffPath(null);
+      setCommitDiffText(null);
+      setCommitDiffError(null);
+      setCommitDiffImagePreview(null);
+      setCommitBrowseLoading(true);
+      setCommitBrowseError(null);
+      setCommitSignature({ loading: true, verified: null });
+
+      try {
+        const files = await invoke<CommitFileEntry[]>("list_commit_files", {
+          path: pathAtStart,
+          commitHash: hash,
+        });
+        if (activeRepoPathRef.current !== pathAtStart || seq !== selectCommitSeqRef.current) return;
+        setCommitBrowseFiles(files);
+        setCommitBrowseError(null);
+        if (files.length > 0) {
+          void loadCommitFileDiff(files[0].path, hash);
+        }
+      } catch (e) {
+        if (activeRepoPathRef.current !== pathAtStart || seq !== selectCommitSeqRef.current) return;
+        setCommitBrowseFiles([]);
+        setCommitBrowseError(invokeErrorMessage(e));
+      } finally {
+        if (activeRepoPathRef.current === pathAtStart && seq === selectCommitSeqRef.current) {
+          setCommitBrowseLoading(false);
+        }
+      }
+
+      void invoke("start_commit_signature_check", {
+        path: pathAtStart,
+        commitHash: hash,
+        requestId: seq,
+      }).catch(() => {});
+    },
+    [repo, clearFileToolView, loadCommitFileDiff],
   );
 
   const backFromCommitFileDiff = useCallback(() => {
@@ -1156,6 +1200,7 @@ export default function App({
           if (pendingLoadRepoRef.current !== target) return;
           await refreshLists(target);
           if (pendingLoadRepoRef.current !== target) return;
+          void invoke("start_repo_watch", { path: target }).catch(() => {});
           lastFullBranchListRefreshAtRef.current = Date.now();
         } else {
           setLocalBranches([]);
@@ -1489,13 +1534,14 @@ export default function App({
           branch: branchName,
         });
         await refreshAfterMutation();
+        toast("Pull completed.", "success");
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, refreshAfterMutation, toast],
   );
 
   const deleteLocalBranch = useCallback(
@@ -1582,13 +1628,14 @@ export default function App({
           interactive,
         });
         await refreshAfterMutation();
+        toast("Rebase completed.", "success");
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, refreshAfterMutation, toast],
   );
 
   const mergeBranchIntoCurrent = useCallback(
@@ -1607,13 +1654,14 @@ export default function App({
           branchOrRef: onto,
         });
         await refreshAfterMutation();
+        toast("Merge completed.", "success");
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, refreshAfterMutation, toast],
   );
 
   const runBranchSidebarContextMenu = useCallback(
@@ -1629,6 +1677,10 @@ export default function App({
         currentBranchName: repo?.detached ? null : (repo?.branch ?? null),
         repoDetached: Boolean(repo?.detached),
         branchBusy: Boolean(branchBusy),
+        onCheckout:
+          spec.kind === "local"
+            ? () => void onCheckoutLocal(spec.branchName)
+            : () => void onCreateFromRemote(spec.fullRef),
         onPull: () => void pullLocalBranch(spec.kind === "local" ? spec.branchName : ""),
         onMerge: () =>
           void mergeBranchIntoCurrent(spec.kind === "local" ? spec.branchName : spec.fullRef),
@@ -1667,6 +1719,8 @@ export default function App({
       deleteLocalBranch,
       deleteRemoteBranch,
       openEditOriginUrlDialog,
+      onCheckoutLocal,
+      onCreateFromRemote,
     ],
   );
 
@@ -1694,6 +1748,34 @@ export default function App({
       }
     },
     [repo, commits, refreshAfterMutation],
+  );
+
+  const rebaseCurrentBranchOntoCommit = useCallback(
+    async (hash: string) => {
+      if (!repo?.path || repo.error || repo.detached) return;
+      const short = commits.find((c) => c.hash === hash)?.shortHash ?? hash.slice(0, 7);
+      const ok = await ask(
+        `Rebase the current branch onto ${short}? Your commits will be replayed on top of this commit.`,
+        { title: "Garlic", kind: "warning" },
+      );
+      if (!ok) return;
+      setBranchBusy("rebase");
+      setOperationError(null);
+      try {
+        await invoke("rebase_current_branch_onto", {
+          path: repo.path,
+          onto: hash,
+          interactive: false,
+        });
+        await refreshAfterMutation();
+        toast("Rebase completed.", "success");
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, commits, refreshAfterMutation, toast],
   );
 
   const discardPathChanges = useCallback(
@@ -1845,8 +1927,13 @@ export default function App({
         branchBusy: Boolean(branchBusy),
         cherryPickDisabled:
           Boolean(branchBusy) || Boolean(repo?.detached) || Boolean(entry?.stashRef),
+        rebaseOntoDisabled:
+          Boolean(branchBusy) ||
+          Boolean(repo?.detached) ||
+          Boolean(repo?.headHash && repo.headHash === hash),
         onBrowse: () => void selectCommit(hash),
         onCherryPick: () => void cherryPickCommit(hash),
+        onRebaseCurrentOnto: () => void rebaseCurrentBranchOntoCommit(hash),
         onCreateBranch: () => {
           setCreateBranchStartCommit(hash);
           setNewBranchName("");
@@ -1872,7 +1959,7 @@ export default function App({
         onCopyShort: () => void navigator.clipboard.writeText(shortHash),
       });
     },
-    [branchBusy, repo, commits, selectCommit, cherryPickCommit],
+    [branchBusy, repo, commits, selectCommit, cherryPickCommit, rebaseCurrentBranchOntoCommit],
   );
 
   const runPushTagToOrigin = useCallback(
@@ -1942,22 +2029,6 @@ export default function App({
       listen("repository-mutated", () => {
         void refreshAfterMutation();
       }),
-      listen("window-focused", () => {
-        if (focusRefreshDebounceRef.current !== null) {
-          clearTimeout(focusRefreshDebounceRef.current);
-        }
-        focusRefreshDebounceRef.current = setTimeout(() => {
-          focusRefreshDebounceRef.current = null;
-          const run = () => {
-            void refreshAfterMutation({ fromFocus: true });
-          };
-          if (typeof requestIdleCallback !== "undefined") {
-            requestIdleCallback(run, { timeout: 600 });
-          } else {
-            setTimeout(run, 0);
-          }
-        }, FOCUS_REFRESH_DEBOUNCE_MS);
-      }),
       listen<CommitSignatureResultPayload>("commit-signature-result", (e) => {
         const p = e.payload;
         if (activeRepoPathRef.current !== p.path) return;
@@ -2016,10 +2087,6 @@ export default function App({
     ]);
 
     return () => {
-      if (focusRefreshDebounceRef.current !== null) {
-        clearTimeout(focusRefreshDebounceRef.current);
-        focusRefreshDebounceRef.current = null;
-      }
       void promise.then((unlisteners) => {
         for (const unlisten of unlisteners) {
           try {
@@ -2325,8 +2392,12 @@ export default function App({
     setPushBusy(true);
     setOperationError(null);
     try {
-      await invoke("push_to_origin", { path: repo.path });
+      await invoke("push_to_origin", {
+        path: repo.path,
+        skipHooks: pushSkipHooks,
+      });
       await refreshAfterMutation();
+      toast("Push completed.", "success");
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -2344,8 +2415,12 @@ export default function App({
     try {
       await invoke("commit_staged", { path: repo.path, message: msg });
       setCommitMessage("");
-      await invoke("push_to_origin", { path: repo.path });
+      await invoke("push_to_origin", {
+        path: repo.path,
+        skipHooks: pushSkipHooks,
+      });
       await refreshAfterMutation();
+      toast("Commit and push completed.", "success");
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
       void refreshAfterMutation();
@@ -2833,12 +2908,15 @@ export default function App({
             currentBranchName={currentBranchName}
             branchSidebarSections={branchSidebarSections}
             onBranchSidebarSectionsChange={persistBranchSidebarSections}
+            onSelectLocalBranchTip={onSelectLocalBranchTip}
             onCheckoutLocal={(name) => {
               void onCheckoutLocal(name);
             }}
+            onSelectRemoteBranchTip={onSelectRemoteBranchTip}
             onCreateFromRemote={(remoteRef) => {
               void onCreateFromRemote(remoteRef);
             }}
+            onStashClick={onStashSidebarClick}
             runBranchSidebarContextMenu={runBranchSidebarContextMenu}
             openGraphStashMenu={openGraphStashMenu}
             openTagSidebarMenu={openTagSidebarMenu}
@@ -3206,72 +3284,6 @@ export default function App({
                                   )}
                                 </div>
                               </div>
-                            ) : !listsError && commitDiffPath && commitBrowseHash ? (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 px-4 pt-3 pb-4">
-                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-1.5">
-                                  <button
-                                    type="button"
-                                    className="btn shrink-0 btn-xs btn-primary"
-                                    onClick={backFromCommitFileDiff}
-                                  >
-                                    Back to files
-                                  </button>
-                                  <div className="min-w-0 flex-1 text-right">
-                                    <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                      Commit diff
-                                    </h2>
-                                    <code className="mt-0.5 block font-mono text-[0.65rem] leading-tight wrap-break-word text-base-content/85">
-                                      {commitDiffPath}
-                                    </code>
-                                    <p className="mt-0.5 mb-0 font-mono text-[0.6rem] text-base-content/50">
-                                      {commits.find((x) => x.hash === commitBrowseHash)
-                                        ?.shortHash ?? commitBrowseHash.slice(0, 7)}
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                                  {commitDiffLoading ? (
-                                    <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
-                                      <span className="loading loading-md loading-spinner text-primary" />
-                                      <p className="m-0 text-xs text-base-content/70">
-                                        Loading diff…
-                                      </p>
-                                    </div>
-                                  ) : commitDiffError ? (
-                                    <DismissibleAlert
-                                      className="alert py-2 text-xs alert-error"
-                                      onDismiss={() => {
-                                        setCommitDiffError(null);
-                                      }}
-                                    >
-                                      <span className="wrap-break-word">{commitDiffError}</span>
-                                    </DismissibleAlert>
-                                  ) : (
-                                    <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
-                                      <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
-                                        Patch
-                                      </div>
-                                      <UnifiedDiff
-                                        text={commitDiffText ?? ""}
-                                        emptyLabel="(no diff for this file)"
-                                        binaryImagePreview={
-                                          commitDiffImagePreview &&
-                                          commitDiffPath &&
-                                          pathLooksLikeRenderableImage(commitDiffPath) &&
-                                          (commitDiffImagePreview.before ||
-                                            commitDiffImagePreview.after)
-                                            ? {
-                                                beforeUrl: commitDiffImagePreview.before,
-                                                afterUrl: commitDiffImagePreview.after,
-                                                fileLabel: commitDiffPath,
-                                              }
-                                            : null
-                                        }
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
                             ) : !listsError && commitBrowseHash ? (
                               <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden px-4 pt-3 pb-4">
                                 <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
@@ -3325,99 +3337,178 @@ export default function App({
                                     )}
                                   </div>
                                 </div>
-                                <div className="shrink-0 border-b border-base-300 pb-1.5">
-                                  <div className="min-w-0">
-                                    <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                      <span>Files in commit</span>
-                                      {!commitBrowseLoading ? (
-                                        <span className="font-mono text-[0.65rem] font-normal tracking-normal text-base-content/45 normal-case tabular-nums">
-                                          ({commitBrowseFiles.length})
-                                        </span>
-                                      ) : null}
-                                    </h2>
-                                    <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
-                                      {commitBrowseMeta?.subject ?? commitBrowseHash.slice(0, 7)}
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="flex min-h-0 flex-1 flex-col">
-                                  {commitBrowseLoading ? (
-                                    <div className="flex flex-col items-center justify-center gap-2 py-8">
-                                      <span className="loading loading-md loading-spinner text-primary" />
-                                      <p className="m-0 text-xs text-base-content/70">
-                                        Loading files…
+                                <div className="flex min-h-0 min-w-0 flex-1 flex-row gap-3 overflow-hidden">
+                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-r border-base-300/80 pr-2">
+                                    <div className="shrink-0 border-b border-base-300/80 pb-2">
+                                      <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                        <span>Files</span>
+                                        {!commitBrowseLoading ? (
+                                          <span className="font-mono text-[0.65rem] font-normal tracking-normal text-base-content/45 normal-case tabular-nums">
+                                            ({commitBrowseFiles.length})
+                                          </span>
+                                        ) : null}
+                                      </h2>
+                                      <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
+                                        {commitBrowseMeta?.subject ?? commitBrowseHash.slice(0, 7)}
                                       </p>
                                     </div>
-                                  ) : commitBrowseError ? (
-                                    <DismissibleAlert
-                                      className="alert py-2 text-xs alert-error"
-                                      onDismiss={() => {
-                                        setCommitBrowseError(null);
-                                      }}
-                                    >
-                                      <span className="wrap-break-word">{commitBrowseError}</span>
-                                    </DismissibleAlert>
-                                  ) : commitBrowseFiles.length === 0 ? (
-                                    <p className="m-0 text-center text-xs text-base-content/60">
-                                      No files changed in this commit
-                                    </p>
-                                  ) : (
-                                    <div
-                                      ref={commitBrowseFileListScrollRef}
-                                      className="m-0 min-h-0 flex-1 overflow-y-auto py-1 pr-0.5"
-                                    >
-                                      <div
-                                        className="relative w-full"
-                                        style={{
-                                          height: commitBrowseFileVirtualizer.getTotalSize(),
-                                        }}
-                                      >
-                                        {commitBrowseFileVirtualizer
-                                          .getVirtualItems()
-                                          .map((virtualRow) => {
-                                            const entry = commitBrowseFiles[virtualRow.index];
-                                            if (!entry) return null;
-                                            return (
-                                              <div
-                                                key={virtualRow.key}
-                                                data-index={virtualRow.index}
-                                                ref={commitBrowseFileVirtualizer.measureElement}
-                                                className="absolute top-0 left-0 w-full pb-2"
-                                                style={{
-                                                  transform: `translateY(${virtualRow.start}px)`,
-                                                }}
-                                              >
-                                                <button
-                                                  type="button"
-                                                  className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-base-300/40 bg-base-200/50 px-3 py-2.5 text-left text-sm leading-snug transition-colors hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
-                                                  onClick={() =>
-                                                    void loadCommitFileDiff(
-                                                      entry.path,
-                                                      commitBrowseHash ?? "",
-                                                    )
-                                                  }
-                                                  onContextMenu={(e) => {
-                                                    if (!nativeContextMenusAvailable()) return;
-                                                    e.preventDefault();
-                                                    e.stopPropagation();
-                                                    openFileRowMenu(
-                                                      entry.path,
-                                                      e.clientX,
-                                                      e.clientY,
-                                                    );
-                                                  }}
-                                                >
-                                                  <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
-                                                    {entry.path}
-                                                  </code>
-                                                  <DiffLineStatBadge stat={entry.stats} />
-                                                </button>
-                                              </div>
-                                            );
-                                          })}
-                                      </div>
+                                    <div className="flex min-h-0 flex-1 flex-col pt-2">
+                                      {commitBrowseLoading ? (
+                                        <div className="flex flex-col items-center justify-center gap-2 py-8">
+                                          <span className="loading loading-md loading-spinner text-primary" />
+                                          <p className="m-0 text-xs text-base-content/70">
+                                            Loading files…
+                                          </p>
+                                        </div>
+                                      ) : commitBrowseError ? (
+                                        <DismissibleAlert
+                                          className="alert py-2 text-xs alert-error"
+                                          onDismiss={() => {
+                                            setCommitBrowseError(null);
+                                          }}
+                                        >
+                                          <span className="wrap-break-word">
+                                            {commitBrowseError}
+                                          </span>
+                                        </DismissibleAlert>
+                                      ) : commitBrowseFiles.length === 0 ? (
+                                        <p className="m-0 text-center text-xs text-base-content/60">
+                                          No files changed in this commit
+                                        </p>
+                                      ) : (
+                                        <div
+                                          ref={commitBrowseFileListScrollRef}
+                                          className="m-0 min-h-0 flex-1 overflow-y-auto py-1 pr-0.5"
+                                        >
+                                          <div
+                                            className="relative w-full"
+                                            style={{
+                                              height: commitBrowseFileVirtualizer.getTotalSize(),
+                                            }}
+                                          >
+                                            {commitBrowseFileVirtualizer
+                                              .getVirtualItems()
+                                              .map((virtualRow) => {
+                                                const entry = commitBrowseFiles[virtualRow.index];
+                                                if (!entry) return null;
+                                                const selected = commitDiffPath === entry.path;
+                                                return (
+                                                  <div
+                                                    key={virtualRow.key}
+                                                    data-index={virtualRow.index}
+                                                    ref={commitBrowseFileVirtualizer.measureElement}
+                                                    className="absolute top-0 left-0 w-full pb-2"
+                                                    style={{
+                                                      transform: `translateY(${virtualRow.start}px)`,
+                                                    }}
+                                                  >
+                                                    <button
+                                                      type="button"
+                                                      className={`flex min-h-10 w-full items-center gap-2 rounded-lg border px-2 py-2 text-left text-[0.8125rem] leading-snug transition-colors ${
+                                                        selected
+                                                          ? "border-primary/50 bg-primary/10 ring-1 ring-primary/25"
+                                                          : "border-base-300/40 bg-base-200/50 hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
+                                                      }`}
+                                                      onClick={() =>
+                                                        void loadCommitFileDiff(
+                                                          entry.path,
+                                                          commitBrowseHash ?? "",
+                                                        )
+                                                      }
+                                                      onContextMenu={(e) => {
+                                                        if (!nativeContextMenusAvailable()) return;
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        openFileRowMenu(
+                                                          entry.path,
+                                                          e.clientX,
+                                                          e.clientY,
+                                                        );
+                                                      }}
+                                                    >
+                                                      <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
+                                                        {entry.path}
+                                                      </code>
+                                                      <DiffLineStatBadge stat={entry.stats} />
+                                                    </button>
+                                                  </div>
+                                                );
+                                              })}
+                                          </div>
+                                        </div>
+                                      )}
                                     </div>
-                                  )}
+                                  </div>
+                                  <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                                    {!commitDiffPath ? (
+                                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-2 py-10">
+                                        <p className="m-0 text-center text-xs text-base-content/55">
+                                          Select a file to view its diff
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-2">
+                                          <div className="min-w-0 flex-1">
+                                            <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                              Commit diff
+                                            </h2>
+                                            <code className="mt-0.5 block font-mono text-[0.65rem] leading-tight wrap-break-word text-base-content/85">
+                                              {commitDiffPath}
+                                            </code>
+                                            <p className="mt-0.5 mb-0 font-mono text-[0.6rem] text-base-content/50">
+                                              {commits.find((x) => x.hash === commitBrowseHash)
+                                                ?.shortHash ?? commitBrowseHash.slice(0, 7)}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-2">
+                                          {commitDiffLoading ? (
+                                            <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
+                                              <span className="loading loading-md loading-spinner text-primary" />
+                                              <p className="m-0 text-xs text-base-content/70">
+                                                Loading diff…
+                                              </p>
+                                            </div>
+                                          ) : commitDiffError ? (
+                                            <DismissibleAlert
+                                              className="alert py-2 text-xs alert-error"
+                                              onDismiss={() => {
+                                                setCommitDiffError(null);
+                                              }}
+                                            >
+                                              <span className="wrap-break-word">
+                                                {commitDiffError}
+                                              </span>
+                                            </DismissibleAlert>
+                                          ) : (
+                                            <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
+                                              <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                                Patch
+                                              </div>
+                                              <UnifiedDiff
+                                                text={commitDiffText ?? ""}
+                                                emptyLabel="(no diff for this file)"
+                                                binaryImagePreview={
+                                                  commitDiffImagePreview &&
+                                                  commitDiffPath &&
+                                                  pathLooksLikeRenderableImage(commitDiffPath) &&
+                                                  (commitDiffImagePreview.before ||
+                                                    commitDiffImagePreview.after)
+                                                    ? {
+                                                        beforeUrl: commitDiffImagePreview.before,
+                                                        afterUrl: commitDiffImagePreview.after,
+                                                        fileLabel: commitDiffPath,
+                                                      }
+                                                    : null
+                                                }
+                                              />
+                                            </div>
+                                          )}
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             ) : (
@@ -3431,6 +3522,8 @@ export default function App({
                                 currentBranchName={currentBranchName}
                                 currentBranchTipHash={currentBranchTipHash}
                                 commitBrowseHash={commitBrowseHash}
+                                graphFocusHash={graphFocusHash}
+                                graphScrollNonce={graphScrollNonce}
                                 branchBusy={branchBusy}
                                 stashBusy={stashBusy}
                                 commitsSectionTitle={commitsSectionTitle}
@@ -3646,22 +3739,40 @@ export default function App({
                       >
                         Commit
                       </h2>
-                      <button
-                        type="button"
-                        className="btn shrink-0 gap-1 px-2 btn-ghost btn-xs"
-                        disabled={!canPush}
-                        title="Push the current branch to origin"
-                        onClick={() => void onPushToOrigin()}
-                      >
-                        {pushBusy ? (
-                          <span className="loading loading-xs loading-spinner" />
-                        ) : (
-                          <>
-                            <span aria-hidden>↑</span>
-                            <span className="hidden sm:inline">Push</span>
-                          </>
-                        )}
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="label cursor-pointer gap-1.5 py-0">
+                          <input
+                            type="checkbox"
+                            className="checkbox checkbox-xs"
+                            checked={pushSkipHooks}
+                            onChange={(e) => {
+                              setPushSkipHooks(e.target.checked);
+                            }}
+                          />
+                          <span
+                            className="label-text text-[0.65rem] leading-tight"
+                            title="Skip local pre-push and other hooks (--no-verify)"
+                          >
+                            Skip hooks
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          className="btn shrink-0 gap-1 px-2 btn-ghost btn-xs"
+                          disabled={!canPush}
+                          title="Push the current branch to origin"
+                          onClick={() => void onPushToOrigin()}
+                        >
+                          {pushBusy ? (
+                            <span className="loading loading-xs loading-spinner" />
+                          ) : (
+                            <>
+                              <span aria-hidden>↑</span>
+                              <span className="hidden sm:inline">Push</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                     <div className="flex cursor-pointer items-center gap-2.5">
                       <input

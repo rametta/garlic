@@ -19,6 +19,10 @@ export interface CommitGraphSectionProps {
   currentBranchName: string | null;
   currentBranchTipHash: string | null;
   commitBrowseHash: string | null;
+  /** Highlights a commit row without opening browse (e.g. branch tip or stash). */
+  graphFocusHash: string | null;
+  /** Increment to scroll the graph so `graphFocusHash` is in view. */
+  graphScrollNonce: number;
   branchBusy: string | null;
   /** True while a push (branch or tag) is in progress. */
   pushBusy: boolean;
@@ -131,6 +135,7 @@ type VirtualRowProps = {
   graphWidthPx: number;
   laneMeta: RowLaneMeta;
   commitBrowseHash: string | null;
+  graphFocusHash: string | null;
   currentBranchTipHash: string | null;
   currentBranchName: string | null;
   branchBusy: string | null;
@@ -152,6 +157,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   graphWidthPx,
   laneMeta,
   commitBrowseHash,
+  graphFocusHash,
   currentBranchTipHash,
   currentBranchName,
   branchBusy,
@@ -261,6 +267,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   ) : null;
 
   const isBrowsing = commitBrowseHash === c.hash;
+  const isGraphFocus = graphFocusHash !== null && c.hash === graphFocusHash && !isBrowsing;
   const isHeadBranchTipRow = currentBranchTipHash !== null && c.hash === currentBranchTipHash;
   const rel = formatRelativeShort(c.date);
   const fullTitle = [
@@ -290,9 +297,11 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
         className={`grid h-full min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left text-[0.6875rem] leading-tight transition-colors ${rowRule} ${
           isBrowsing
             ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
-            : isHeadBranchTipRow
-              ? "bg-primary/12 hover:bg-primary/18"
-              : "hover:bg-base-300/40"
+            : isGraphFocus
+              ? "bg-accent/15 ring-1 ring-accent/30 ring-inset"
+              : isHeadBranchTipRow
+                ? "bg-primary/12 hover:bg-primary/18"
+                : "hover:bg-base-300/40"
         }`}
         onClick={() => {
           onRowCommitSelect(c.hash);
@@ -403,6 +412,8 @@ export function CommitGraphSection({
   currentBranchName,
   currentBranchTipHash,
   commitBrowseHash,
+  graphFocusHash,
+  graphScrollNonce,
   branchBusy,
   pushBusy,
   stashBusy,
@@ -469,6 +480,14 @@ export function CommitGraphSection({
     estimateSize: () => COMMIT_GRAPH_ROW_HEIGHT,
     overscan: VIRTUAL_OVERSCAN,
   });
+
+  useEffect(() => {
+    if (!graphFocusHash) return;
+    const idx = commits.findIndex((c) => c.hash === graphFocusHash);
+    if (idx < 0) return;
+    const virIndex = idx + wipOffset;
+    rowVirtualizer.scrollToIndex(virIndex, { align: "center" });
+  }, [graphFocusHash, graphScrollNonce, commits, wipOffset, rowVirtualizer]);
 
   const totalHeight = rowVirtualizer.getTotalSize();
   const graphWidthPx = commitGraphLayout.graphWidthPx;
@@ -778,6 +797,7 @@ export function CommitGraphSection({
                       graphWidthPx={graphWidthPx}
                       laneMeta={rowLaneMetas[commitIdx]}
                       commitBrowseHash={commitBrowseHash}
+                      graphFocusHash={graphFocusHash}
                       currentBranchTipHash={currentBranchTipHash}
                       currentBranchName={currentBranchName}
                       branchBusy={branchBusy}

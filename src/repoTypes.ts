@@ -46,6 +46,8 @@ export type TagOriginStatus = {
 export interface StashEntry {
   refName: string;
   message: string;
+  /** Tip commit OID for this stash (W commit). */
+  commitHash: string;
 }
 
 /** Which branch-sidebar panels are expanded (persisted in settings.json). */

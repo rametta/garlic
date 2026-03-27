@@ -57,4 +57,5 @@ commands.allow = [
   "set_openai_settings",
   "write_export_text_file",
   "open_in_cursor",
+  "start_repo_watch",
 ]

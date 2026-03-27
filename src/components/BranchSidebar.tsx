@@ -189,6 +189,7 @@ function LocalBranchRow({
   branch,
   currentBranchName,
   branchBusy,
+  onSelectLocalTip,
   onCheckoutLocal,
   onLocalBranchContextMenu,
   graph,
@@ -196,6 +197,9 @@ function LocalBranchRow({
   branch: LocalBranchEntry;
   currentBranchName: string | null;
   branchBusy: string | null;
+  /** Single click: highlight branch tip in graph (does not check out). */
+  onSelectLocalTip: (name: string) => void;
+  /** Double click or context menu: check out. */
   onCheckoutLocal: (name: string) => void;
   onLocalBranchContextMenu: (branchName: string, clientX: number, clientY: number) => void;
   graph: BranchGraphControls;
@@ -210,7 +214,7 @@ function LocalBranchRow({
   const graphVisible = graph.graphVisibleLocal(branch.name);
 
   return (
-    <li className={isCurrent ? "menu-active" : ""}>
+    <li className={isCurrent ? "rounded-md bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""}>
       <div
         className="flex w-full min-w-0 items-center gap-0"
         onContextMenu={(e) => {
@@ -241,8 +245,14 @@ function LocalBranchRow({
         </button>
         <button
           type="button"
-          disabled={busy || isCurrent}
+          disabled={busy}
           onClick={() => {
+            onSelectLocalTip(branch.name);
+          }}
+          onDoubleClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (busy || isCurrent) return;
             onCheckoutLocal(branch.name);
           }}
           className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 py-2 pr-2 pl-1 text-left ${busy ? "opacity-60" : ""}`}
@@ -280,6 +290,7 @@ function renderLocalBranchTrieChildren(
   node: BranchTrieNode,
   currentBranchName: string | null,
   branchBusy: string | null,
+  onSelectLocalTip: (name: string) => void,
   onCheckoutLocal: (name: string) => void,
   onLocalBranchContextMenu: (branchName: string, clientX: number, clientY: number) => void,
   graph: BranchGraphControls,
@@ -297,6 +308,7 @@ function renderLocalBranchTrieChildren(
           branch={b}
           currentBranchName={currentBranchName}
           branchBusy={branchBusy}
+          onSelectLocalTip={onSelectLocalTip}
           onCheckoutLocal={onCheckoutLocal}
           onLocalBranchContextMenu={onLocalBranchContextMenu}
           graph={graph}
@@ -338,6 +350,7 @@ function renderLocalBranchTrieChildren(
                 branch={child.branchHere}
                 currentBranchName={currentBranchName}
                 branchBusy={branchBusy}
+                onSelectLocalTip={onSelectLocalTip}
                 onCheckoutLocal={onCheckoutLocal}
                 onLocalBranchContextMenu={onLocalBranchContextMenu}
                 graph={graph}
@@ -347,6 +360,7 @@ function renderLocalBranchTrieChildren(
               child,
               currentBranchName,
               branchBusy,
+              onSelectLocalTip,
               onCheckoutLocal,
               onLocalBranchContextMenu,
               graph,
@@ -361,12 +375,14 @@ function renderLocalBranchTrieChildren(
 function RemoteBranchRow({
   fullRef,
   branchBusy,
+  onSelectRemoteTip,
   onCreateFromRemote,
   onRemoteBranchContextMenu,
   graph,
 }: {
   fullRef: string;
   branchBusy: string | null;
+  onSelectRemoteTip: (remoteRef: string) => void;
   onCreateFromRemote: (remoteRef: string) => void;
   onRemoteBranchContextMenu: (remoteRef: string, clientX: number, clientY: number) => void;
   graph: BranchGraphControls;
@@ -411,6 +427,12 @@ function RemoteBranchRow({
           type="button"
           disabled={busy}
           onClick={() => {
+            onSelectRemoteTip(fullRef);
+          }}
+          onDoubleClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (busy) return;
             onCreateFromRemote(fullRef);
           }}
           className={`flex h-auto min-h-0 min-w-0 flex-1 justify-start py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
@@ -425,6 +447,7 @@ function RemoteBranchRow({
 function renderRemoteBranchTrieChildren(
   node: RemoteTrieNode,
   branchBusy: string | null,
+  onSelectRemoteTip: (remoteRef: string) => void,
   onCreateFromRemote: (remoteRef: string) => void,
   graph: BranchGraphControls,
   onRemoteBranchContextMenu: (remoteRef: string, clientX: number, clientY: number) => void,
@@ -441,6 +464,7 @@ function renderRemoteBranchTrieChildren(
           key={r}
           fullRef={r}
           branchBusy={branchBusy}
+          onSelectRemoteTip={onSelectRemoteTip}
           onCreateFromRemote={onCreateFromRemote}
           onRemoteBranchContextMenu={onRemoteBranchContextMenu}
           graph={graph}
@@ -481,6 +505,7 @@ function renderRemoteBranchTrieChildren(
               <RemoteBranchRow
                 fullRef={child.refHere}
                 branchBusy={branchBusy}
+                onSelectRemoteTip={onSelectRemoteTip}
                 onCreateFromRemote={onCreateFromRemote}
                 onRemoteBranchContextMenu={onRemoteBranchContextMenu}
                 graph={graph}
@@ -489,6 +514,7 @@ function renderRemoteBranchTrieChildren(
             {renderRemoteBranchTrieChildren(
               child,
               branchBusy,
+              onSelectRemoteTip,
               onCreateFromRemote,
               graph,
               onRemoteBranchContextMenu,
@@ -512,8 +538,11 @@ export type BranchSidebarProps = {
   pushBusy: boolean;
   branchGraphControls: BranchGraphControls;
   currentBranchName: string | null;
+  onSelectLocalBranchTip: (name: string) => void;
   onCheckoutLocal: (name: string) => void;
+  onSelectRemoteBranchTip: (fullRef: string) => void;
   onCreateFromRemote: (remoteRef: string) => void;
+  onStashClick: (stash: StashEntry) => void;
   runBranchSidebarContextMenu: (
     target: { kind: "local"; branchName: string } | { kind: "remote"; fullRef: string },
     clientX: number,
@@ -537,8 +566,11 @@ export function BranchSidebar({
   pushBusy,
   branchGraphControls,
   currentBranchName,
+  onSelectLocalBranchTip,
   onCheckoutLocal,
+  onSelectRemoteBranchTip,
   onCreateFromRemote,
+  onStashClick,
   runBranchSidebarContextMenu,
   openGraphStashMenu,
   openTagSidebarMenu,
@@ -638,6 +670,7 @@ export function BranchSidebar({
                 localBranchTrieRoot,
                 currentBranchName,
                 branchBusy,
+                onSelectLocalBranchTip,
                 onCheckoutLocal,
                 (name, clientX, clientY) => {
                   runBranchSidebarContextMenu(
@@ -684,6 +717,7 @@ export function BranchSidebar({
               {renderRemoteBranchTrieChildren(
                 remoteBranchTrieRoot,
                 branchBusy,
+                onSelectRemoteBranchTip,
                 onCreateFromRemote,
                 branchGraphControls,
                 (fullRef, clientX, clientY) => {
@@ -788,8 +822,21 @@ export function BranchSidebar({
                 return (
                   <li key={s.refName} className="min-w-0">
                     <div
-                      className="flex w-full min-w-0 flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
+                      role="button"
+                      tabIndex={0}
+                      className="flex w-full min-w-0 cursor-pointer flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
                       title={`${s.refName}: ${s.message}`}
+                      onClick={() => {
+                        if (stashRowBusy) return;
+                        onStashClick(s);
+                      }}
+                      onKeyDown={(e) => {
+                        if (stashRowBusy) return;
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onStashClick(s);
+                        }
+                      }}
                       onContextMenu={(e) => {
                         if (stashRowBusy) return;
                         if (!nativeContextMenusAvailable()) return;

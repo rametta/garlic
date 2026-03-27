@@ -1,9 +1,10 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -125,7 +126,11 @@ pub struct LineStat {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkingTreeFile {
+    /// Path used for git commands (index / worktree); for renames, the new path.
     pub path: String,
+    /// When set, the file is a rename from this path (UI may show `from → to`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rename_from: Option<String>,
     pub staged: bool,
     pub unstaged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,6 +145,8 @@ pub struct WorkingTreeFile {
 pub struct StashEntry {
     pub ref_name: String,
     pub message: String,
+    /// Tip commit OID for this stash (W commit).
+    pub commit_hash: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,9 +170,70 @@ pub struct RepoMetadata {
     pub behind: Option<u32>,
 }
 
+static GIT_AUDIT_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Set once from Tauri setup (app config dir). When set, every `git` invocation is appended as a line.
+pub fn set_git_audit_log_path(p: Option<PathBuf>) {
+    if let Ok(mut g) = GIT_AUDIT_LOG_PATH.lock() {
+        *g = p;
+    }
+}
+
+fn augmented_path_for_git_hooks() -> String {
+    let base = std::env::var("PATH").unwrap_or_default();
+    let mut prefixes: Vec<String> = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        prefixes.push("/opt/homebrew/bin".into());
+        prefixes.push("/usr/local/bin".into());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        prefixes.push("/usr/local/bin".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        prefixes.push(r"C:\Program Files\Git\cmd".into());
+    }
+    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+        prefixes.push(format!("{home}/.local/share/pnpm"));
+        prefixes.push(format!("{home}/.local/bin"));
+        prefixes.push(format!("{home}/.cargo/bin"));
+    }
+    prefixes.push(base);
+    prefixes.join(":")
+}
+
+fn git_cmd(workdir: &Path) -> Command {
+    let mut c = Command::new("git");
+    c.current_dir(workdir);
+    c.env("PATH", augmented_path_for_git_hooks());
+    c
+}
+
+fn write_git_audit_line(cwd: &Path, args: &[&str], ok: bool, err: &str) {
+    let path = match GIT_AUDIT_LOG_PATH.lock().ok().and_then(|g| g.clone()) {
+        Some(p) => p,
+        None => return,
+    };
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let status = if ok { "ok" } else { "err" };
+    let line = format!(
+        "{ts}\t{}\tgit {}\t{}\t{}\n",
+        cwd.display(),
+        args.join(" "),
+        status,
+        err.replace('\n', " ")
+    );
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+}
+
 fn git_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .current_dir(workdir)
+    let output = git_cmd(workdir)
         .args(args)
         .output()
         .map_err(|e| format!("Could not run git: {e}"))?;
@@ -174,30 +242,34 @@ fn git_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
         let msg = if stderr.is_empty() {
             format!("git {} failed", args.join(" "))
         } else {
-            stderr
+            stderr.clone()
         };
+        write_git_audit_line(workdir, args, false, &msg);
         return Err(msg);
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    write_git_audit_line(workdir, args, true, "");
+    Ok(out)
 }
 
 /// `git diff` / `git diff --no-index` use exit status 1 when there are differences (POSIX).
 fn git_diff_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .current_dir(workdir)
+    let output = git_cmd(workdir)
         .args(args)
         .output()
         .map_err(|e| format!("Could not run git: {e}"))?;
     let code = output.status.code().unwrap_or(-1);
     if code == 0 || code == 1 {
+        write_git_audit_line(workdir, args, true, "");
         return Ok(String::from_utf8_lossy(&output.stdout).to_string());
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let msg = if stderr.is_empty() {
         format!("git {} failed (exit {code})", args.join(" "))
     } else {
-        stderr
+        stderr.clone()
     };
+    write_git_audit_line(workdir, args, false, &msg);
     Err(msg)
 }
 
@@ -207,8 +279,7 @@ fn git_path_known_to_git(workdir: &Path, rel: &str) -> bool {
 }
 
 fn git_output_allow_fail(workdir: &Path, args: &[&str]) -> Option<String> {
-    Command::new("git")
-        .current_dir(workdir)
+    git_cmd(workdir)
         .args(args)
         .output()
         .ok()
@@ -327,8 +398,7 @@ fn run_git_clone_with_progress(
     url: String,
     dest: PathBuf,
 ) -> Result<String, String> {
-    let mut child = Command::new("git")
-        .current_dir(&parent)
+    let mut child = git_cmd(&parent)
         .args(["clone", "--progress", &url])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -1134,8 +1204,18 @@ pub fn delete_local_branch(path: String, branch: String, force: bool) -> Result<
         return Err("Branch name cannot be empty.".to_string());
     }
     let flag = if force { "-D" } else { "-d" };
-    git_output(&path_buf, &["branch", flag, "--", name])?;
-    Ok(())
+    match git_output(&path_buf, &["branch", flag, "--", name]) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            if !force && e.contains("not fully merged") {
+                Err(format!(
+                    "{e}\n\nGit refuses to delete this branch because it still has commits that are not merged into your current branch (for example the branch you branched from, or main). Deleting it would make those commits harder to find. If you are sure you want to discard that work, use force delete (\"git branch -D …\"), which tells Git you accept losing those unmerged commits.",
+                ))
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 /// Delete a branch on the remote (`git push <remote> --delete <branch>`). `remote_ref` is e.g. `origin/feature/foo`.
@@ -1209,13 +1289,6 @@ pub fn rebase_current_branch_onto(
     Ok(())
 }
 
-fn non_empty_lines(text: &str) -> Vec<String> {
-    text.lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 /// `git show` prints commit metadata before the patch; `react-diff-view` needs a patch-only string.
 fn unified_diff_patch_only(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
@@ -1230,22 +1303,8 @@ fn unified_diff_patch_only(text: &str) -> String {
     }
 }
 
-fn staged_paths(workdir: &Path) -> Result<Vec<String>, String> {
-    let out = git_output(workdir, &["diff", "--cached", "--name-only"])?;
-    Ok(non_empty_lines(&out))
-}
-
-fn unstaged_paths(workdir: &Path) -> Result<Vec<String>, String> {
-    let out = git_output(workdir, &["diff", "--name-only"])?;
-    Ok(non_empty_lines(&out))
-}
-
-fn untracked_paths(workdir: &Path) -> Result<Vec<String>, String> {
-    let out = git_output(workdir, &["ls-files", "--others", "--exclude-standard"])?;
-    Ok(non_empty_lines(&out))
-}
-
 /// `git diff --numstat` / `diff-tree --numstat` lines: `additions TAB deletions TAB path` (`-` `-` for binary).
+/// Renames use `oldname => newname` in the path field; we key stats by **new** path.
 fn parse_numstat_output(out: &str) -> HashMap<String, LineStat> {
     let mut m = HashMap::new();
     for line in out.lines() {
@@ -1255,10 +1314,19 @@ fn parse_numstat_output(out: &str) -> HashMap<String, LineStat> {
         let mut parts = line.splitn(3, '\t');
         let add_s = parts.next().unwrap_or("");
         let del_s = parts.next().unwrap_or("");
-        let path = parts.next().unwrap_or("").to_string();
-        if path.is_empty() {
+        let path_raw = parts.next().unwrap_or("").to_string();
+        if path_raw.is_empty() {
             continue;
         }
+        let path = if path_raw.contains(" => ") {
+            path_raw
+                .split(" => ")
+                .last()
+                .unwrap_or(path_raw.as_str())
+                .to_string()
+        } else {
+            path_raw
+        };
         let is_binary = add_s == "-" && del_s == "-";
         let stat = if is_binary {
             LineStat {
@@ -1310,57 +1378,122 @@ fn line_stat_untracked_file(workdir: &Path, rel: &str) -> LineStat {
     }
 }
 
+#[derive(Debug, Clone)]
+struct WtAcc {
+    path: String,
+    rename_from: Option<String>,
+    staged: bool,
+    unstaged: bool,
+    untracked: bool,
+}
+
+fn parse_porcelain_xy(xy: &str) -> Option<(bool, bool, bool)> {
+    if xy.len() != 2 {
+        return None;
+    }
+    let mut it = xy.chars();
+    let x = it.next()?;
+    let y = it.next()?;
+    if x == '?' && y == '?' {
+        return Some((false, true, true));
+    }
+    let staged = x != ' ' && x != '?';
+    let unstaged = y != ' ';
+    Some((staged, unstaged, false))
+}
+
+/// Returns `(path_key, rename_from)` where `path_key` is the path used for diffs / git commands.
+fn parse_porcelain_path_rest(rest: &str) -> (String, Option<String>) {
+    let rest = rest.trim();
+    if let Some(pos) = rest.find(" -> ") {
+        let old = rest[..pos].trim();
+        let new = rest[pos + 4..].trim();
+        if !old.is_empty() && !new.is_empty() {
+            return (new.to_string(), Some(old.to_string()));
+        }
+    }
+    (rest.to_string(), None)
+}
+
 /// Combined working tree file list for the UI (staged / unstaged flags per path).
+/// Uses `git status --porcelain` so renames appear as a single row instead of delete + add.
 #[tauri::command]
 pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let (staged_set, unstaged_set, untracked, staged_map, unstaged_map) =
-        std::thread::scope(|s| {
-            let p = &path_buf;
-            let h1 = s.spawn(|| staged_paths(p).map(|v| v.into_iter().collect::<HashSet<_>>()));
-            let h2 = s.spawn(|| unstaged_paths(p).map(|v| v.into_iter().collect::<HashSet<_>>()));
-            let h3 = s.spawn(|| untracked_paths(p).map(|v| v.into_iter().collect::<HashSet<_>>()));
-            let h4 = s.spawn(|| numstat_line_stats(p, &["diff", "--cached", "--numstat"]));
-            let h5 = s.spawn(|| numstat_line_stats(p, &["diff", "--numstat"]));
-            let staged_set = h1.join().unwrap()?;
-            let unstaged_set = h2.join().unwrap()?;
-            let untracked = h3.join().unwrap()?;
-            let staged_map = h4.join().unwrap()?;
-            let unstaged_map = h5.join().unwrap()?;
-            Ok::<_, String>((
-                staged_set,
-                unstaged_set,
+    let porcelain = git_output(&path_buf, &["status", "--porcelain=v1"])?;
+    let mut map: HashMap<String, WtAcc> = HashMap::new();
+    for line in porcelain.lines() {
+        let line = line.trim_end();
+        if line.len() < 3 {
+            continue;
+        }
+        let xy = &line[0..2];
+        if line.chars().nth(2) != Some(' ') {
+            continue;
+        }
+        let Some((staged, unstaged, untracked)) = parse_porcelain_xy(xy) else {
+            continue;
+        };
+        let rest = line[3..].trim();
+        let (path_key, rename_from) = parse_porcelain_path_rest(rest);
+        if path_key.is_empty() {
+            continue;
+        }
+        map.entry(path_key.clone())
+            .and_modify(|e| {
+                e.staged |= staged;
+                e.unstaged |= unstaged;
+                e.untracked |= untracked;
+                if rename_from.is_some() {
+                    e.rename_from = rename_from.clone();
+                }
+            })
+            .or_insert_with(|| WtAcc {
+                path: path_key,
+                rename_from,
+                staged,
+                unstaged,
                 untracked,
-                staged_map,
-                unstaged_map,
-            ))
-        })?;
-    let mut paths: HashSet<String> = HashSet::new();
-    paths.extend(staged_set.iter().cloned());
-    paths.extend(unstaged_set.iter().cloned());
-    paths.extend(untracked.iter().cloned());
-    let mut paths: Vec<String> = paths.into_iter().collect();
+            });
+    }
+
+    let (staged_map, unstaged_map) = std::thread::scope(|s| {
+        let p = &path_buf;
+        let h4 = s.spawn(|| numstat_line_stats(p, &["diff", "--cached", "--numstat"]));
+        let h5 = s.spawn(|| numstat_line_stats(p, &["diff", "--numstat"]));
+        let staged_map = h4.join().unwrap()?;
+        let unstaged_map = h5.join().unwrap()?;
+        Ok::<_, String>((staged_map, unstaged_map))
+    })?;
+
+    let mut paths: Vec<String> = map.keys().cloned().collect();
     paths.sort();
     Ok(paths
         .into_iter()
-        .map(|p| {
-            let staged = staged_set.contains(&p);
-            let unstaged = unstaged_set.contains(&p) || untracked.contains(&p);
-            let staged_stats = if staged {
-                Some(staged_map.get(&p).cloned().unwrap_or(LineStat {
-                    additions: 0,
-                    deletions: 0,
-                    is_binary: false,
-                }))
+        .filter_map(|p| map.get(&p).cloned())
+        .map(|acc| {
+            let staged = acc.staged;
+            let unstaged = acc.unstaged || acc.untracked;
+            let staged_stats = if staged && !acc.untracked {
+                Some(
+                    staged_map
+                        .get(&acc.path)
+                        .cloned()
+                        .unwrap_or(LineStat {
+                            additions: 0,
+                            deletions: 0,
+                            is_binary: false,
+                        }),
+                )
             } else {
                 None
             };
             let unstaged_stats = if unstaged {
-                Some(if let Some(s) = unstaged_map.get(&p) {
+                Some(if acc.untracked {
+                    line_stat_untracked_file(&path_buf, &acc.path)
+                } else if let Some(s) = unstaged_map.get(&acc.path) {
                     s.clone()
-                } else if untracked.contains(&p) {
-                    line_stat_untracked_file(&path_buf, &p)
                 } else {
                     LineStat {
                         additions: 0,
@@ -1372,7 +1505,8 @@ pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, Str
                 None
             };
             WorkingTreeFile {
-                path: p.clone(),
+                path: acc.path,
+                rename_from: acc.rename_from,
                 staged,
                 unstaged,
                 staged_stats,
@@ -1637,35 +1771,49 @@ pub fn list_commit_files(
         .collect())
 }
 
-/// Runs `git log -1 --format=%G?` in a helper thread with a short timeout (see below).
+/// `%G?` plus `git verify-commit` so both GPG and SSH signing are recognized when Git’s trust
+/// letter alone is ambiguous.
 fn commit_signature_verified_flag(workdir: &Path, hash: &str) -> Option<bool> {
     let workdir = workdir.to_path_buf();
     let hash_owned = hash.to_string();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut cmd = Command::new("git");
-        cmd.current_dir(&workdir)
-            .args(["log", "-1", "--format=%G?", &hash_owned])
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env_remove("GPG_TTY");
-        let _ = tx.send(cmd.output());
+        let mut cmd = git_cmd(&workdir);
+        cmd.args(["log", "-1", "--format=%G?", &hash_owned])
+            .env("GIT_TERMINAL_PROMPT", "0");
+        let g_out = cmd.output();
+        let verified = match g_out {
+            Ok(output) if output.status.success() => {
+                let flag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let ch = flag.chars().next().unwrap_or(' ');
+                if ch == 'G' {
+                    Some(true)
+                } else if ch == 'N' {
+                    Some(false)
+                } else if flag.is_empty() {
+                    verify_commit_quiet(&workdir, &hash_owned)
+                } else if ch == 'B' {
+                    Some(false)
+                } else {
+                    verify_commit_quiet(&workdir, &hash_owned)
+                }
+            }
+            _ => verify_commit_quiet(&workdir, &hash_owned),
+        };
+        let _ = tx.send(verified);
     });
 
-    match rx.recv_timeout(Duration::from_secs(3)) {
-        Ok(Ok(output)) => {
-            if !output.status.success() {
-                return None;
-            }
-            let flag = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if flag.is_empty() {
-                return None;
-            }
-            let ch = flag.chars().next().unwrap_or(' ');
-            if ch == 'G' { Some(true) } else { Some(false) }
-        }
-        Ok(Err(_)) => None,
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(v) => v,
         Err(mpsc::RecvTimeoutError::Disconnected) | Err(mpsc::RecvTimeoutError::Timeout) => None,
     }
+}
+
+fn verify_commit_quiet(workdir: &Path, hash: &str) -> Option<bool> {
+    let mut cmd = git_cmd(workdir);
+    cmd.args(["verify-commit", hash]).env("GIT_TERMINAL_PROMPT", "0");
+    let output = cmd.output().ok()?;
+    Some(output.status.success())
 }
 
 /// Starts signature verification in a **detached** thread and returns immediately. When finished,
@@ -1759,8 +1907,7 @@ fn git_show_blob_bytes(workdir: &Path, object_spec: &str) -> Result<Option<Vec<u
     if spec.is_empty() {
         return Ok(None);
     }
-    let out = Command::new("git")
-        .current_dir(workdir)
+    let out = git_cmd(workdir)
         .args(["show", spec])
         .output()
         .map_err(|e| format!("Could not run git: {e}"))?;
@@ -1899,9 +2046,15 @@ pub fn list_stashes(path: String) -> Result<Vec<StashEntry>, String> {
         } else {
             after.trim_start().to_string()
         };
+        let ref_name = format!("stash@{{{idx_str}}}");
+        let commit_hash = match git_output(&path_buf, &["rev-parse", &ref_name]) {
+            Ok(h) => h,
+            Err(_) => continue,
+        };
         out.push(StashEntry {
-            ref_name: format!("stash@{{{idx_str}}}"),
+            ref_name,
             message,
+            commit_hash,
         });
     }
     Ok(out)
@@ -1912,8 +2065,8 @@ pub fn list_stashes(path: String) -> Result<Vec<StashEntry>, String> {
 pub fn stash_push(path: String, message: Option<String>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let mut cmd = Command::new("git");
-    cmd.current_dir(&path_buf).arg("stash").arg("push");
+    let mut cmd = git_cmd(&path_buf);
+    cmd.arg("stash").arg("push");
     if let Some(m) = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         cmd.arg("-m").arg(m);
     }
@@ -1925,10 +2078,12 @@ pub fn stash_push(path: String, message: Option<String>) -> Result<(), String> {
         let msg = if stderr.is_empty() {
             "git stash push failed".to_string()
         } else {
-            stderr
+            stderr.clone()
         };
+        write_git_audit_line(&path_buf, &["stash", "push"], false, &msg);
         return Err(msg);
     }
+    write_git_audit_line(&path_buf, &["stash", "push"], true, "");
     Ok(())
 }
 
@@ -2009,8 +2164,9 @@ pub fn current_branch_name(path: impl AsRef<Path>) -> Result<String, String> {
 }
 
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).
+/// With `skip_hooks`, passes `--no-verify` so local pre-push hooks are skipped.
 #[tauri::command]
-pub fn push_to_origin(path: String) -> Result<(), String> {
+pub fn push_to_origin(path: String, skip_hooks: bool) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -2021,14 +2177,21 @@ pub fn push_to_origin(path: String) -> Result<(), String> {
         "No remote named \"origin\" configured. Add it under Remotes or use git remote add."
             .to_string()
     })?;
-    git_output(&path_buf, &["push", "-u", "origin", "HEAD"])?;
+    if skip_hooks {
+        git_output(
+            &path_buf,
+            &["push", "--no-verify", "-u", "origin", "HEAD"],
+        )?;
+    } else {
+        git_output(&path_buf, &["push", "-u", "origin", "HEAD"])?;
+    }
     Ok(())
 }
 
 /// Force-push the current branch to `origin` with lease (`git push --force-with-lease -u origin HEAD`).
 /// Refuses if `HEAD` is detached or `origin` is missing (same rules as [`push_to_origin`]).
 #[tauri::command]
-pub fn force_push_to_origin(path: String) -> Result<(), String> {
+pub fn force_push_to_origin(path: String, skip_hooks: bool) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -2039,10 +2202,24 @@ pub fn force_push_to_origin(path: String) -> Result<(), String> {
         "No remote named \"origin\" configured. Add it under Remotes or use git remote add."
             .to_string()
     })?;
-    git_output(
-        &path_buf,
-        &["push", "--force-with-lease", "-u", "origin", "HEAD"],
-    )?;
+    if skip_hooks {
+        git_output(
+            &path_buf,
+            &[
+                "push",
+                "--no-verify",
+                "--force-with-lease",
+                "-u",
+                "origin",
+                "HEAD",
+            ],
+        )?;
+    } else {
+        git_output(
+            &path_buf,
+            &["push", "--force-with-lease", "-u", "origin", "HEAD"],
+        )?;
+    }
     Ok(())
 }
 

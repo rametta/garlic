@@ -28,6 +28,8 @@ export async function popupBranchContextMenu(
     repoDetached: boolean;
     branchBusy: boolean;
     onPull: () => void;
+    /** Check out this branch (local) or create from remote ref. */
+    onCheckout?: () => void;
     onMerge: () => void;
     onRebase: () => void;
     onRebaseInteractive: () => void;
@@ -47,6 +49,28 @@ export async function popupBranchContextMenu(
   const deleteDisabled = args.branchBusy || isCurrentLocalBranch;
 
   const items: MenuItemOptions[] = [];
+
+  if (args.kind === "local" && args.onCheckout && !isCurrentLocalBranch) {
+    items.push({
+      id: "branch_checkout",
+      text: "Check out branch",
+      enabled: !args.branchBusy,
+      action: () => {
+        args.onCheckout!();
+      },
+    });
+  }
+
+  if (args.kind === "remote" && args.onCheckout) {
+    items.push({
+      id: "remote_checkout",
+      text: "Check out (create local branch)…",
+      enabled: !args.branchBusy,
+      action: () => {
+        args.onCheckout!();
+      },
+    });
+  }
 
   if (args.kind === "local") {
     items.push({
@@ -244,8 +268,10 @@ export async function popupGraphCommitContextMenu(
   args: {
     branchBusy: boolean;
     cherryPickDisabled: boolean;
+    rebaseOntoDisabled: boolean;
     onBrowse: () => void;
     onCherryPick: () => void;
+    onRebaseCurrentOnto: () => void;
     onCreateBranch: () => void;
     onCreateTag: () => void;
     onCopyFull: () => void;
@@ -261,6 +287,14 @@ export async function popupGraphCommitContextMenu(
         enabled: true,
         action: () => {
           args.onBrowse();
+        },
+      },
+      {
+        id: "commit_rebase_onto",
+        text: "Rebase current branch onto this commit",
+        enabled: !args.branchBusy && !args.rebaseOntoDisabled,
+        action: () => {
+          args.onRebaseCurrentOnto();
         },
       },
       {
