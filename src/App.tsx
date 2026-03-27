@@ -123,6 +123,20 @@ interface GraphCommitsPage {
   hasMore: boolean;
 }
 
+/** Emitted during `start_clone_repository` (`git clone --progress` stderr). */
+interface CloneProgressPayload {
+  sessionId: number;
+  message: string;
+  percent?: number | null;
+}
+
+/** Emitted when a background clone finishes (`start_clone_repository`). */
+interface CloneCompletePayload {
+  sessionId: number;
+  path?: string | null;
+  error?: string | null;
+}
+
 /** Emitted after `start_commit_signature_check` (Rust thread; does not block invoke). */
 interface CommitSignatureResultPayload {
   path: string;
@@ -451,6 +465,15 @@ export default function App({
   /** Mutations (checkout, commit, refresh, …) while a repo is open — shown inline, not as a full-panel error. */
   const [operationError, setOperationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  /** Set while a clone runs; `listen("clone-progress")` updates this for the progress bar. */
+  const [cloneProgress, setCloneProgress] = useState<{
+    message: string;
+    percent: number | null;
+  } | null>(null);
+  /** Matches `start_clone_repository` return value; filters `clone-progress` / `clone-complete`. */
+  const pendingCloneSessionRef = useRef<number | null>(null);
+  /** `clone-complete` can arrive before `invoke` resolves; flush after session id is known. */
+  const cloneCompleteQueuedRef = useRef<CloneCompletePayload | null>(null);
   const [localBranches, setLocalBranches] = useState<LocalBranchEntry[]>(
     () => startup.localBranches,
   );
@@ -1139,6 +1162,28 @@ export default function App({
     [refreshLists, clearCommitBrowse],
   );
 
+  const handleCloneCompletePayload = useCallback(
+    (p: CloneCompletePayload) => {
+      pendingCloneSessionRef.current = null;
+      if (p.error) {
+        setCloneProgress(null);
+        setOperationError(p.error);
+        setLoading(false);
+        return;
+      }
+      const path = p.path?.trim();
+      if (!path) {
+        setCloneProgress(null);
+        setOperationError("Clone finished without a path.");
+        setLoading(false);
+        return;
+      }
+      setCloneProgress(null);
+      void loadRepo(path);
+    },
+    [loadRepo],
+  );
+
   const openCloneRepoDialog = useCallback(() => {
     setCloneRepoUrlDraft("https://github.com/");
     setOperationError(null);
@@ -1162,20 +1207,31 @@ export default function App({
       title: "Choose folder to clone into",
     });
     if (parent === null || Array.isArray(parent)) return;
+    pendingCloneSessionRef.current = null;
+    cloneCompleteQueuedRef.current = null;
+    setCloneProgress({ message: "Starting clone…", percent: null });
     setLoading(true);
     setLoadError(null);
     setOperationError(null);
     try {
-      const clonedPath = await invoke<string>("clone_repository", {
+      const sessionId = await invoke<number>("start_clone_repository", {
         parentPath: parent,
         remoteUrl: trimmed,
       });
-      await loadRepo(clonedPath);
+      pendingCloneSessionRef.current = sessionId;
+      const queued = cloneCompleteQueuedRef.current;
+      if (queued && queued.sessionId === sessionId) {
+        cloneCompleteQueuedRef.current = null;
+        handleCloneCompletePayload(queued);
+      }
     } catch (e) {
+      pendingCloneSessionRef.current = null;
+      cloneCompleteQueuedRef.current = null;
+      setCloneProgress(null);
       setOperationError(invokeErrorMessage(e));
       setLoading(false);
     }
-  }, [cloneRepoUrlDraft, loadRepo]);
+  }, [cloneRepoUrlDraft, handleCloneCompletePayload]);
 
   const cloneRepoDialogBackdropClose = useDialogBackdropClose();
   const createBranchDialogBackdropClose = useDialogBackdropClose();
@@ -1837,6 +1893,35 @@ export default function App({
         if (p.requestId !== selectCommitSeqRef.current) return;
         setCommitSignature({ loading: false, verified: p.verified });
       }),
+      listen<CloneProgressPayload>("clone-progress", (e) => {
+        const p = e.payload;
+        if (
+          pendingCloneSessionRef.current !== null &&
+          pendingCloneSessionRef.current !== p.sessionId
+        ) {
+          return;
+        }
+        pendingCloneSessionRef.current = p.sessionId;
+        const pct =
+          p.percent !== undefined && p.percent !== null && !Number.isNaN(p.percent)
+            ? Math.min(100, Math.max(0, Math.round(p.percent)))
+            : null;
+        setCloneProgress({ message: p.message, percent: pct });
+      }),
+      listen<CloneCompletePayload>("clone-complete", (e) => {
+        const p = e.payload;
+        if (
+          pendingCloneSessionRef.current !== null &&
+          pendingCloneSessionRef.current !== p.sessionId
+        ) {
+          return;
+        }
+        if (pendingCloneSessionRef.current === null) {
+          cloneCompleteQueuedRef.current = p;
+          return;
+        }
+        handleCloneCompletePayload(p);
+      }),
     ]);
 
     return () => {
@@ -1861,6 +1946,7 @@ export default function App({
     openCreateBranchDialog,
     openOpenAiSettingsDialog,
     refreshAfterMutation,
+    handleCloneCompletePayload,
     openCloneRepoDialog,
   ]);
 
@@ -2675,11 +2761,42 @@ export default function App({
           <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-md">
             <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
               {loading ? (
-                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 py-5">
-                  <span className="loading loading-md loading-spinner text-primary" />
-                  <p className="m-0 text-center text-[0.9375rem] text-base-content/80">
-                    Loading repository…
-                  </p>
+                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 py-5">
+                  {cloneProgress ? (
+                    <>
+                      <p className="m-0 text-center text-[0.9375rem] font-medium text-base-content/90">
+                        Cloning repository…
+                      </p>
+                      <div className="flex w-full max-w-md flex-col gap-2">
+                        {cloneProgress.percent != null ? (
+                          <progress
+                            className="progress h-3 w-full progress-primary"
+                            value={cloneProgress.percent}
+                            max={100}
+                            aria-valuenow={cloneProgress.percent}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                          />
+                        ) : (
+                          <progress
+                            className="progress h-3 w-full progress-primary"
+                            max={100}
+                            aria-busy="true"
+                          />
+                        )}
+                        <p className="m-0 font-mono text-xs leading-snug wrap-break-word text-base-content/90">
+                          {cloneProgress.message}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span className="loading loading-md loading-spinner text-primary" />
+                      <p className="m-0 text-center text-[0.9375rem] text-base-content/80">
+                        Loading repository…
+                      </p>
+                    </>
+                  )}
                 </div>
               ) : loadError ? (
                 <div className="p-4">

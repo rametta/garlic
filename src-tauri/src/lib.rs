@@ -89,7 +89,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             window_title::reset_main_window_title,
             git::get_repo_metadata,
-            git::clone_repository,
+            git::start_clone_repository,
             git::list_local_branches,
             git::list_remote_branches,
             git::list_tags,

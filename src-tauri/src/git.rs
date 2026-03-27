@@ -1,8 +1,10 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 use tauri::AppHandle;
@@ -44,6 +46,33 @@ pub struct GraphCommitsPage {
 
 /// `git log -n` cap per request. We fetch one extra row to know whether another page exists.
 const GRAPH_COMMITS_PAGE_SIZE: usize = 500;
+
+static CLONE_SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn next_clone_session_id() -> u64 {
+    CLONE_SESSION_SEQ.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Payload for [`start_clone_repository`] → `clone-progress` (stderr lines from `git clone --progress`).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneProgressEvent {
+    pub session_id: u64,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u32>,
+}
+
+/// Final result for one clone session (`clone-complete`).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneCompleteEvent {
+    pub session_id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
 
 /// Payload for [`start_commit_signature_check`] → `commit-signature-result` (webview listens).
 #[derive(Clone, Serialize)]
@@ -220,9 +249,25 @@ fn clone_dir_name_from_url(url: &str) -> String {
     name.to_string()
 }
 
+fn parse_git_clone_progress_percent(line: &str) -> Option<u32> {
+    for token in line.split_whitespace() {
+        let t = token.trim_end_matches([',', ';', ')', '.']);
+        if let Some(num) = t.strip_suffix('%') {
+            if let Ok(n) = num.parse::<u32>() {
+                return Some(n.min(100));
+            }
+        }
+    }
+    None
+}
+
 /// Clone `remote_url` into a new subdirectory of `parent_path` (same default folder name as `git clone`).
+///
+/// Returns a session id **immediately** and runs `git clone` on a background thread so the IPC handler
+/// does not block the webview. Progress is emitted on `clone-progress`; the final path or error on
+/// `clone-complete`.
 #[tauri::command]
-pub fn clone_repository(parent_path: String, remote_url: String) -> Result<String, String> {
+pub fn start_clone_repository(app: AppHandle, parent_path: String, remote_url: String) -> Result<u64, String> {
     let parent = PathBuf::from(parent_path.trim());
     if !parent.is_dir() {
         return Err("That folder does not exist.".to_string());
@@ -238,17 +283,87 @@ pub fn clone_repository(parent_path: String, remote_url: String) -> Result<Strin
             "A folder named \"{dir_name}\" already exists in that location."
         ));
     }
-    let output = Command::new("git")
+
+    let session_id = next_clone_session_id();
+    let url_owned = url.to_string();
+    let app_clone = app.clone();
+
+    let _ = app.emit(
+        "clone-progress",
+        CloneProgressEvent {
+            session_id,
+            message: "Starting clone…".to_string(),
+            percent: None,
+        },
+    );
+
+    std::thread::spawn(move || {
+        let result = run_git_clone_with_progress(app_clone.clone(), session_id, parent, url_owned, dest);
+        let event = match result {
+            Ok(path) => CloneCompleteEvent {
+                session_id,
+                path: Some(path),
+                error: None,
+            },
+            Err(e) => CloneCompleteEvent {
+                session_id,
+                path: None,
+                error: Some(e),
+            },
+        };
+        let _ = app_clone.emit("clone-complete", event);
+    });
+
+    Ok(session_id)
+}
+
+fn run_git_clone_with_progress(
+    app: AppHandle,
+    session_id: u64,
+    parent: PathBuf,
+    url: String,
+    dest: PathBuf,
+) -> Result<String, String> {
+    let mut child = Command::new("git")
         .current_dir(&parent)
-        .args(["clone", url])
-        .output()
+        .args(["clone", "--progress", &url])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("Could not run git: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
+
+    let stderr = child.stderr.take().ok_or_else(|| "git clone: no stderr pipe.".to_string())?;
+    let reader = BufReader::new(stderr);
+    let mut stderr_acc = String::new();
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Could not read git clone output: {e}"))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        stderr_acc.push_str(trimmed);
+        stderr_acc.push('\n');
+        let percent = parse_git_clone_progress_percent(trimmed);
+        let _ = app.emit(
+            "clone-progress",
+            CloneProgressEvent {
+                session_id,
+                message: trimmed.to_string(),
+                percent,
+            },
+        );
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("Could not wait for git clone: {e}"))?;
+    if !status.success() {
+        let tail = stderr_acc.trim();
+        return Err(if tail.is_empty() {
             "git clone failed.".to_string()
         } else {
-            stderr
+            tail.to_string()
         });
     }
     if !dest.is_dir() {
