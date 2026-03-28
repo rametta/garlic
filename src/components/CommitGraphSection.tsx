@@ -774,7 +774,7 @@ export function CommitGraphSection({
                       aria-label={wipInteractive ? "Open first working tree diff" : undefined}
                       className={`absolute top-0 right-0 left-0 flex gap-x-1.5 px-0.5 ${
                         wipInteractive
-                          ? "cursor-pointer transition-colors hover:bg-base-300/60 hover:ring-1 hover:ring-base-content/10 hover:ring-inset focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40"
+                          ? "cursor-pointer transition-colors hover:bg-base-300/60 hover:ring-1 hover:ring-base-content/10 hover:ring-inset focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:outline-none"
                           : ""
                       }`}
                       style={{

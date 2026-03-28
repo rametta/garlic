@@ -45,7 +45,6 @@ import type {
 } from "./repoTypes";
 import { DEFAULT_OPENAI_MODEL, generateCommitTitleFromStagedDiff } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
-import { useToast } from "./toastContext";
 import {
   buildGraphExportDefaultFilename,
   filterGraphCommits,
@@ -678,7 +677,6 @@ export default function App({
   const [openaiSettingsOpen, setOpenaiSettingsOpen] = useState(false);
   const [openaiSettingsBusy, setOpenaiSettingsBusy] = useState(false);
   const [aiCommitBusy, setAiCommitBusy] = useState(false);
-  const toast = useToast();
 
   const closeOpenAiSettingsDialog = useCallback(() => {
     setOpenaiSettingsOpen(false);
@@ -1657,14 +1655,13 @@ export default function App({
           branch: branchName,
         });
         await refreshAfterMutation();
-        toast("Pull completed.", "success");
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation, toast],
+    [repo, refreshAfterMutation],
   );
 
   const deleteLocalBranch = useCallback(
@@ -1751,14 +1748,13 @@ export default function App({
           interactive,
         });
         await refreshAfterMutation();
-        toast("Rebase completed.", "success");
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation, toast],
+    [repo, refreshAfterMutation],
   );
 
   const mergeBranchIntoCurrent = useCallback(
@@ -1777,14 +1773,13 @@ export default function App({
           branchOrRef: onto,
         });
         await refreshAfterMutation();
-        toast("Merge completed.", "success");
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation, toast],
+    [repo, refreshAfterMutation],
   );
 
   const runBranchSidebarContextMenu = useCallback(
@@ -1891,14 +1886,13 @@ export default function App({
           interactive: false,
         });
         await refreshAfterMutation();
-        toast("Rebase completed.", "success");
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, commits, refreshAfterMutation, toast],
+    [repo, commits, refreshAfterMutation],
   );
 
   const discardPathChanges = useCallback(
@@ -2611,7 +2605,6 @@ export default function App({
         skipHooks: pushSkipHooks,
       });
       await refreshAfterMutation();
-      toast("Push completed.", "success");
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -2634,7 +2627,6 @@ export default function App({
         skipHooks: pushSkipHooks,
       });
       await refreshAfterMutation();
-      toast("Commit and push completed.", "success");
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
       void refreshAfterMutation();
@@ -4058,7 +4050,7 @@ export default function App({
                       {hasOpenAiApiKey ? (
                         <button
                           type="button"
-                          className="btn btn-primary btn-sm"
+                          className="btn btn-sm btn-primary"
                           disabled={!canUseAiCommit}
                           title="Generate a commit message from staged changes using OpenAI"
                           aria-label="Generate a commit message from staged changes using OpenAI"
