@@ -1,3 +1,5 @@
+[![Release](https://github.com/rametta/garlic/actions/workflows/release.yml/badge.svg)](https://github.com/rametta/garlic/actions/workflows/release.yml)
+
 # 🧄 Garlic
 
 **Garlic** is a modern and sleek desktop Git client, built on [Tauri](https://tauri.app), inspired by [GitKraken](https://www.gitkraken.com).
