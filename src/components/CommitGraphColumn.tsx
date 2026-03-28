@@ -72,6 +72,7 @@ export function CommitGraphColumn({
             strokeWidth={1.75}
             strokeLinecap="round"
             strokeLinejoin="round"
+            strokeDasharray={e.dashed ? "2 3" : undefined}
           />
         ))}
         {layout.lanes.map((lane, row) => (
@@ -82,6 +83,7 @@ export function CommitGraphColumn({
             r={4.25}
             className="fill-base-100 stroke-[1.5]"
             style={{ stroke: layout.laneColors[lane % layout.laneColors.length] }}
+            strokeDasharray={layout.stashRows[row] ? "2 3" : undefined}
           />
         ))}
       </g>

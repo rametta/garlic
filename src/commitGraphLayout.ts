@@ -7,6 +7,7 @@ export const COMMIT_GRAPH_PAD_X = 6;
 export interface CommitGraphCommit {
   hash: string;
   parentHashes: string[];
+  stashRef?: string | null;
 }
 
 export interface BranchTip {
@@ -19,12 +20,14 @@ export interface CommitGraphLayout {
   graphWidthPx: number;
   /** Lane index per row (same order as `commits`, newest first). */
   lanes: number[];
+  /** True for rows that render a stash WIP commit (`stash@{n}`). */
+  stashRows: boolean[];
   /** Local branch names (sorted) for labels; not 1:1 with lane indices when lanes > branches. */
   branchNamesSorted: string[];
   /** Stroke color per lane index. */
   laneColors: string[];
   /** SVG path `d` for each edge (parent is older = lower on screen = larger row index). */
-  edgePaths: { d: string; color: string }[];
+  edgePaths: { d: string; color: string; dashed?: boolean }[];
 }
 
 function branchLaneHue(index: number): string {
@@ -105,9 +108,11 @@ function assignLanesFromDag(
 ): Map<string, number> {
   const hashSet = new Set(commits.map((c) => c.hash));
   const indexByHash = new Map(commits.map((c, i) => [c.hash, i] as const));
+  const isStashCommit = (c: CommitGraphCommit) => Boolean(c.stashRef?.trim());
 
   const children = new Map<string, string[]>();
   for (const c of commits) {
+    if (isStashCommit(c)) continue;
     for (const p of c.parentHashes) {
       if (!hashSet.has(p)) continue;
       let list = children.get(p);
@@ -133,6 +138,13 @@ function assignLanesFromDag(
 
     if (parentsInGraph.length === 0) {
       laneByHash.set(c.hash, 0);
+      continue;
+    }
+
+    // Stashes should read like detached side markers, not branch-mainline history.
+    if (isStashCommit(c)) {
+      laneByHash.set(c.hash, nextLane);
+      nextLane += 1;
       continue;
     }
 
@@ -283,6 +295,7 @@ export function computeCommitGraphLayout(
     commits.length === 0 ? new Map<string, number>() : assignLanesFromDag(commits, mainlineHashes);
 
   const logicalLanes: number[] = commits.map((c) => laneByHash.get(c.hash) ?? 0);
+  const stashRows = commits.map((c) => Boolean(c.stashRef?.trim()));
   const indexByHash = new Map(commits.map((c, i) => [c.hash, i] as const));
 
   const intervals =
@@ -303,7 +316,7 @@ export function computeCommitGraphLayout(
   const cx = (lane: number) => pad + lane * laneW + laneW / 2;
   const cy = (row: number) => row * rowH + rowH / 2;
 
-  const edgePaths: { d: string; color: string }[] = [];
+  const edgePaths: { d: string; color: string; dashed?: boolean }[] = [];
 
   for (let i = 0; i < commits.length; i++) {
     const c = commits[i];
@@ -321,7 +334,7 @@ export function computeCommitGraphLayout(
         pi === 0
           ? laneColors[(lanes[i] ?? 0) % laneColors.length]
           : laneColors[(lanes[j] ?? 0) % laneColors.length];
-      edgePaths.push({ d, color });
+      edgePaths.push({ d, color, dashed: stashRows[i] });
       pi += 1;
     }
   }
@@ -330,6 +343,7 @@ export function computeCommitGraphLayout(
     laneCount,
     graphWidthPx,
     lanes,
+    stashRows,
     branchNamesSorted,
     laneColors,
     edgePaths,

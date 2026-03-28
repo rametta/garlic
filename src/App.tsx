@@ -983,6 +983,19 @@ export default function App({
     () => filterGraphCommits(commits, graphAuthorFilter, graphDateFrom, graphDateTo),
     [commits, graphAuthorFilter, graphDateFrom, graphDateTo],
   );
+  const graphDisplayCommits = useMemo(() => {
+    const hiddenHashes = new Set<string>();
+    const filteredHashes = new Set(graphFilteredCommits.map((c) => c.hash));
+    for (const c of graphFilteredCommits) {
+      if (!c.stashRef?.trim()) continue;
+      for (const helperHash of c.parentHashes.slice(1)) {
+        if (filteredHashes.has(helperHash)) {
+          hiddenHashes.add(helperHash);
+        }
+      }
+    }
+    return graphFilteredCommits.filter((c) => !hiddenHashes.has(c.hash));
+  }, [graphFilteredCommits]);
 
   const graphCommitFiltersActive =
     graphAuthorFilter.trim().length > 0 ||
@@ -2876,7 +2889,11 @@ export default function App({
       return null;
     }
     return computeCommitGraphLayout(
-      graphFilteredCommits.map((c) => ({ hash: c.hash, parentHashes: c.parentHashes })),
+      graphDisplayCommits.map((c) => ({
+        hash: c.hash,
+        parentHashes: c.parentHashes,
+        stashRef: c.stashRef,
+      })),
       graphBranchTips,
       currentBranchName,
     );
@@ -2885,7 +2902,7 @@ export default function App({
     selectedDiffPath,
     fileBlamePath,
     fileHistoryPath,
-    graphFilteredCommits,
+    graphDisplayCommits,
     graphBranchTips,
     currentBranchName,
   ]);
@@ -4115,7 +4132,7 @@ export default function App({
                               </div>
                             ) : (
                               <CommitGraphSection
-                                commits={graphFilteredCommits}
+                                commits={graphDisplayCommits}
                                 commitGraphLayout={commitGraphLayout!}
                                 localBranches={localBranches}
                                 remoteBranches={remoteBranches}
