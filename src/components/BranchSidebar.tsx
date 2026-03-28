@@ -96,12 +96,16 @@ function BranchPanel({
           }}
           aria-label={`Show or hide ${title}`}
         />
-        <div className="collapse-title !block min-h-0 min-w-0 border-b border-base-300/80 !px-3 !py-2 !pr-9 !text-left">
+        <div
+          className={`collapse-title block! min-h-0 min-w-0 px-3! py-2! pr-9! text-left! ${
+            open ? "border-b border-base-300/80" : ""
+          }`}
+        >
           <h2 className="m-0 card-title text-xs font-semibold tracking-wide uppercase opacity-70">
             {title} <span className="tabular-nums opacity-90">({entityCount})</span>
           </h2>
         </div>
-        <div className="collapse-content !flex !min-h-0 flex-col gap-0 !overflow-hidden !px-0 !pb-0">
+        <div className="collapse-content flex! min-h-0! flex-col gap-0 overflow-hidden! px-0! pb-0!">
           {belowHeader ? (
             <div className="shrink-0 border-b border-base-300">{belowHeader}</div>
           ) : null}
