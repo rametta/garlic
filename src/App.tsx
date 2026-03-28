@@ -64,6 +64,7 @@ export type {
 } from "./repoTypes";
 
 /** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
+const WINDOW_FOCUS_REFRESH_DELAY_MS = 250;
 
 /** Initial row height for virtualized “files in commit” list (`measureElement` refines). */
 const COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX = 44;
@@ -1552,6 +1553,23 @@ export default function App({
     [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse],
   );
 
+  useEffect(() => {
+    if (!repo?.path || repo.error || loading) return;
+    let timeoutId: number | null = null;
+    const scheduleRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => {
+        void refreshAfterMutation({ fromFocus: true });
+      }, WINDOW_FOCUS_REFRESH_DELAY_MS);
+    };
+    window.addEventListener("focus", scheduleRefresh);
+    return () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      window.removeEventListener("focus", scheduleRefresh);
+    };
+  }, [repo?.path, repo?.error, loading, refreshAfterMutation]);
+
   const openCreateBranchDialog = useCallback(() => {
     setCreateBranchStartCommit(null);
     setNewBranchName("");
@@ -2994,7 +3012,7 @@ export default function App({
               <label className="form-control mt-3 block w-full">
                 <span className="label-text mb-1">Annotation message (optional)</span>
                 <textarea
-                  className="textarea-bordered textarea min-h-[4.5rem] w-full font-mono text-sm textarea-sm"
+                  className="textarea-bordered textarea min-h-18 w-full font-mono text-sm textarea-sm"
                   value={createTagMessage}
                   placeholder="Leave empty for a lightweight tag"
                   disabled={branchBusy === "tag"}

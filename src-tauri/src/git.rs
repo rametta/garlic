@@ -1103,6 +1103,7 @@ pub fn list_tags(path: String) -> Result<Vec<TagEntry>, String> {
         &[
             "for-each-ref",
             "--sort=refname",
+            "--sort=-creatordate",
             "refs/tags",
             "--format=%(refname:short)\t%(*objectname)\t%(objectname)",
         ],
@@ -1139,7 +1140,6 @@ pub fn list_tags(path: String) -> Result<Vec<TagEntry>, String> {
             tip_hash,
         });
     }
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)
 }
 
