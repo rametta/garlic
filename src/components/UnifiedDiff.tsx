@@ -14,6 +14,7 @@ import {
 import type { BundledLanguage, Highlighter } from "shiki";
 
 import { diffFileDisplayPath, pathToShikiLang } from "../diffLanguage";
+import { buildChangeBlockPatchMap, buildHunkPatch, extractPatchHeaderLines } from "../diffPatch";
 import { useDiffShikiTheme, useShikiHighlighter } from "../diffShiki";
 
 /** Shiki returns CSS kebab-case keys; React `style` expects camelCase. */
@@ -32,6 +33,19 @@ export type BinaryImagePreview = {
   beforeUrl: string | null;
   afterUrl: string | null;
   fileLabel: string;
+};
+
+export type PartialDiffAction = {
+  kind: "stage" | "unstage";
+  busy?: boolean;
+  onApplyPatch: (patch: string) => void;
+};
+
+export type HunkAction = {
+  label: string;
+  busy?: boolean;
+  buttonClassName?: string;
+  onApplyPatch: (patch: string) => void;
 };
 
 function BinaryImagePreview({ beforeUrl, afterUrl, fileLabel }: BinaryImagePreview) {
@@ -137,12 +151,16 @@ function DiffGridRow({
   binary,
   highlighter,
   shikiTheme,
+  partialAction,
+  partialPatch,
 }: {
   change: ChangeData;
   lang: string | null;
   binary: boolean;
   highlighter: Highlighter | null;
   shikiTheme: "github-light" | "github-dark";
+  partialAction?: PartialDiffAction | null;
+  partialPatch?: string | null;
 }) {
   const oldN = computeOldLineNumber(change);
   const newN = computeNewLineNumber(change);
@@ -165,6 +183,12 @@ function DiffGridRow({
         : "diff-code-normal";
 
   const content = change.content.length === 0 ? " " : change.content;
+  const canApplyPartialPatch = Boolean(
+    partialAction && partialPatch && (isInsert(change) || isDelete(change)),
+  );
+  const partialActionLabel = partialAction?.kind === "unstage" ? "−" : "+";
+  const partialActionTitle =
+    partialAction?.kind === "unstage" ? "Unstage this changed block" : "Stage this changed block";
 
   const lineTokens = useMemo(() => {
     if (binary || !highlighter || !lang) return null;
@@ -182,7 +206,11 @@ function DiffGridRow({
 
   return (
     <div
-      className="diff-grid-row grid w-full min-w-0 grid-cols-[minmax(4ch,7ch)_minmax(4ch,7ch)_minmax(0,1fr)] font-mono text-[0.8125rem] leading-relaxed text-(--diff-text-color)"
+      className={`diff-grid-row grid w-full min-w-0 font-mono text-[0.8125rem] leading-relaxed text-(--diff-text-color) ${
+        partialAction
+          ? "grid-cols-[minmax(4ch,7ch)_minmax(4ch,7ch)_minmax(0,1fr)_2.25rem]"
+          : "grid-cols-[minmax(4ch,7ch)_minmax(4ch,7ch)_minmax(0,1fr)]"
+      }`}
       data-change-key={getChangeKey(change)}
     >
       <div
@@ -208,6 +236,111 @@ function DiffGridRow({
             ))
           : content}
       </pre>
+      {partialAction ? (
+        <div className="flex items-start justify-center px-1 py-0.5">
+          {canApplyPartialPatch ? (
+            <button
+              type="button"
+              className="btn btn-square min-h-6 min-w-6 px-0 font-mono text-sm leading-none btn-ghost btn-xs"
+              disabled={partialAction.busy}
+              aria-label={partialActionTitle}
+              title={partialActionTitle}
+              onClick={() => {
+                if (!partialPatch) return;
+                partialAction.onApplyPatch(partialPatch);
+              }}
+            >
+              {partialActionLabel}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function UnifiedDiffHunk({
+  hunk,
+  fileIndex,
+  hunkIndex,
+  lang,
+  binary,
+  headerLines,
+  highlighter,
+  shikiTheme,
+  partialAction,
+  secondaryHunkAction,
+}: {
+  hunk: HunkData;
+  fileIndex: number;
+  hunkIndex: number;
+  lang: string | null;
+  binary: boolean;
+  headerLines: string[];
+  highlighter: Highlighter | null;
+  shikiTheme: "github-light" | "github-dark";
+  partialAction?: PartialDiffAction | null;
+  secondaryHunkAction?: HunkAction | null;
+}) {
+  const hunkPatch = useMemo(
+    () => (!binary && partialAction ? buildHunkPatch(headerLines, hunk) : null),
+    [binary, partialAction, headerLines, hunk],
+  );
+  const changeBlockPatches = useMemo(
+    () => (!binary && partialAction ? buildChangeBlockPatchMap(headerLines, hunk) : new Map()),
+    [binary, partialAction, headerLines, hunk],
+  );
+  const patchActionLabel = partialAction?.kind === "unstage" ? "Unstage hunk" : "Stage hunk";
+
+  return (
+    <div key={hunkKey(hunk, fileIndex, hunkIndex)} className="flex min-w-0 flex-col">
+      <div className="diff-hunk-meta flex items-center justify-between gap-2 border-b border-base-300/80 px-2 py-1 font-mono text-[0.65rem] text-base-content/60 select-none">
+        <span className="min-w-0 flex-1 truncate">{hunk.content.trim()}</span>
+        {!binary && hunkPatch && (partialAction || secondaryHunkAction) ? (
+          <div className="flex shrink-0 items-center gap-1">
+            {secondaryHunkAction ? (
+              <button
+                type="button"
+                className={`btn h-auto min-h-6 px-2 font-sans text-[0.65rem] tracking-normal btn-xs ${
+                  secondaryHunkAction.buttonClassName ?? "btn-ghost"
+                }`}
+                disabled={secondaryHunkAction.busy}
+                onClick={() => {
+                  secondaryHunkAction.onApplyPatch(hunkPatch);
+                }}
+              >
+                {secondaryHunkAction.label}
+              </button>
+            ) : null}
+            {partialAction ? (
+              <button
+                type="button"
+                className={`btn h-auto min-h-6 px-2 font-sans text-[0.65rem] tracking-normal btn-xs ${
+                  partialAction.kind === "stage" ? "btn-success" : "btn-ghost"
+                }`}
+                disabled={partialAction.busy}
+                onClick={() => {
+                  partialAction.onApplyPatch(hunkPatch);
+                }}
+              >
+                {patchActionLabel}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {hunk.changes.map((change) => (
+        <DiffGridRow
+          key={getChangeKey(change)}
+          change={change}
+          lang={lang}
+          binary={binary}
+          highlighter={highlighter}
+          shikiTheme={shikiTheme}
+          partialAction={partialAction}
+          partialPatch={changeBlockPatches.get(getChangeKey(change)) ?? null}
+        />
+      ))}
     </div>
   );
 }
@@ -215,15 +348,21 @@ function DiffGridRow({
 function UnifiedDiffFile({
   file,
   fileIndex,
+  headerLines,
   highlighter,
   shikiTheme,
   hideBinaryEmptyHunkPlaceholder,
+  partialAction,
+  secondaryHunkAction,
 }: {
   file: FileData;
   fileIndex: number;
+  headerLines: string[];
   highlighter: Highlighter | null;
   shikiTheme: "github-light" | "github-dark";
   hideBinaryEmptyHunkPlaceholder: boolean;
+  partialAction?: PartialDiffAction | null;
+  secondaryHunkAction?: HunkAction | null;
 }) {
   const path = diffFileDisplayPath(file);
   const lang = useMemo(() => pathToShikiLang(path), [path]);
@@ -245,24 +384,19 @@ function UnifiedDiffFile({
   return (
     <div className="unified-diff-file flex min-w-0 flex-col gap-0">
       {file.hunks.map((hunk, hi) => (
-        <div key={hunkKey(hunk, fileIndex, hi)} className="flex min-w-0 flex-col">
-          <div
-            className="diff-hunk-meta border-b border-base-300/80 px-2 py-1 font-mono text-[0.65rem] text-base-content/60 select-none"
-            aria-hidden
-          >
-            {hunk.content.trim()}
-          </div>
-          {hunk.changes.map((change) => (
-            <DiffGridRow
-              key={getChangeKey(change)}
-              change={change}
-              lang={lang}
-              binary={binary}
-              highlighter={highlighter}
-              shikiTheme={shikiTheme}
-            />
-          ))}
-        </div>
+        <UnifiedDiffHunk
+          key={hunkKey(hunk, fileIndex, hi)}
+          hunk={hunk}
+          fileIndex={fileIndex}
+          hunkIndex={hi}
+          lang={lang}
+          binary={binary}
+          headerLines={headerLines}
+          highlighter={highlighter}
+          shikiTheme={shikiTheme}
+          partialAction={partialAction}
+          secondaryHunkAction={secondaryHunkAction}
+        />
       ))}
     </div>
   );
@@ -272,11 +406,16 @@ export function UnifiedDiff({
   text,
   emptyLabel,
   binaryImagePreview,
+  partialAction,
+  secondaryHunkAction,
 }: {
   text: string;
   emptyLabel: ReactNode;
   binaryImagePreview?: BinaryImagePreview | null;
+  partialAction?: PartialDiffAction | null;
+  secondaryHunkAction?: HunkAction | null;
 }): ReactNode {
+  const headerLines = useMemo(() => extractPatchHeaderLines(text), [text]);
   const parsed = useMemo(() => {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -327,7 +466,10 @@ export function UnifiedDiff({
       {showImagePreview ? <BinaryImagePreview {...binaryImagePreview} /> : null}
       <UnifiedDiffWithHighlight
         parsedFiles={parsed.files}
+        headerLines={headerLines}
         hideBinaryEmptyHunkPlaceholder={Boolean(showImagePreview)}
+        partialAction={partialAction}
+        secondaryHunkAction={secondaryHunkAction}
       />
     </div>
   );
@@ -335,10 +477,16 @@ export function UnifiedDiff({
 
 function UnifiedDiffWithHighlight({
   parsedFiles,
+  headerLines,
   hideBinaryEmptyHunkPlaceholder,
+  partialAction,
+  secondaryHunkAction,
 }: {
   parsedFiles: FileData[];
+  headerLines: string[];
   hideBinaryEmptyHunkPlaceholder: boolean;
+  partialAction?: PartialDiffAction | null;
+  secondaryHunkAction?: HunkAction | null;
 }) {
   const highlighter = useShikiHighlighter();
   const shikiTheme = useDiffShikiTheme();
@@ -351,9 +499,12 @@ function UnifiedDiffWithHighlight({
             key={fileKey(file, i)}
             file={file}
             fileIndex={i}
+            headerLines={headerLines}
             highlighter={highlighter}
             shikiTheme={shikiTheme}
             hideBinaryEmptyHunkPlaceholder={hideBinaryEmptyHunkPlaceholder}
+            partialAction={partialAction}
+            secondaryHunkAction={secondaryHunkAction}
           />
         ))}
       </div>

@@ -199,6 +199,26 @@ export interface CommitFileEntry {
   stats: LineStat;
 }
 
+interface CommitCoAuthor {
+  name: string;
+  email: string;
+}
+
+interface CommitDetails {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  body: string;
+  author: string;
+  authorEmail: string;
+  authorDate: string;
+  committer: string;
+  committerEmail: string;
+  committerDate: string;
+  parentHashes: string[];
+  coAuthors: CommitCoAuthor[];
+}
+
 /** Raw bytes for diff image preview (`get_*_file_blob_pair`). */
 interface FileBlobPair {
   beforeBase64: string | null;
@@ -297,6 +317,13 @@ function invokeErrorMessage(e: unknown): string {
     if (typeof m === "string") return m;
   }
   return String(e);
+}
+
+function stripCoAuthorTrailers(body: string): string {
+  const lines = body.split(/\r?\n/);
+  const kept = lines.filter((line) => !line.trim().startsWith("Co-authored-by:"));
+  while (kept.length > 0 && kept[kept.length - 1]?.trim() === "") kept.pop();
+  return kept.join("\n").trim();
 }
 
 function DismissibleAlert({
@@ -617,6 +644,10 @@ export default function App({
   const [commitBrowseFiles, setCommitBrowseFiles] = useState<CommitFileEntry[]>([]);
   const [commitBrowseLoading, setCommitBrowseLoading] = useState(false);
   const [commitBrowseError, setCommitBrowseError] = useState<string | null>(null);
+  const [commitDetails, setCommitDetails] = useState<CommitDetails | null>(null);
+  const [commitDetailsLoading, setCommitDetailsLoading] = useState(false);
+  const [commitDetailsError, setCommitDetailsError] = useState<string | null>(null);
+  const [commitDetailsExpanded, setCommitDetailsExpanded] = useState(false);
   const [commitSignature, setCommitSignature] = useState<{
     loading: boolean;
     verified: boolean | null;
@@ -822,6 +853,10 @@ export default function App({
     () => (commitBrowseHash ? commits.find((c) => c.hash === commitBrowseHash) : undefined),
     [commits, commitBrowseHash],
   );
+  const commitDescription = useMemo(
+    () => (commitDetails ? stripCoAuthorTrailers(commitDetails.body) : ""),
+    [commitDetails],
+  );
 
   useEffect(() => {
     if (!repo?.path || repo.error) return;
@@ -981,6 +1016,10 @@ export default function App({
     setCommitBrowseFiles([]);
     setCommitBrowseLoading(false);
     setCommitBrowseError(null);
+    setCommitDetails(null);
+    setCommitDetailsLoading(false);
+    setCommitDetailsError(null);
+    setCommitDetailsExpanded(false);
     setCommitSignature({ loading: false, verified: null });
     setCommitDiffPath(null);
     setCommitDiffText(null);
@@ -1207,9 +1246,35 @@ export default function App({
       setCommitDiffText(null);
       setCommitDiffError(null);
       setCommitDiffImagePreview(null);
+      setCommitDetails(null);
+      setCommitDetailsLoading(true);
+      setCommitDetailsError(null);
+      setCommitDetailsExpanded(false);
       setCommitBrowseLoading(true);
       setCommitBrowseError(null);
       setCommitSignature({ loading: true, verified: null });
+
+      void invoke<CommitDetails>("get_commit_details", {
+        path: pathAtStart,
+        commitHash: hash,
+      })
+        .then((details) => {
+          if (activeRepoPathRef.current !== pathAtStart || seq !== selectCommitSeqRef.current)
+            return;
+          setCommitDetails(details);
+          setCommitDetailsError(null);
+        })
+        .catch((e) => {
+          if (activeRepoPathRef.current !== pathAtStart || seq !== selectCommitSeqRef.current)
+            return;
+          setCommitDetails(null);
+          setCommitDetailsError(invokeErrorMessage(e));
+        })
+        .finally(() => {
+          if (activeRepoPathRef.current === pathAtStart && seq === selectCommitSeqRef.current) {
+            setCommitDetailsLoading(false);
+          }
+        });
 
       try {
         const files = await invoke<CommitFileEntry[]>("list_commit_files", {
@@ -2216,7 +2281,6 @@ export default function App({
         const p = e.payload;
         if (activeRepoPathRef.current !== p.repoPath) return;
         gitStreamSessionRef.current = p.sessionId;
-        setGitCommandSectionOpen(true);
         setGitCommandStream({
           sessionId: p.sessionId,
           operation: p.operation,
@@ -2570,6 +2634,64 @@ export default function App({
       });
     }
   }
+
+  const runPartialStagePatch = useCallback(
+    async (filePath: string, mode: "stage" | "unstage", patch: string) => {
+      if (!repo?.path || repo.error || !filePath.trim() || !patch.trim()) return;
+      if (syncingStagePaths.has(filePath)) return;
+      setOperationError(null);
+      setSyncingStagePaths((prev) => {
+        const next = new Set(prev);
+        next.add(filePath);
+        return next;
+      });
+      try {
+        if (mode === "stage") {
+          await invoke("stage_patch", { path: repo.path, patch });
+        } else {
+          await invoke("unstage_patch", { path: repo.path, patch });
+        }
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+        await refreshAfterMutation();
+      } finally {
+        setSyncingStagePaths((prev) => {
+          const next = new Set(prev);
+          next.delete(filePath);
+          return next;
+        });
+      }
+    },
+    [repo, syncingStagePaths, refreshAfterMutation],
+  );
+
+  const runDiscardHunkPatch = useCallback(
+    async (filePath: string, patch: string) => {
+      if (!repo?.path || repo.error || !filePath.trim() || !patch.trim()) return;
+      if (syncingStagePaths.has(filePath)) return;
+      setOperationError(null);
+      setSyncingStagePaths((prev) => {
+        const next = new Set(prev);
+        next.add(filePath);
+        return next;
+      });
+      try {
+        await invoke("discard_patch", { path: repo.path, patch });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+        await refreshAfterMutation();
+      } finally {
+        setSyncingStagePaths((prev) => {
+          const next = new Set(prev);
+          next.delete(filePath);
+          return next;
+        });
+      }
+    },
+    [repo, syncingStagePaths, refreshAfterMutation],
+  );
 
   async function onCommit() {
     if (!repo?.path || repo.error) return;
@@ -3444,6 +3566,24 @@ export default function App({
                                                   }
                                                 : null
                                             }
+                                            partialAction={
+                                              selectedDiffSide === "staged" && selectedDiffPath
+                                                ? {
+                                                    kind: "unstage",
+                                                    busy:
+                                                      stageCommitBusy ||
+                                                      commitPushBusy ||
+                                                      syncingStagePaths.has(selectedDiffPath),
+                                                    onApplyPatch: (patch) => {
+                                                      void runPartialStagePatch(
+                                                        selectedDiffPath,
+                                                        "unstage",
+                                                        patch,
+                                                      );
+                                                    },
+                                                  }
+                                                : null
+                                            }
                                           />
                                         </div>
                                       ) : null}
@@ -3465,6 +3605,42 @@ export default function App({
                                                     beforeUrl: diffImagePreview.before,
                                                     afterUrl: diffImagePreview.after,
                                                     fileLabel: selectedDiffPath,
+                                                  }
+                                                : null
+                                            }
+                                            partialAction={
+                                              selectedDiffSide === "unstaged" && selectedDiffPath
+                                                ? {
+                                                    kind: "stage",
+                                                    busy:
+                                                      stageCommitBusy ||
+                                                      commitPushBusy ||
+                                                      syncingStagePaths.has(selectedDiffPath),
+                                                    onApplyPatch: (patch) => {
+                                                      void runPartialStagePatch(
+                                                        selectedDiffPath,
+                                                        "stage",
+                                                        patch,
+                                                      );
+                                                    },
+                                                  }
+                                                : null
+                                            }
+                                            secondaryHunkAction={
+                                              selectedDiffSide === "unstaged" && selectedDiffPath
+                                                ? {
+                                                    label: "Discard hunk",
+                                                    buttonClassName: "btn-error",
+                                                    busy:
+                                                      stageCommitBusy ||
+                                                      commitPushBusy ||
+                                                      syncingStagePaths.has(selectedDiffPath),
+                                                    onApplyPatch: (patch) => {
+                                                      void runDiscardHunkPatch(
+                                                        selectedDiffPath,
+                                                        patch,
+                                                      );
+                                                    },
                                                   }
                                                 : null
                                             }
@@ -3596,47 +3772,26 @@ export default function App({
                               </div>
                             ) : !listsError && commitBrowseHash ? (
                               <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden px-4 pt-3 pb-4">
-                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
-                                  <button
-                                    type="button"
-                                    className="btn shrink-0 btn-xs btn-primary"
-                                    onClick={clearCommitBrowse}
-                                  >
-                                    Back to commits
-                                  </button>
-                                  <div className="max-w-[min(100%,20rem)] min-w-0 flex-1 text-right">
-                                    {commitBrowseMeta?.author.trim() ? (
-                                      <p className="m-0 text-[0.7rem] leading-snug font-medium text-base-content/90">
-                                        {commitBrowseMeta.author.trim()}
+                                <div className="shrink-0 rounded-xl border border-base-300/80 bg-base-200/35 p-3">
+                                  <div className="flex flex-wrap items-start justify-between gap-2">
+                                    <button
+                                      type="button"
+                                      className="btn shrink-0 btn-xs btn-primary"
+                                      onClick={clearCommitBrowse}
+                                    >
+                                      Back to commits
+                                    </button>
+                                    <div className="min-w-0 text-right">
+                                      <p className="m-0 font-mono text-[0.65rem] text-base-content/60">
+                                        {commitDetails?.shortHash ??
+                                          commitBrowseMeta?.shortHash ??
+                                          commitBrowseHash.slice(0, 7)}
                                       </p>
-                                    ) : null}
-                                    {commitBrowseMeta?.authorEmail.trim() ? (
-                                      <code className="mt-0.5 block font-mono text-[0.6rem] leading-snug wrap-break-word text-base-content/65">
-                                        {commitBrowseMeta.authorEmail.trim()}
-                                      </code>
-                                    ) : null}
-                                    {commitSignature.loading ? (
-                                      <p
-                                        className={`mb-0 text-[0.6rem] text-base-content/50 ${
-                                          commitBrowseMeta?.author.trim() ||
-                                          commitBrowseMeta?.authorEmail.trim()
-                                            ? "mt-1"
-                                            : "mt-0"
-                                        }`}
-                                      >
-                                        Signature: checking…
-                                      </p>
-                                    ) : (
-                                      <p
-                                        className={`mb-0 text-[0.6rem] text-base-content/60 ${
-                                          commitBrowseMeta?.author.trim() ||
-                                          commitBrowseMeta?.authorEmail.trim()
-                                            ? "mt-1"
-                                            : "mt-0"
-                                        }`}
-                                      >
+                                      <p className="mt-0.5 mb-0 text-[0.65rem] text-base-content/55">
                                         Signature:{" "}
-                                        {commitSignature.verified === true ? (
+                                        {commitSignature.loading ? (
+                                          <span className="text-base-content/50">checking…</span>
+                                        ) : commitSignature.verified === true ? (
                                           <span className="text-success">verified</span>
                                         ) : commitSignature.verified === false ? (
                                           <span className="text-base-content/70">not verified</span>
@@ -3644,8 +3799,144 @@ export default function App({
                                           <span className="text-base-content/50">unknown</span>
                                         )}
                                       </p>
-                                    )}
+                                    </div>
                                   </div>
+                                  <div className="mt-2 flex items-center justify-between gap-2">
+                                    <p className="m-0 text-[0.68rem] text-base-content/55">
+                                      {commitDetails?.subject ??
+                                        commitBrowseMeta?.subject ??
+                                        commitBrowseHash.slice(0, 7)}
+                                    </p>
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-xs"
+                                      aria-expanded={commitDetailsExpanded}
+                                      onClick={() => {
+                                        setCommitDetailsExpanded((expanded) => !expanded);
+                                      }}
+                                    >
+                                      {commitDetailsExpanded ? "Hide details" : "Show details"}
+                                    </button>
+                                  </div>
+                                  {commitDetailsLoading ? (
+                                    <p className="mt-2 mb-0 text-xs text-base-content/60">
+                                      Loading commit details…
+                                    </p>
+                                  ) : commitDetailsError ? (
+                                    <DismissibleAlert
+                                      className="mt-3 alert py-2 text-xs alert-error"
+                                      onDismiss={() => {
+                                        setCommitDetailsError(null);
+                                      }}
+                                    >
+                                      <span className="wrap-break-word">{commitDetailsError}</span>
+                                    </DismissibleAlert>
+                                  ) : commitDetailsExpanded ? (
+                                    <>
+                                      {commitDescription ? (
+                                        <pre className="mt-2 mb-0 overflow-x-auto font-sans text-xs leading-relaxed whitespace-pre-wrap text-base-content/80">
+                                          {commitDescription}
+                                        </pre>
+                                      ) : null}
+                                      <div className="mt-3 grid gap-2 text-[0.68rem] leading-snug text-base-content/70 md:grid-cols-2">
+                                        <div className="min-w-0">
+                                          <div className="font-semibold tracking-wide text-base-content/45 uppercase">
+                                            Author
+                                          </div>
+                                          <div className="mt-0.5 text-base-content/90">
+                                            {commitDetails?.author.trim() ||
+                                              commitBrowseMeta?.author.trim() ||
+                                              "—"}
+                                          </div>
+                                          <code className="mt-0.5 block font-mono wrap-break-word text-base-content/60">
+                                            {commitDetails?.authorEmail.trim() ||
+                                              commitBrowseMeta?.authorEmail.trim() ||
+                                              "—"}
+                                          </code>
+                                          <div className="mt-0.5">
+                                            {formatDate(
+                                              commitDetails?.authorDate ??
+                                                commitBrowseMeta?.date ??
+                                                null,
+                                            ) ?? "—"}
+                                          </div>
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="font-semibold tracking-wide text-base-content/45 uppercase">
+                                            Committer
+                                          </div>
+                                          <div className="mt-0.5 text-base-content/90">
+                                            {commitDetails?.committer.trim() ||
+                                              commitDetails?.author.trim() ||
+                                              commitBrowseMeta?.author.trim() ||
+                                              "—"}
+                                          </div>
+                                          <code className="mt-0.5 block font-mono wrap-break-word text-base-content/60">
+                                            {commitDetails?.committerEmail.trim() ||
+                                              commitDetails?.authorEmail.trim() ||
+                                              commitBrowseMeta?.authorEmail.trim() ||
+                                              "—"}
+                                          </code>
+                                          <div className="mt-0.5">
+                                            {formatDate(
+                                              commitDetails?.committerDate ??
+                                                commitDetails?.authorDate ??
+                                                commitBrowseMeta?.date ??
+                                                null,
+                                            ) ?? "—"}
+                                          </div>
+                                        </div>
+                                        <div className="min-w-0 md:col-span-2">
+                                          <div className="font-semibold tracking-wide text-base-content/45 uppercase">
+                                            Metadata
+                                          </div>
+                                          <div className="mt-1 flex flex-wrap gap-1.5">
+                                            <span className="badge badge-ghost font-mono badge-sm">
+                                              {commitDetails?.hash ?? commitBrowseHash}
+                                            </span>
+                                            <span className="badge badge-ghost badge-sm">
+                                              {commitDetails?.parentHashes.length ??
+                                                commitBrowseMeta?.parentHashes.length ??
+                                                0}{" "}
+                                              parent
+                                              {(commitDetails?.parentHashes.length ??
+                                                commitBrowseMeta?.parentHashes.length ??
+                                                0) === 1
+                                                ? ""
+                                                : "s"}
+                                            </span>
+                                            {commitDetails?.coAuthors.length ? (
+                                              <span className="badge badge-ghost badge-sm">
+                                                {commitDetails.coAuthors.length} co-author
+                                                {commitDetails.coAuthors.length === 1 ? "" : "s"}
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                          {commitDetails?.parentHashes.length ? (
+                                            <code className="mt-1 block font-mono text-[0.62rem] wrap-break-word text-base-content/55">
+                                              Parents: {commitDetails.parentHashes.join(", ")}
+                                            </code>
+                                          ) : null}
+                                          {commitDetails?.coAuthors.length ? (
+                                            <div className="mt-2 flex flex-col gap-1">
+                                              {commitDetails.coAuthors.map((coAuthor) => (
+                                                <div key={`${coAuthor.name}<${coAuthor.email}>`}>
+                                                  <span className="text-base-content/85">
+                                                    {coAuthor.name || "Unknown co-author"}
+                                                  </span>
+                                                  {coAuthor.email ? (
+                                                    <code className="ml-1 font-mono text-base-content/55">
+                                                      {`<${coAuthor.email}>`}
+                                                    </code>
+                                                  ) : null}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    </>
+                                  ) : null}
                                 </div>
                                 <div className="flex min-h-0 min-w-0 flex-1 flex-row gap-3 overflow-hidden">
                                   <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-r border-base-300/80 pr-2">
@@ -3659,7 +3950,9 @@ export default function App({
                                         ) : null}
                                       </h2>
                                       <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
-                                        {commitBrowseMeta?.subject ?? commitBrowseHash.slice(0, 7)}
+                                        {commitDetails?.subject ??
+                                          commitBrowseMeta?.subject ??
+                                          commitBrowseHash.slice(0, 7)}
                                       </p>
                                     </div>
                                     <div className="flex min-h-0 flex-1 flex-col pt-2">

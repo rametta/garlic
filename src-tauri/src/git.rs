@@ -37,6 +37,30 @@ pub struct CommitEntry {
     pub stash_ref: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitCoAuthor {
+    pub name: String,
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDetails {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub body: String,
+    pub author: String,
+    pub author_email: String,
+    pub author_date: String,
+    pub committer: String,
+    pub committer_email: String,
+    pub committer_date: String,
+    pub parent_hashes: Vec<String>,
+    pub co_authors: Vec<CommitCoAuthor>,
+}
+
 /// One page from `list_graph_commits` / `list_branch_commits`. `has_more` is true when Git returned a full page (there may be older commits).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -589,6 +613,47 @@ fn git_output_raw(workdir: &Path, args: &[&str]) -> Result<String, String> {
     let out = String::from_utf8_lossy(&output.stdout).to_string();
     write_git_audit_line(workdir, args, true, "");
     Ok(out)
+}
+
+fn git_apply_patch(workdir: &Path, args: &[&str], patch: &str) -> Result<(), String> {
+    let trimmed = patch.trim();
+    if trimmed.is_empty() {
+        return Err("Patch cannot be empty.".to_string());
+    }
+    let mut child = git_cmd(workdir)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Could not run git: {e}"))?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "git apply: no stdin".to_string())?;
+        stdin
+            .write_all(trimmed.as_bytes())
+            .map_err(|e| format!("Could not write patch to git apply: {e}"))?;
+        stdin
+            .write_all(b"\n")
+            .map_err(|e| format!("Could not finalize patch for git apply: {e}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Could not wait for git apply: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("git {} failed", args.join(" "))
+        } else {
+            stderr.clone()
+        };
+        write_git_audit_line(workdir, args, false, &msg);
+        return Err(msg);
+    }
+    write_git_audit_line(workdir, args, true, "");
+    Ok(())
 }
 
 /// `git diff` / `git diff --no-index` use exit status 1 when there are differences (POSIX).
@@ -1297,6 +1362,44 @@ fn parse_commit_log_lines(out: &str) -> Vec<CommitEntry> {
     commits
 }
 
+fn parse_co_author_trailers(body: &str) -> Vec<CommitCoAuthor> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("Co-authored-by:") else {
+            continue;
+        };
+        let value = rest.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let (name, email) = if let Some(lt) = value.rfind('<') {
+            let gt = value[lt..].find('>').map(|i| lt + i);
+            if let Some(gt_idx) = gt {
+                (
+                    value[..lt].trim().to_string(),
+                    value[lt + 1..gt_idx].trim().to_string(),
+                )
+            } else {
+                (value.to_string(), String::new())
+            }
+        } else {
+            (value.to_string(), String::new())
+        };
+        if name.is_empty() && email.is_empty() {
+            continue;
+        }
+        if out
+            .iter()
+            .any(|entry: &CommitCoAuthor| entry.name == name && entry.email == email)
+        {
+            continue;
+        }
+        out.push(CommitCoAuthor { name, email });
+    }
+    out
+}
+
 fn trim_graph_commits_page(mut commits: Vec<CommitEntry>) -> GraphCommitsPage {
     let has_more = commits.len() > GRAPH_COMMITS_PAGE_SIZE;
     if has_more {
@@ -1432,6 +1535,62 @@ pub fn list_graph_commits(
     let mut commits = parse_commit_log_lines(&out);
     annotate_stash_refs(&path_buf, &mut commits)?;
     Ok(trim_graph_commits_page(commits))
+}
+
+#[tauri::command]
+pub fn get_commit_details(path: String, commit_hash: String) -> Result<CommitDetails, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let hash = commit_hash.trim();
+    if hash.is_empty() {
+        return Err("Commit hash cannot be empty.".to_string());
+    }
+    let spec = format!("{hash}^{{commit}}");
+    git_output(&path_buf, &["rev-parse", "--verify", &spec])?;
+    const DETAILS_FORMAT: &str =
+        "%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%P";
+    let format_arg = format!("--format={DETAILS_FORMAT}");
+    let out = git_output(
+        &path_buf,
+        &["show", "-s", &format_arg, "--no-patch", hash],
+    )?;
+    let trimmed = out.trim_end_matches(['\r', '\n']);
+    let mut parts = trimmed.split('\0');
+    let hash = parts.next().unwrap_or_default().to_string();
+    let short_hash = parts.next().unwrap_or_default().to_string();
+    let subject = parts.next().unwrap_or_default().to_string();
+    let body = parts.next().unwrap_or_default().to_string();
+    let author = parts.next().unwrap_or_default().to_string();
+    let author_email = parts.next().unwrap_or_default().to_string();
+    let author_date = parts.next().unwrap_or_default().to_string();
+    let committer = parts.next().unwrap_or_default().to_string();
+    let committer_email = parts.next().unwrap_or_default().to_string();
+    let committer_date = parts.next().unwrap_or_default().to_string();
+    let parent_hashes = parts
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if hash.is_empty() || short_hash.is_empty() {
+        return Err("Failed to parse commit details.".to_string());
+    }
+    let co_authors = parse_co_author_trailers(&body);
+    Ok(CommitDetails {
+        hash,
+        short_hash,
+        subject,
+        body,
+        author,
+        author_email,
+        author_date,
+        committer,
+        committer_email,
+        committer_date,
+        parent_hashes,
+        co_authors,
+    })
 }
 
 #[tauri::command]
@@ -1877,6 +2036,24 @@ pub fn stage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn stage_patch(path: String, patch: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    git_apply_patch(
+        &path_buf,
+        &[
+            "apply",
+            "--cached",
+            "--unidiff-zero",
+            "--recount",
+            "--whitespace=nowarn",
+        ],
+        &patch,
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
@@ -1888,6 +2065,43 @@ pub fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
     git_output(
         &path_buf,
         &args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unstage_patch(path: String, patch: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    git_apply_patch(
+        &path_buf,
+        &[
+            "apply",
+            "--cached",
+            "--reverse",
+            "--unidiff-zero",
+            "--recount",
+            "--whitespace=nowarn",
+        ],
+        &patch,
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn discard_patch(path: String, patch: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    git_apply_patch(
+        &path_buf,
+        &[
+            "apply",
+            "--reverse",
+            "--unidiff-zero",
+            "--recount",
+            "--whitespace=nowarn",
+        ],
+        &patch,
     )?;
     Ok(())
 }
