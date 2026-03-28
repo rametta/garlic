@@ -301,7 +301,7 @@ function UnifiedDiffHunk({
             {secondaryHunkAction ? (
               <button
                 type="button"
-                className={`btn h-auto min-h-6 px-2 font-sans text-[0.65rem] tracking-normal btn-xs ${
+                className={`btn h-auto min-h-6 px-2 font-sans text-[0.65rem] tracking-normal btn-outline btn-xs ${
                   secondaryHunkAction.buttonClassName ?? "btn-ghost"
                 }`}
                 disabled={secondaryHunkAction.busy}
@@ -315,7 +315,7 @@ function UnifiedDiffHunk({
             {partialAction ? (
               <button
                 type="button"
-                className={`btn h-auto min-h-6 px-2 font-sans text-[0.65rem] tracking-normal btn-xs ${
+                className={`btn h-auto min-h-6 px-2 font-sans text-[0.65rem] tracking-normal btn-outline btn-xs ${
                   partialAction.kind === "stage" ? "btn-success" : "btn-ghost"
                 }`}
                 disabled={partialAction.busy}

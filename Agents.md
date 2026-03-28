@@ -54,4 +54,4 @@ Treat **`useEffect` as a last resort**. Prefer: **event handlers** and **data fr
 - `src-tauri/` — Rust, Tauri config, **invoke handlers** for Git.
 - `package.json` — frontend scripts; `tauri` CLI for dev/build.
 
-When adding behavior, extend **Tauri commands** + **typed TS wrappers** (`@tauri-apps/api` `invoke`) so the UI stays thin. Register new commands in `src-tauri/src/lib.rs` and allow them in `src-tauri/capabilities/default.json` when required.
+When adding behavior, extend **Tauri commands** + **typed TS wrappers** (`@tauri-apps/api` `invoke`) so the UI stays thin. Register new commands in `src-tauri/src/lib.rs` and always add new invoke commands to the allowlist in `src-tauri/permissions/repo.toml` so the frontend can call them. Update `src-tauri/capabilities/default.json` too when required.

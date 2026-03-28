@@ -1550,10 +1550,7 @@ pub fn get_commit_details(path: String, commit_hash: String) -> Result<CommitDet
     const DETAILS_FORMAT: &str =
         "%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%P";
     let format_arg = format!("--format={DETAILS_FORMAT}");
-    let out = git_output(
-        &path_buf,
-        &["show", "-s", &format_arg, "--no-patch", hash],
-    )?;
+    let out = git_output(&path_buf, &["show", "-s", &format_arg, "--no-patch", hash])?;
     let trimmed = out.trim_end_matches(['\r', '\n']);
     let mut parts = trimmed.split('\0');
     let hash = parts.next().unwrap_or_default().to_string();
