@@ -91,17 +91,20 @@ function remoteNameFromRemoteRef(fullRef: string): string | null {
 }
 
 /** Close only when mousedown and mouseup both happen on the backdrop (not after text-selection drags). */
-function useDialogBackdropClose() {
+function useDialogBackdropClose(onBackdropClose: () => void) {
   const downOnBackdrop = useRef(false);
   const onMouseDown = useCallback((e: MouseEvent<HTMLDialogElement>) => {
     downOnBackdrop.current = e.target === e.currentTarget;
   }, []);
-  const onMouseUp = useCallback((e: MouseEvent<HTMLDialogElement>) => {
-    if (e.target === e.currentTarget && downOnBackdrop.current) {
-      e.currentTarget.close();
-    }
-    downOnBackdrop.current = false;
-  }, []);
+  const onMouseUp = useCallback(
+    (e: MouseEvent<HTMLDialogElement>) => {
+      if (e.target === e.currentTarget && downOnBackdrop.current) {
+        onBackdropClose();
+      }
+      downOnBackdrop.current = false;
+    },
+    [onBackdropClose],
+  );
   return { onMouseDown, onMouseUp };
 }
 
@@ -933,7 +936,7 @@ export default function App({
   const inspectorFileCount = worktreeBrowseTarget
     ? worktreeBrowseFiles.length
     : commitBrowseFiles.length;
-  const createBranchDialogRef = useRef<HTMLDialogElement>(null);
+  const [createBranchDialogOpen, setCreateBranchDialogOpen] = useState(false);
   const commitBrowseFileListScrollRef = useRef<HTMLDivElement>(null);
   const commitBrowseFileVirtualizer = useVirtualizer({
     count: inspectorFileCount,
@@ -941,12 +944,9 @@ export default function App({
     estimateSize: () => COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX,
     overscan: 12,
   });
-  const cloneRepoDialogRef = useRef<HTMLDialogElement>(null);
-  const cloneRepoUrlInputRef = useRef<HTMLInputElement>(null);
+  const [cloneRepoDialogOpen, setCloneRepoDialogOpen] = useState(false);
   const [cloneRepoUrlDraft, setCloneRepoUrlDraft] = useState("https://github.com/");
-  const newBranchInputRef = useRef<HTMLInputElement>(null);
-  const editOriginUrlDialogRef = useRef<HTMLDialogElement>(null);
-  const editOriginUrlInputRef = useRef<HTMLInputElement>(null);
+  const [editOriginUrlDialogOpen, setEditOriginUrlDialogOpen] = useState(false);
   const [openaiApiKey, setOpenaiApiKey] = useState(() => initialOpenaiApiKey?.trim() ?? "");
   const [openaiModel, setOpenaiModel] = useState(
     () => initialOpenaiModel.trim() || DEFAULT_OPENAI_MODEL,
@@ -966,8 +966,7 @@ export default function App({
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
   /** When set, the create-branch dialog starts the branch at this commit instead of HEAD. */
   const [createBranchStartCommit, setCreateBranchStartCommit] = useState<string | null>(null);
-  const createTagDialogRef = useRef<HTMLDialogElement>(null);
-  const createTagNameInputRef = useRef<HTMLInputElement>(null);
+  const [createTagDialogOpen, setCreateTagDialogOpen] = useState(false);
   const [createTagCommit, setCreateTagCommit] = useState<string | null>(null);
   const [newTagName, setNewTagName] = useState("");
   const [createTagMessage, setCreateTagMessage] = useState("");
@@ -1728,20 +1727,18 @@ export default function App({
   const openCloneRepoDialog = useCallback(() => {
     setCloneRepoUrlDraft("https://github.com/");
     setOperationError(null);
-    cloneRepoDialogRef.current?.showModal();
-    requestAnimationFrame(() => {
-      const el = cloneRepoUrlInputRef.current;
-      if (el) {
-        el.focus();
-        el.select();
-      }
-    });
+    setCloneRepoDialogOpen(true);
+  }, []);
+
+  const closeCloneRepoDialog = useCallback(() => {
+    setCloneRepoDialogOpen(false);
+    setCloneRepoUrlDraft("https://github.com/");
   }, []);
 
   const submitCloneRepository = useCallback(async () => {
     const trimmed = cloneRepoUrlDraft.trim();
     if (!trimmed) return;
-    cloneRepoDialogRef.current?.close();
+    closeCloneRepoDialog();
     const parent = await open({
       directory: true,
       multiple: false,
@@ -1787,12 +1784,15 @@ export default function App({
       setOperationError(invokeErrorMessage(e));
       setLoading(false);
     }
-  }, [cloneRepoUrlDraft, handleCloneCompletePayload]);
+  }, [cloneRepoUrlDraft, closeCloneRepoDialog, handleCloneCompletePayload]);
 
-  const cloneRepoDialogBackdropClose = useDialogBackdropClose();
-  const createBranchDialogBackdropClose = useDialogBackdropClose();
-  const createTagDialogBackdropClose = useDialogBackdropClose();
-  const editOriginUrlDialogBackdropClose = useDialogBackdropClose();
+  const closeCreateTagDialog = useCallback(() => {
+    setCreateTagDialogOpen(false);
+    setNewTagName("");
+    setCreateTagMessage("");
+    setCreateTagFieldError(null);
+    setCreateTagCommit(null);
+  }, []);
 
   const refreshAfterMutation = useCallback(
     async (options?: { fromFocus?: boolean }) => {
@@ -1934,10 +1934,14 @@ export default function App({
     setNewBranchName("");
     setCreateBranchFieldError(null);
     setOperationError(null);
-    createBranchDialogRef.current?.showModal();
-    requestAnimationFrame(() => {
-      newBranchInputRef.current?.focus();
-    });
+    setCreateBranchDialogOpen(true);
+  }, []);
+
+  const closeCreateBranchDialog = useCallback(() => {
+    setCreateBranchDialogOpen(false);
+    setNewBranchName("");
+    setCreateBranchFieldError(null);
+    setCreateBranchStartCommit(null);
   }, []);
 
   const onStashPush = useCallback(async () => {
@@ -1970,18 +1974,21 @@ export default function App({
         remoteName: "origin",
       });
       setEditOriginUrl(url);
-      editOriginUrlDialogRef.current?.showModal();
-      queueMicrotask(() => {
-        const el = editOriginUrlInputRef.current;
-        if (el) {
-          el.focus();
-          el.select();
-        }
-      });
+      setEditOriginUrlDialogOpen(true);
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     }
   }, [repo]);
+
+  const closeEditOriginUrlDialog = useCallback(() => {
+    setEditOriginUrlDialogOpen(false);
+    setEditOriginUrl("");
+  }, []);
+
+  const cloneRepoDialogBackdropClose = useDialogBackdropClose(closeCloneRepoDialog);
+  const createBranchDialogBackdropClose = useDialogBackdropClose(closeCreateBranchDialog);
+  const createTagDialogBackdropClose = useDialogBackdropClose(closeCreateTagDialog);
+  const editOriginUrlDialogBackdropClose = useDialogBackdropClose(closeEditOriginUrlDialog);
 
   const submitEditOriginUrl = useCallback(async () => {
     if (!repo?.path || repo.error) return;
@@ -1995,15 +2002,14 @@ export default function App({
         remoteName: "origin",
         url: trimmed,
       });
-      editOriginUrlDialogRef.current?.close();
-      setEditOriginUrl("");
+      closeEditOriginUrlDialog();
       await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
       setBranchBusy(null);
     }
-  }, [repo, editOriginUrl, refreshAfterMutation]);
+  }, [repo, editOriginUrl, closeEditOriginUrlDialog, refreshAfterMutation]);
 
   const pullLocalBranch = useCallback(
     async (branchName: string) => {
@@ -2535,10 +2541,7 @@ export default function App({
           setNewBranchName("");
           setCreateBranchFieldError(null);
           setOperationError(null);
-          createBranchDialogRef.current?.showModal();
-          requestAnimationFrame(() => {
-            newBranchInputRef.current?.focus();
-          });
+          setCreateBranchDialogOpen(true);
         },
         onCreateTag: () => {
           setCreateTagCommit(hash);
@@ -2546,10 +2549,7 @@ export default function App({
           setCreateTagMessage("");
           setCreateTagFieldError(null);
           setOperationError(null);
-          createTagDialogRef.current?.showModal();
-          requestAnimationFrame(() => {
-            createTagNameInputRef.current?.focus();
-          });
+          setCreateTagDialogOpen(true);
         },
         onCopyFull: () => void navigator.clipboard.writeText(hash),
         onCopyShort: () => void navigator.clipboard.writeText(shortHash),
@@ -2793,7 +2793,7 @@ export default function App({
           branch: trimmed,
         });
       }
-      createBranchDialogRef.current?.close();
+      closeCreateBranchDialog();
       await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
@@ -2826,7 +2826,7 @@ export default function App({
         commit: createTagCommit,
         message: msg.length > 0 ? msg : null,
       });
-      createTagDialogRef.current?.close();
+      closeCreateTagDialog();
       await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
@@ -3438,325 +3438,330 @@ export default function App({
             showExpandedDiff ? "hidden" : ""
           }`}
         >
-          <dialog
-            ref={cloneRepoDialogRef}
-            className="modal"
-            onMouseDown={cloneRepoDialogBackdropClose.onMouseDown}
-            onMouseUp={cloneRepoDialogBackdropClose.onMouseUp}
-            onClose={() => {
-              setCloneRepoUrlDraft("https://github.com/");
-            }}
-          >
-            <div
-              className="modal-box"
-              onClick={(e) => {
-                e.stopPropagation();
+          {cloneRepoDialogOpen ? (
+            <dialog
+              open
+              className="modal"
+              onCancel={(e) => {
+                e.preventDefault();
+                closeCloneRepoDialog();
               }}
+              onMouseDown={cloneRepoDialogBackdropClose.onMouseDown}
+              onMouseUp={cloneRepoDialogBackdropClose.onMouseUp}
             >
-              <h3 className="m-0 text-lg font-bold">Clone repository</h3>
-              <p className="mt-1 mb-0 text-sm text-base-content/70">
-                Enter the remote URL, then choose a folder where the new repository directory should
-                be created.
-              </p>
-              <label className="form-control mt-4 block w-full">
-                <span className="label-text mb-1">Remote URL</span>
-                <input
-                  ref={cloneRepoUrlInputRef}
-                  type="text"
-                  inputMode="url"
-                  className="input-bordered input w-full font-mono text-sm"
-                  value={cloneRepoUrlDraft}
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(e) => {
-                    setCloneRepoUrlDraft(e.target.value);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void submitCloneRepository();
-                    }
-                  }}
-                />
-              </label>
-              <div className="modal-action">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => cloneRepoDialogRef.current?.close()}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={!cloneRepoUrlDraft.trim()}
-                  onClick={() => void submitCloneRepository()}
-                >
-                  Continue
-                </button>
-              </div>
-            </div>
-          </dialog>
-
-          <dialog
-            ref={createBranchDialogRef}
-            className="modal"
-            onMouseDown={createBranchDialogBackdropClose.onMouseDown}
-            onMouseUp={createBranchDialogBackdropClose.onMouseUp}
-            onClose={() => {
-              setNewBranchName("");
-              setCreateBranchFieldError(null);
-              setCreateBranchStartCommit(null);
-            }}
-          >
-            <div
-              className="modal-box"
-              onClick={(e) => {
-                e.stopPropagation();
-              }}
-            >
-              <h3 className="m-0 text-lg font-bold">New local branch</h3>
-              <p className="mt-1 mb-0 text-sm text-base-content/70">
-                {createBranchStartCommit
-                  ? "Creates a branch starting at the chosen commit and switches to it."
-                  : "Creates a branch from the current commit and switches to it."}
-              </p>
-              {createBranchStartCommit ? (
-                <p className="mt-2 mb-0 text-xs text-base-content/70">
-                  <span className="font-mono text-base-content/80">
-                    {createBranchStartEntry?.shortHash ?? createBranchStartCommit.slice(0, 7)}
-                  </span>
-                  {createBranchStartEntry?.subject ? (
-                    <span className="block truncate pt-0.5">{createBranchStartEntry.subject}</span>
-                  ) : null}
+              <div
+                className="modal-box"
+                onClick={(e) => {
+                  e.stopPropagation();
+                }}
+              >
+                <h3 className="m-0 text-lg font-bold">Clone repository</h3>
+                <p className="mt-1 mb-0 text-sm text-base-content/70">
+                  Enter the remote URL, then choose a folder where the new repository directory
+                  should be created.
                 </p>
-              ) : null}
-              <label className="form-control mt-4 block w-full">
-                <span className="label-text mb-1">Branch name</span>
-                <input
-                  ref={newBranchInputRef}
-                  type="text"
-                  className="input-bordered input w-full font-mono text-sm"
-                  value={newBranchName}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={branchBusy === "create"}
-                  onChange={(e) => {
-                    setNewBranchName(e.target.value);
-                    if (createBranchFieldError) setCreateBranchFieldError(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === " ") {
-                      e.preventDefault();
-                    }
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void submitCreateBranch();
-                    }
-                  }}
-                />
-                {createBranchFieldError ? (
-                  <span className="label-text-alt mt-1 block w-full text-error">
-                    {createBranchFieldError}
-                  </span>
-                ) : newBranchNameInvalid ? (
-                  <span className="label-text-alt mt-1 block w-full text-error">
-                    {branchNameValidationError(newBranchTrimmed)}
-                  </span>
-                ) : null}
-              </label>
-              <div className="modal-action">
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={branchBusy === "create"}
-                  onClick={() => createBranchDialogRef.current?.close()}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={!canSubmitNewBranch}
-                  onClick={() => void submitCreateBranch()}
-                >
-                  {branchBusy === "create" ? (
-                    <span className="loading loading-sm loading-spinner" />
-                  ) : (
-                    "Create"
-                  )}
-                </button>
+                <label className="form-control mt-4 block w-full">
+                  <span className="label-text mb-1">Remote URL</span>
+                  <input
+                    type="text"
+                    autoFocus
+                    inputMode="url"
+                    className="input-bordered input w-full font-mono text-sm"
+                    value={cloneRepoUrlDraft}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => {
+                      setCloneRepoUrlDraft(e.target.value);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void submitCloneRepository();
+                      }
+                    }}
+                  />
+                </label>
+                <div className="modal-action">
+                  <button type="button" className="btn" onClick={closeCloneRepoDialog}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={!cloneRepoUrlDraft.trim()}
+                    onClick={() => void submitCloneRepository()}
+                  >
+                    Continue
+                  </button>
+                </div>
               </div>
-            </div>
-          </dialog>
+            </dialog>
+          ) : null}
 
-          <dialog
-            ref={createTagDialogRef}
-            className="modal"
-            onMouseDown={createTagDialogBackdropClose.onMouseDown}
-            onMouseUp={createTagDialogBackdropClose.onMouseUp}
-            onClose={() => {
-              setNewTagName("");
-              setCreateTagMessage("");
-              setCreateTagFieldError(null);
-              setCreateTagCommit(null);
-            }}
-          >
-            <div
-              className="modal-box"
-              onClick={(e) => {
-                e.stopPropagation();
+          {createBranchDialogOpen ? (
+            <dialog
+              open
+              className="modal"
+              onCancel={(e) => {
+                e.preventDefault();
+                closeCreateBranchDialog();
               }}
+              onMouseDown={createBranchDialogBackdropClose.onMouseDown}
+              onMouseUp={createBranchDialogBackdropClose.onMouseUp}
             >
-              <h3 className="m-0 text-lg font-bold">Create tag</h3>
-              <p className="mt-1 mb-0 text-sm text-base-content/70">
-                Creates a lightweight tag at this commit. Add an optional message to create an
-                annotated tag instead.
-              </p>
-              {createTagCommit ? (
-                <p className="mt-2 mb-0 text-xs text-base-content/70">
-                  <span className="font-mono text-base-content/80">
-                    {createTagStartEntry?.shortHash ?? createTagCommit.slice(0, 7)}
-                  </span>
-                  {createTagStartEntry?.subject ? (
-                    <span className="block truncate pt-0.5">{createTagStartEntry.subject}</span>
-                  ) : null}
+              <div
+                className="modal-box"
+                onClick={(e) => {
+                  e.stopPropagation();
+                }}
+              >
+                <h3 className="m-0 text-lg font-bold">New local branch</h3>
+                <p className="mt-1 mb-0 text-sm text-base-content/70">
+                  {createBranchStartCommit
+                    ? "Creates a branch starting at the chosen commit and switches to it."
+                    : "Creates a branch from the current commit and switches to it."}
                 </p>
-              ) : null}
-              <label className="form-control mt-4 block w-full">
-                <span className="label-text mb-1">Tag name</span>
-                <input
-                  ref={createTagNameInputRef}
-                  type="text"
-                  className="input-bordered input w-full font-mono text-sm"
-                  value={newTagName}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={branchBusy === "tag"}
-                  onChange={(e) => {
-                    setNewTagName(e.target.value);
-                    if (createTagFieldError) setCreateTagFieldError(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void submitCreateTag();
-                    }
-                  }}
-                />
-                {createTagFieldError ? (
-                  <span className="label-text-alt mt-1 block w-full text-error">
-                    {createTagFieldError}
-                  </span>
-                ) : newTagNameInvalid ? (
-                  <span className="label-text-alt mt-1 block w-full text-error">
-                    {tagNameValidationError(newTagTrimmed)}
-                  </span>
+                {createBranchStartCommit ? (
+                  <p className="mt-2 mb-0 text-xs text-base-content/70">
+                    <span className="font-mono text-base-content/80">
+                      {createBranchStartEntry?.shortHash ?? createBranchStartCommit.slice(0, 7)}
+                    </span>
+                    {createBranchStartEntry?.subject ? (
+                      <span className="block truncate pt-0.5">
+                        {createBranchStartEntry.subject}
+                      </span>
+                    ) : null}
+                  </p>
                 ) : null}
-              </label>
-              <label className="form-control mt-3 block w-full">
-                <span className="label-text mb-1">Annotation message (optional)</span>
-                <textarea
-                  className="textarea-bordered textarea min-h-18 w-full font-mono text-sm textarea-sm"
-                  value={createTagMessage}
-                  placeholder="Leave empty for a lightweight tag"
-                  disabled={branchBusy === "tag"}
-                  onChange={(e) => {
-                    setCreateTagMessage(e.target.value);
-                  }}
-                />
-              </label>
-              <div className="modal-action">
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={branchBusy === "tag"}
-                  onClick={() => createTagDialogRef.current?.close()}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={!canSubmitNewTag}
-                  onClick={() => void submitCreateTag()}
-                >
-                  {branchBusy === "tag" ? (
-                    <span className="loading loading-sm loading-spinner" />
-                  ) : (
-                    "Create tag"
-                  )}
-                </button>
+                <label className="form-control mt-4 block w-full">
+                  <span className="label-text mb-1">Branch name</span>
+                  <input
+                    type="text"
+                    autoFocus
+                    className="input-bordered input w-full font-mono text-sm"
+                    value={newBranchName}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={branchBusy === "create"}
+                    onChange={(e) => {
+                      setNewBranchName(e.target.value);
+                      if (createBranchFieldError) setCreateBranchFieldError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === " ") {
+                        e.preventDefault();
+                      }
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void submitCreateBranch();
+                      }
+                    }}
+                  />
+                  {createBranchFieldError ? (
+                    <span className="label-text-alt mt-1 block w-full text-error">
+                      {createBranchFieldError}
+                    </span>
+                  ) : newBranchNameInvalid ? (
+                    <span className="label-text-alt mt-1 block w-full text-error">
+                      {branchNameValidationError(newBranchTrimmed)}
+                    </span>
+                  ) : null}
+                </label>
+                <div className="modal-action">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={branchBusy === "create"}
+                    onClick={closeCreateBranchDialog}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={!canSubmitNewBranch}
+                    onClick={() => void submitCreateBranch()}
+                  >
+                    {branchBusy === "create" ? (
+                      <span className="loading loading-sm loading-spinner" />
+                    ) : (
+                      "Create"
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          </dialog>
+            </dialog>
+          ) : null}
 
-          <dialog
-            ref={editOriginUrlDialogRef}
-            className="modal"
-            onMouseDown={editOriginUrlDialogBackdropClose.onMouseDown}
-            onMouseUp={editOriginUrlDialogBackdropClose.onMouseUp}
-            onClose={() => {
-              setEditOriginUrl("");
-            }}
-          >
-            <div
-              className="modal-box"
-              onClick={(e) => {
-                e.stopPropagation();
+          {createTagDialogOpen ? (
+            <dialog
+              open
+              className="modal"
+              onCancel={(e) => {
+                e.preventDefault();
+                closeCreateTagDialog();
               }}
+              onMouseDown={createTagDialogBackdropClose.onMouseDown}
+              onMouseUp={createTagDialogBackdropClose.onMouseUp}
             >
-              <h3 className="m-0 text-lg font-bold">Edit origin URL</h3>
-              <p className="mt-1 mb-0 text-sm text-base-content/70">
-                Updates where Git fetches from and pushes to for the{" "}
-                <span className="font-mono">origin</span> remote.
-              </p>
-              <label className="form-control mt-4 w-full">
-                <span className="label-text mb-1">Remote URL</span>
-                <input
-                  ref={editOriginUrlInputRef}
-                  type="text"
-                  className="input-bordered input w-full font-mono text-sm"
-                  value={editOriginUrl}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={branchBusy === "remote-url"}
-                  onChange={(e) => {
-                    setEditOriginUrl(e.target.value);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void submitEditOriginUrl();
-                    }
-                  }}
-                />
-              </label>
-              <div className="modal-action">
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={branchBusy === "remote-url"}
-                  onClick={() => editOriginUrlDialogRef.current?.close()}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={branchBusy === "remote-url" || !editOriginUrl.trim()}
-                  onClick={() => void submitEditOriginUrl()}
-                >
-                  {branchBusy === "remote-url" ? (
-                    <span className="loading loading-sm loading-spinner" />
-                  ) : (
-                    "Save"
-                  )}
-                </button>
+              <div
+                className="modal-box"
+                onClick={(e) => {
+                  e.stopPropagation();
+                }}
+              >
+                <h3 className="m-0 text-lg font-bold">Create tag</h3>
+                <p className="mt-1 mb-0 text-sm text-base-content/70">
+                  Creates a lightweight tag at this commit. Add an optional message to create an
+                  annotated tag instead.
+                </p>
+                {createTagCommit ? (
+                  <p className="mt-2 mb-0 text-xs text-base-content/70">
+                    <span className="font-mono text-base-content/80">
+                      {createTagStartEntry?.shortHash ?? createTagCommit.slice(0, 7)}
+                    </span>
+                    {createTagStartEntry?.subject ? (
+                      <span className="block truncate pt-0.5">{createTagStartEntry.subject}</span>
+                    ) : null}
+                  </p>
+                ) : null}
+                <label className="form-control mt-4 block w-full">
+                  <span className="label-text mb-1">Tag name</span>
+                  <input
+                    type="text"
+                    autoFocus
+                    className="input-bordered input w-full font-mono text-sm"
+                    value={newTagName}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={branchBusy === "tag"}
+                    onChange={(e) => {
+                      setNewTagName(e.target.value);
+                      if (createTagFieldError) setCreateTagFieldError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void submitCreateTag();
+                      }
+                    }}
+                  />
+                  {createTagFieldError ? (
+                    <span className="label-text-alt mt-1 block w-full text-error">
+                      {createTagFieldError}
+                    </span>
+                  ) : newTagNameInvalid ? (
+                    <span className="label-text-alt mt-1 block w-full text-error">
+                      {tagNameValidationError(newTagTrimmed)}
+                    </span>
+                  ) : null}
+                </label>
+                <label className="form-control mt-3 block w-full">
+                  <span className="label-text mb-1">Annotation message (optional)</span>
+                  <textarea
+                    className="textarea-bordered textarea min-h-18 w-full font-mono text-sm textarea-sm"
+                    value={createTagMessage}
+                    placeholder="Leave empty for a lightweight tag"
+                    disabled={branchBusy === "tag"}
+                    onChange={(e) => {
+                      setCreateTagMessage(e.target.value);
+                    }}
+                  />
+                </label>
+                <div className="modal-action">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={branchBusy === "tag"}
+                    onClick={closeCreateTagDialog}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={!canSubmitNewTag}
+                    onClick={() => void submitCreateTag()}
+                  >
+                    {branchBusy === "tag" ? (
+                      <span className="loading loading-sm loading-spinner" />
+                    ) : (
+                      "Create tag"
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          </dialog>
+            </dialog>
+          ) : null}
+
+          {editOriginUrlDialogOpen ? (
+            <dialog
+              open
+              className="modal"
+              onCancel={(e) => {
+                e.preventDefault();
+                closeEditOriginUrlDialog();
+              }}
+              onMouseDown={editOriginUrlDialogBackdropClose.onMouseDown}
+              onMouseUp={editOriginUrlDialogBackdropClose.onMouseUp}
+            >
+              <div
+                className="modal-box"
+                onClick={(e) => {
+                  e.stopPropagation();
+                }}
+              >
+                <h3 className="m-0 text-lg font-bold">Edit origin URL</h3>
+                <p className="mt-1 mb-0 text-sm text-base-content/70">
+                  Updates where Git fetches from and pushes to for the{" "}
+                  <span className="font-mono">origin</span> remote.
+                </p>
+                <label className="form-control mt-4 w-full">
+                  <span className="label-text mb-1">Remote URL</span>
+                  <input
+                    type="text"
+                    autoFocus
+                    className="input-bordered input w-full font-mono text-sm"
+                    value={editOriginUrl}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={branchBusy === "remote-url"}
+                    onChange={(e) => {
+                      setEditOriginUrl(e.target.value);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void submitEditOriginUrl();
+                      }
+                    }}
+                  />
+                </label>
+                <div className="modal-action">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={branchBusy === "remote-url"}
+                    onClick={closeEditOriginUrlDialog}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={branchBusy === "remote-url" || !editOriginUrl.trim()}
+                    onClick={() => void submitEditOriginUrl()}
+                  >
+                    {branchBusy === "remote-url" ? (
+                      <span className="loading loading-sm loading-spinner" />
+                    ) : (
+                      "Save"
+                    )}
+                  </button>
+                </div>
+              </div>
+            </dialog>
+          ) : null}
 
           <BranchSidebar
             repoPath={repo?.path ?? null}
@@ -4762,7 +4767,6 @@ export default function App({
       </div>
       {openaiSettingsOpen ? (
         <OpenAiSettingsDialog
-          isOpen
           apiKey={openaiApiKey}
           model={openaiModel}
           onClose={closeOpenAiSettingsDialog}

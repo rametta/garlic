@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import { DEFAULT_OPENAI_MODEL } from "../generateCommitMessage";
 
 function invokeErrorMessage(error: unknown): string {
@@ -14,7 +14,6 @@ function invokeErrorMessage(error: unknown): string {
 }
 
 export interface OpenAiSettingsDialogProps {
-  isOpen: boolean;
   apiKey: string;
   model: string;
   onClose: () => void;
@@ -23,49 +22,15 @@ export interface OpenAiSettingsDialogProps {
 }
 
 export const OpenAiSettingsDialog = memo(function OpenAiSettingsDialog({
-  isOpen,
   apiKey,
   model,
   onClose,
   onSaved,
   onError,
 }: OpenAiSettingsDialogProps) {
-  const apiKeyInputRef = useRef<HTMLInputElement>(null);
   const [keyDraft, setKeyDraft] = useState(apiKey);
   const [modelDraft, setModelDraft] = useState(model);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setKeyDraft(apiKey);
-    setModelDraft(model);
-    setBusy(false);
-  }, [apiKey, isOpen, model]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const id = requestAnimationFrame(() => {
-      apiKeyInputRef.current?.focus();
-      apiKeyInputRef.current?.select();
-    });
-    return () => {
-      cancelAnimationFrame(id);
-    };
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [isOpen, onClose]);
 
   const save = useCallback(async () => {
     setBusy(true);
@@ -88,8 +53,6 @@ export const OpenAiSettingsDialog = memo(function OpenAiSettingsDialog({
       setBusy(false);
     }
   }, [keyDraft, modelDraft, onClose, onError, onSaved]);
-
-  if (!isOpen) return null;
 
   return createPortal(
     <div
@@ -118,8 +81,8 @@ export const OpenAiSettingsDialog = memo(function OpenAiSettingsDialog({
         <label className="form-control mt-4 w-full">
           <span className="label-text mb-1">API key</span>
           <input
-            ref={apiKeyInputRef}
             type="password"
+            autoFocus
             className="input-bordered input w-full font-mono text-sm"
             value={keyDraft}
             autoComplete="off"
