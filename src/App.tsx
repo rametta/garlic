@@ -3963,66 +3963,50 @@ export default function App({
                                         </p>
                                       </div>
                                     ) : (
-                                      <>
-                                        <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 pb-2">
-                                          <div className="min-w-0 flex-1">
-                                            <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                              Commit diff
-                                            </h2>
-                                            <code className="mt-0.5 block font-mono text-[0.65rem] leading-tight wrap-break-word text-base-content/85">
-                                              {commitDiffPath}
-                                            </code>
-                                            <p className="mt-0.5 mb-0 font-mono text-[0.6rem] text-base-content/50">
-                                              {commits.find((x) => x.hash === commitBrowseHash)
-                                                ?.shortHash ?? commitBrowseHash.slice(0, 7)}
+                                      <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-2">
+                                        {commitDiffLoading ? (
+                                          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
+                                            <span className="loading loading-md loading-spinner text-primary" />
+                                            <p className="m-0 text-xs text-base-content/70">
+                                              Loading diff…
                                             </p>
                                           </div>
-                                        </div>
-                                        <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-2">
-                                          {commitDiffLoading ? (
-                                            <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
-                                              <span className="loading loading-md loading-spinner text-primary" />
-                                              <p className="m-0 text-xs text-base-content/70">
-                                                Loading diff…
-                                              </p>
+                                        ) : commitDiffError ? (
+                                          <DismissibleAlert
+                                            className="alert py-2 text-xs alert-error"
+                                            onDismiss={() => {
+                                              setCommitDiffError(null);
+                                            }}
+                                          >
+                                            <span className="wrap-break-word">
+                                              {commitDiffError}
+                                            </span>
+                                          </DismissibleAlert>
+                                        ) : (
+                                          <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
+                                            <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                              Patch
                                             </div>
-                                          ) : commitDiffError ? (
-                                            <DismissibleAlert
-                                              className="alert py-2 text-xs alert-error"
-                                              onDismiss={() => {
-                                                setCommitDiffError(null);
-                                              }}
-                                            >
-                                              <span className="wrap-break-word">
-                                                {commitDiffError}
-                                              </span>
-                                            </DismissibleAlert>
-                                          ) : (
-                                            <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
-                                              <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
-                                                Patch
-                                              </div>
-                                              <UnifiedDiff
-                                                text={commitDiffText ?? ""}
-                                                emptyLabel="(no diff for this file)"
-                                                binaryImagePreview={
-                                                  commitDiffImagePreview &&
-                                                  commitDiffPath &&
-                                                  pathLooksLikeRenderableImage(commitDiffPath) &&
-                                                  (commitDiffImagePreview.before ||
-                                                    commitDiffImagePreview.after)
-                                                    ? {
-                                                        beforeUrl: commitDiffImagePreview.before,
-                                                        afterUrl: commitDiffImagePreview.after,
-                                                        fileLabel: commitDiffPath,
-                                                      }
-                                                    : null
-                                                }
-                                              />
-                                            </div>
-                                          )}
-                                        </div>
-                                      </>
+                                            <UnifiedDiff
+                                              text={commitDiffText ?? ""}
+                                              emptyLabel="(no diff for this file)"
+                                              binaryImagePreview={
+                                                commitDiffImagePreview &&
+                                                commitDiffPath &&
+                                                pathLooksLikeRenderableImage(commitDiffPath) &&
+                                                (commitDiffImagePreview.before ||
+                                                  commitDiffImagePreview.after)
+                                                  ? {
+                                                      beforeUrl: commitDiffImagePreview.before,
+                                                      afterUrl: commitDiffImagePreview.after,
+                                                      fileLabel: commitDiffPath,
+                                                    }
+                                                  : null
+                                              }
+                                            />
+                                          </div>
+                                        )}
+                                      </div>
                                     )}
                                   </div>
                                   <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-l border-base-300/80 pl-2">
@@ -4035,11 +4019,6 @@ export default function App({
                                           </span>
                                         ) : null}
                                       </h2>
-                                      <p className="mt-0.5 mb-0 truncate font-mono text-[0.65rem] leading-tight text-base-content/80">
-                                        {commitDetails?.subject ??
-                                          commitBrowseMeta?.subject ??
-                                          commitBrowseHash.slice(0, 7)}
-                                      </p>
                                     </div>
                                     <div className="flex min-h-0 flex-1 flex-col pt-2">
                                       {commitBrowseLoading ? (
