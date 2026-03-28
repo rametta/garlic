@@ -98,6 +98,14 @@ function useDialogBackdropClose() {
   return { onMouseDown, onMouseUp };
 }
 
+function useLatest<T>(value: T) {
+  const ref = useRef(value);
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+  return ref;
+}
+
 interface RemoteEntry {
   name: string;
   fetchUrl: string;
@@ -2377,10 +2385,19 @@ export default function App({
     [branchBusy, pushBusy, repo, runPushTagToOrigin],
   );
 
+  const loadRepoListenerRef = useLatest(loadRepo);
+  const onStashPushListenerRef = useLatest(onStashPush);
+  const openCreateBranchDialogListenerRef = useLatest(openCreateBranchDialog);
+  const openOpenAiSettingsDialogListenerRef = useLatest(openOpenAiSettingsDialog);
+  const refreshAfterMutationListenerRef = useLatest(refreshAfterMutation);
+  const handleCloneCompletePayloadListenerRef = useLatest(handleCloneCompletePayload);
+  const openCloneRepoDialogListenerRef = useLatest(openCloneRepoDialog);
+  const scheduleCloneProgressUiFlushListenerRef = useLatest(scheduleCloneProgressUiFlush);
+
   useEffect(() => {
     const promise = Promise.all([
       listen("open-openai-settings", () => {
-        openOpenAiSettingsDialog();
+        openOpenAiSettingsDialogListenerRef.current();
       }),
       listen("open-repo-request", () => {
         void (async () => {
@@ -2390,21 +2407,21 @@ export default function App({
             title: "Open repository",
           });
           if (selected === null || Array.isArray(selected)) return;
-          await loadRepo(selected);
+          await loadRepoListenerRef.current(selected);
         })();
       }),
       listen("clone-repo-request", () => {
-        openCloneRepoDialog();
+        openCloneRepoDialogListenerRef.current();
       }),
       listen<string>("open-recent-repo", (e) => {
         const path = e.payload.trim();
-        if (path) void loadRepo(path);
+        if (path) void loadRepoListenerRef.current(path);
       }),
       listen("new-branch-request", () => {
-        openCreateBranchDialog();
+        openCreateBranchDialogListenerRef.current();
       }),
       listen("stash-push-request", () => {
-        void onStashPush();
+        void onStashPushListenerRef.current();
       }),
       listen<{ theme: string }>("theme-changed", (e) => {
         const pref = e.payload.theme;
@@ -2412,7 +2429,7 @@ export default function App({
         document.documentElement.setAttribute("data-theme", resolveThemePreference(pref));
       }),
       listen("repository-mutated", () => {
-        void refreshAfterMutation();
+        void refreshAfterMutationListenerRef.current();
       }),
       listen<CommitSignatureResultPayload>("commit-signature-result", (e) => {
         const p = e.payload;
@@ -2453,7 +2470,7 @@ export default function App({
             cloneLogLinesRef.current = [...lines, segment].slice(-200);
           }
         }
-        scheduleCloneProgressUiFlush();
+        scheduleCloneProgressUiFlushListenerRef.current();
       }),
       listen<CloneDonePayload>("clone-complete", (e) => {
         const p = e.payload;
@@ -2467,7 +2484,7 @@ export default function App({
           cloneCompleteQueuedRef.current = p;
           return;
         }
-        handleCloneCompletePayload(p);
+        handleCloneCompletePayloadListenerRef.current(p);
       }),
       listen<GitCommandStreamStartedPayload>("git-command-stream-started", (e) => {
         const p = e.payload;
@@ -2521,16 +2538,7 @@ export default function App({
         }
       });
     };
-  }, [
-    loadRepo,
-    onStashPush,
-    openCreateBranchDialog,
-    openOpenAiSettingsDialog,
-    refreshAfterMutation,
-    handleCloneCompletePayload,
-    openCloneRepoDialog,
-    scheduleCloneProgressUiFlush,
-  ]);
+  }, []);
 
   useEffect(() => {
     if (themePreference !== "auto") return;
