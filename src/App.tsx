@@ -44,7 +44,7 @@ import type {
   TagOriginStatus,
   WorktreeEntry,
 } from "./repoTypes";
-import { DEFAULT_OPENAI_MODEL, generateCommitTitleFromStagedDiff } from "./generateCommitMessage";
+import { DEFAULT_OPENAI_MODEL, generateCommitMessageFromStagedDiff } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
 import {
   buildGraphExportDefaultFilename,
@@ -327,6 +327,13 @@ function stripCoAuthorTrailers(body: string): string {
   const kept = lines.filter((line) => !line.trim().startsWith("Co-authored-by:"));
   while (kept.length > 0 && kept[kept.length - 1]?.trim() === "") kept.pop();
   return kept.join("\n").trim();
+}
+
+function composeCommitMessage(title: string, description: string): string {
+  const trimmedTitle = title.trim();
+  if (!trimmedTitle) return "";
+  const trimmedDescription = description.trim();
+  return trimmedDescription ? `${trimmedTitle}\n\n${trimmedDescription}` : trimmedTitle;
 }
 
 function DismissibleAlert({
@@ -636,7 +643,8 @@ export default function App({
   /** `push` or `pop:<ref>` while a stash command runs. */
   const [stashBusy, setStashBusy] = useState<string | null>(null);
   const [listsError, setListsError] = useState<string | null>(() => startup.listsError ?? null);
-  const [commitMessage, setCommitMessage] = useState("");
+  const [commitTitle, setCommitTitle] = useState("");
+  const [commitBody, setCommitBody] = useState("");
   const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(null);
   /** Which sidebar list opened the diff (staged vs unstaged); matters when both apply to the same path. */
   const [selectedDiffSide, setSelectedDiffSide] = useState<"unstaged" | "staged" | null>(null);
@@ -2811,6 +2819,10 @@ export default function App({
 
   async function onCommit() {
     if (!repo?.path || repo.error) return;
+    if (invalidCommitDraft) {
+      setOperationError("Add a commit title before the description.");
+      return;
+    }
     const msg = commitMessage.trim();
     if (!amendLastCommit && !msg) return;
     if (amendLastCommit && msg.length === 0 && !hasStagedFiles) return;
@@ -2827,7 +2839,8 @@ export default function App({
       } else {
         await invoke("commit_staged", { path: repo.path, message: msg });
       }
-      setCommitMessage("");
+      setCommitTitle("");
+      setCommitBody("");
       await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
@@ -2855,6 +2868,10 @@ export default function App({
 
   async function onCommitAndPush() {
     if (!repo?.path || repo.error || repo.detached) return;
+    if (invalidCommitDraft) {
+      setOperationError("Add a commit title before the description.");
+      return;
+    }
     const msg = commitMessage.trim();
     if (!msg) return;
     if (!workingTreeFiles.some((f) => f.staged)) return;
@@ -2862,7 +2879,8 @@ export default function App({
     setOperationError(null);
     try {
       await invoke("commit_staged", { path: repo.path, message: msg });
-      setCommitMessage("");
+      setCommitTitle("");
+      setCommitBody("");
       await invoke("push_to_origin", {
         path: repo.path,
         skipHooks: pushSkipHooks,
@@ -2899,9 +2917,17 @@ export default function App({
     return paths.size;
   }, [workingTreeFiles]);
   const stageSyncBusy = syncingStagePaths.size > 0;
-  const commitMsgTrimmed = commitMessage.trim();
-  const canCommitAmend = amendLastCommit && (commitMsgTrimmed.length > 0 || hasStagedFiles);
-  const canCommitNormal = !amendLastCommit && hasStagedFiles && commitMsgTrimmed.length > 0;
+  const commitTitleTrimmed = commitTitle.trim();
+  const commitBodyTrimmed = commitBody.trim();
+  const commitMessage = useMemo(
+    () => composeCommitMessage(commitTitle, commitBody),
+    [commitTitle, commitBody],
+  );
+  const invalidCommitDraft = commitTitleTrimmed.length === 0 && commitBodyTrimmed.length > 0;
+  const canCommitAmend =
+    amendLastCommit && !invalidCommitDraft && (commitTitleTrimmed.length > 0 || hasStagedFiles);
+  const canCommitNormal =
+    !amendLastCommit && !invalidCommitDraft && hasStagedFiles && commitTitleTrimmed.length > 0;
   const canCommit =
     Boolean(repo?.path && !repo.error && !loading) &&
     (canCommitAmend || canCommitNormal) &&
@@ -2932,16 +2958,17 @@ export default function App({
         setOperationError("Staged diff is empty; nothing to summarize.");
         return;
       }
-      const title = await generateCommitTitleFromStagedDiff({
+      const nextMessage = await generateCommitMessageFromStagedDiff({
         apiKey: key,
         model: openaiModel.trim() || DEFAULT_OPENAI_MODEL,
         stagedDiff,
       });
-      if (!title) {
+      if (!nextMessage.title) {
         setOperationError("The model returned an empty message.");
         return;
       }
-      setCommitMessage(title);
+      setCommitTitle(nextMessage.title);
+      setCommitBody(nextMessage.description);
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -4869,24 +4896,39 @@ export default function App({
                       </label>
                     </div>
                   </div>
-                  <label className="form-control flex min-h-0 min-w-0 flex-1 flex-col gap-1">
-                    <span className="label-text shrink-0 text-xs font-medium">Message</span>
-                    <textarea
-                      className="textarea-bordered textarea min-h-0 w-full flex-1 resize-none overflow-y-auto font-sans text-sm textarea-sm"
-                      placeholder={
-                        amendLastCommit
-                          ? "New message, or leave empty to keep the previous message (requires staged changes)"
-                          : "Describe your changes…"
-                      }
-                      value={commitMessage}
-                      disabled={
-                        !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy
-                      }
-                      onChange={(e) => {
-                        setCommitMessage(e.target.value);
-                      }}
-                    />
-                  </label>
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+                    <div className="form-control min-w-0">
+                      <input
+                        type="text"
+                        className="input-bordered input input-sm w-full font-sans text-sm"
+                        placeholder={
+                          amendLastCommit
+                            ? "Title: leave empty to keep the previous message"
+                            : "Title"
+                        }
+                        value={commitTitle}
+                        disabled={
+                          !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy
+                        }
+                        onChange={(e) => {
+                          setCommitTitle(e.target.value);
+                        }}
+                      />
+                    </div>
+                    <div className="form-control flex min-h-0 min-w-0 flex-1 flex-col gap-1">
+                      <textarea
+                        className="textarea-bordered textarea min-h-0 w-full flex-1 resize-none overflow-y-auto font-sans text-sm textarea-sm"
+                        placeholder="Description"
+                        value={commitBody}
+                        disabled={
+                          !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy
+                        }
+                        onChange={(e) => {
+                          setCommitBody(e.target.value);
+                        }}
+                      />
+                    </div>
+                  </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-2">
                     <button
                       type="button"
@@ -4907,8 +4949,8 @@ export default function App({
                           type="button"
                           className="btn btn-sm btn-primary"
                           disabled={!canUseAiCommit}
-                          title="Generate a commit message from staged changes using OpenAI"
-                          aria-label="Generate a commit message from staged changes using OpenAI"
+                          title="Generate a commit title and description from staged changes using OpenAI"
+                          aria-label="Generate a commit title and description from staged changes using OpenAI"
                           onClick={() => void onAiGenerateCommitMessage()}
                         >
                           {aiCommitBusy ? (
@@ -4960,8 +5002,8 @@ export default function App({
                 OpenAI settings
               </h3>
               <p className="mt-1 mb-0 text-sm text-base-content/70">
-                Stored only on this device in Garlic settings. Used to suggest commit messages from
-                your staged diff via the OpenAI API.
+                Stored only on this device in Garlic settings. Used to suggest commit titles and
+                descriptions from your staged diff via the OpenAI API.
               </p>
               <label className="form-control mt-4 w-full">
                 <span className="label-text mb-1">API key</span>
