@@ -1443,19 +1443,6 @@ export default function App({
     if (el) el.scrollTop = el.scrollHeight;
   }, [gitCommandStream?.lines, gitCommandStream?.finished, gitCommandStream?.sessionId]);
 
-  useEffect(() => {
-    if (!gitCommandStream?.finished || !gitCommandStream.success) return;
-    const sid = gitCommandStream.sessionId;
-    const id = window.setTimeout(() => {
-      setGitCommandStream((s) => {
-        if (s?.sessionId === sid && s.finished && s.success) return null;
-        return s;
-      });
-      gitStreamSessionRef.current = null;
-    }, 4500);
-    return () => window.clearTimeout(id);
-  }, [gitCommandStream?.finished, gitCommandStream?.success, gitCommandStream?.sessionId]);
-
   const openCloneRepoDialog = useCallback(() => {
     setCloneRepoUrlDraft("https://github.com/");
     setOperationError(null);
