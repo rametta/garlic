@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
 import type { BranchTrieNode, RemoteTrieNode } from "../branchTrie";
 import { nativeContextMenusAvailable } from "../nativeContextMenu";
 import type {
@@ -674,7 +674,7 @@ export type BranchSidebarProps = {
   onBranchSidebarSectionsChange: (next: BranchSidebarSectionsState) => void;
 };
 
-export function BranchSidebar({
+export const BranchSidebar = memo(function BranchSidebar({
   repoPath,
   canShowBranches,
   localBranches,
@@ -1060,4 +1060,4 @@ export function BranchSidebar({
       </div>
     </div>
   );
-}
+});

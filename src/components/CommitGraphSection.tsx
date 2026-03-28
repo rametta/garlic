@@ -404,7 +404,7 @@ const WipGraphRow = memo(function WipGraphRow({
   );
 });
 
-export function CommitGraphSection({
+export const CommitGraphSection = memo(function CommitGraphSection({
   commits,
   commitGraphLayout,
   localBranches,
@@ -781,7 +781,13 @@ export function CommitGraphSection({
                         top: v.start,
                         height: v.size,
                       }}
-                      onClick={wipInteractive ? () => onWipSelect() : undefined}
+                      onClick={
+                        wipInteractive
+                          ? () => {
+                              onWipSelect();
+                            }
+                          : undefined
+                      }
                       onKeyDown={
                         wipInteractive
                           ? (e) => {
@@ -843,4 +849,4 @@ export function CommitGraphSection({
       </div>
     </div>
   );
-}
+});

@@ -1,5 +1,5 @@
 import { getTokenStyleObject } from "@shikijs/core";
-import { useMemo, type CSSProperties, type ReactNode } from "react";
+import { memo, useMemo, type CSSProperties, type ReactNode } from "react";
 import {
   computeNewLineNumber,
   computeOldLineNumber,
@@ -329,18 +329,23 @@ function UnifiedDiffHunk({
           </div>
         ) : null}
       </div>
-      {hunk.changes.map((change) => (
-        <DiffGridRow
-          key={getChangeKey(change)}
-          change={change}
-          lang={lang}
-          binary={binary}
-          highlighter={highlighter}
-          shikiTheme={shikiTheme}
-          partialAction={partialAction}
-          partialPatch={changeBlockPatches.get(getChangeKey(change)) ?? null}
-        />
-      ))}
+      {hunk.changes.map((change) => {
+        const partialPatchValue = (changeBlockPatches as Map<string, unknown>).get(
+          getChangeKey(change),
+        );
+        return (
+          <DiffGridRow
+            key={getChangeKey(change)}
+            change={change}
+            lang={lang}
+            binary={binary}
+            highlighter={highlighter}
+            shikiTheme={shikiTheme}
+            partialAction={partialAction}
+            partialPatch={typeof partialPatchValue === "string" ? partialPatchValue : null}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -402,7 +407,7 @@ function UnifiedDiffFile({
   );
 }
 
-export function UnifiedDiff({
+export const UnifiedDiff = memo(function UnifiedDiff({
   text,
   emptyLabel,
   binaryImagePreview,
@@ -473,7 +478,7 @@ export function UnifiedDiff({
       />
     </div>
   );
-}
+});
 
 function UnifiedDiffWithHighlight({
   parsedFiles,

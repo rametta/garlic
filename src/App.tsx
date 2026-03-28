@@ -18,7 +18,9 @@ import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { formatAuthorDisplay, formatDate, formatRelativeShort } from "./appFormat";
 import { collectLocalBranchNamesInSubtree, collectRemoteRefsInSubtree } from "./branchTrie";
 import { BranchSidebar, type BranchGraphControls } from "./components/BranchSidebar";
+import { CommitComposer } from "./components/CommitComposer";
 import { CommitGraphSection } from "./components/CommitGraphSection";
+import { GitCommandPanel } from "./components/GitCommandPanel";
 import { UnifiedDiff } from "./components/UnifiedDiff";
 import {
   computeCommitGraphLayout,
@@ -45,7 +47,7 @@ import type {
   TagOriginStatus,
   WorktreeEntry,
 } from "./repoTypes";
-import { DEFAULT_OPENAI_MODEL, generateCommitMessageFromStagedDiff } from "./generateCommitMessage";
+import { DEFAULT_OPENAI_MODEL } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
 import {
   buildGraphExportDefaultFilename,
@@ -338,13 +340,6 @@ function stripCoAuthorTrailers(body: string): string {
   return kept.join("\n").trim();
 }
 
-function composeCommitMessage(title: string, description: string): string {
-  const trimmedTitle = title.trim();
-  if (!trimmedTitle) return "";
-  const trimmedDescription = description.trim();
-  return trimmedDescription ? `${trimmedTitle}\n\n${trimmedDescription}` : trimmedTitle;
-}
-
 function DismissibleAlert({
   role = "alert",
   className,
@@ -624,7 +619,6 @@ export default function App({
     success: boolean | null;
     error: string | null;
   } | null>(null);
-  const [gitCommandSectionOpen, setGitCommandSectionOpen] = useState(false);
   const gitCommandStreamScrollRef = useRef<HTMLDivElement | null>(null);
   const gitStreamSessionRef = useRef<number | null>(null);
   const [localBranches, setLocalBranches] = useState<LocalBranchEntry[]>(
@@ -652,8 +646,6 @@ export default function App({
   /** `push` or `pop:<ref>` while a stash command runs. */
   const [stashBusy, setStashBusy] = useState<string | null>(null);
   const [listsError, setListsError] = useState<string | null>(() => startup.listsError ?? null);
-  const [commitTitle, setCommitTitle] = useState("");
-  const [commitBody, setCommitBody] = useState("");
   const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(null);
   /** Which sidebar list opened the diff (staged vs unstaged); matters when both apply to the same path. */
   const [selectedDiffSide, setSelectedDiffSide] = useState<"unstaged" | "staged" | null>(null);
@@ -697,10 +689,8 @@ export default function App({
   const [pushBusy, setPushBusy] = useState(false);
   const [commitPushBusy, setCommitPushBusy] = useState(false);
   /** Skip local Git hooks (e.g. pre-push) for push actions. */
-  const [pushSkipHooks, setPushSkipHooks] = useState(false);
   const [graphFocusHash, setGraphFocusHash] = useState<string | null>(null);
   const [graphScrollNonce, setGraphScrollNonce] = useState(0);
-  const [amendLastCommit, setAmendLastCommit] = useState(false);
   const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null);
   const [fileHistoryCommits, setFileHistoryCommits] = useState<CommitEntry[]>([]);
   const [fileHistoryLoading, setFileHistoryLoading] = useState(false);
@@ -737,8 +727,6 @@ export default function App({
   );
   const [openaiSettingsOpen, setOpenaiSettingsOpen] = useState(false);
   const [openaiSettingsBusy, setOpenaiSettingsBusy] = useState(false);
-  const [aiCommitBusy, setAiCommitBusy] = useState(false);
-
   const closeOpenAiSettingsDialog = useCallback(() => {
     setOpenaiSettingsOpen(false);
     setOpenaiKeyDraft(openaiApiKey);
@@ -1378,7 +1366,7 @@ export default function App({
           setCommitDetails(details);
           setCommitDetailsError(null);
         })
-        .catch((e) => {
+        .catch((e: unknown) => {
           if (activeRepoPathRef.current !== pathAtStart || seq !== selectCommitSeqRef.current)
             return;
           setCommitDetails(null);
@@ -1552,7 +1540,6 @@ export default function App({
 
   useEffect(() => {
     setGitCommandStream(null);
-    setGitCommandSectionOpen(false);
     gitStreamSessionRef.current = null;
   }, [repo?.path]);
 
@@ -1560,7 +1547,7 @@ export default function App({
     if (!gitCommandStream) return;
     const el = gitCommandStreamScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [gitCommandStream?.lines, gitCommandStream?.finished, gitCommandStream?.sessionId]);
+  }, [gitCommandStream]);
 
   const openCloneRepoDialog = useCallback(() => {
     setCloneRepoUrlDraft("https://github.com/");
@@ -2047,6 +2034,46 @@ export default function App({
       });
     },
     [repo, branchBusy, loadRepo, openWorktreeBrowse, mergeBranchIntoCurrent, removeLinkedWorktree],
+  );
+
+  const onCheckoutLocal = useCallback(
+    async (branch: string) => {
+      if (!repo?.path || repo.error) return;
+      setBranchBusy(`local:${branch}`);
+      setOperationError(null);
+      try {
+        await invoke("checkout_local_branch", {
+          path: repo.path,
+          branch,
+        });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, refreshAfterMutation],
+  );
+
+  const onCreateFromRemote = useCallback(
+    async (remoteRef: string) => {
+      if (!repo?.path || repo.error) return;
+      setBranchBusy(`remote:${remoteRef}`);
+      setOperationError(null);
+      try {
+        await invoke("create_branch_from_remote", {
+          path: repo.path,
+          remoteRef,
+        });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, refreshAfterMutation],
   );
 
   const runBranchSidebarContextMenu = useCallback(
@@ -2538,7 +2565,16 @@ export default function App({
         }
       });
     };
-  }, []);
+  }, [
+    handleCloneCompletePayloadListenerRef,
+    loadRepoListenerRef,
+    onStashPushListenerRef,
+    openCloneRepoDialogListenerRef,
+    openCreateBranchDialogListenerRef,
+    openOpenAiSettingsDialogListenerRef,
+    refreshAfterMutationListenerRef,
+    scheduleCloneProgressUiFlushListenerRef,
+  ]);
 
   useEffect(() => {
     if (themePreference !== "auto") return;
@@ -2552,23 +2588,6 @@ export default function App({
       mq.removeEventListener("change", apply);
     };
   }, [themePreference]);
-
-  async function onCheckoutLocal(branch: string) {
-    if (!repo?.path || repo.error) return;
-    setBranchBusy(`local:${branch}`);
-    setOperationError(null);
-    try {
-      await invoke("checkout_local_branch", {
-        path: repo.path,
-        branch,
-      });
-      await refreshAfterMutation();
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    } finally {
-      setBranchBusy(null);
-    }
-  }
 
   async function submitCreateBranch() {
     const trimmed = newBranchName.trim();
@@ -2632,23 +2651,6 @@ export default function App({
         message: msg.length > 0 ? msg : null,
       });
       createTagDialogRef.current?.close();
-      await refreshAfterMutation();
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    } finally {
-      setBranchBusy(null);
-    }
-  }
-
-  async function onCreateFromRemote(remoteRef: string) {
-    if (!repo?.path || repo.error) return;
-    setBranchBusy(`remote:${remoteRef}`);
-    setOperationError(null);
-    try {
-      await invoke("create_branch_from_remote", {
-        path: repo.path,
-        remoteRef,
-      });
       await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
@@ -2895,83 +2897,6 @@ export default function App({
     [repo, syncingStagePaths, refreshAfterMutation],
   );
 
-  async function onCommit() {
-    if (!repo?.path || repo.error) return;
-    if (invalidCommitDraft) {
-      setOperationError("Add a commit title before the description.");
-      return;
-    }
-    const msg = commitMessage.trim();
-    if (!amendLastCommit && !msg) return;
-    if (amendLastCommit && msg.length === 0 && !hasStagedFiles) return;
-    setStageCommitBusy(true);
-    setOperationError(null);
-    try {
-      if (amendLastCommit) {
-        if (msg.length > 0) {
-          await invoke("amend_last_commit", { path: repo.path, message: msg });
-        } else {
-          await invoke("amend_last_commit", { path: repo.path, message: null });
-        }
-        setAmendLastCommit(false);
-      } else {
-        await invoke("commit_staged", { path: repo.path, message: msg });
-      }
-      setCommitTitle("");
-      setCommitBody("");
-      await refreshAfterMutation();
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    } finally {
-      setStageCommitBusy(false);
-    }
-  }
-
-  async function onPushToOrigin() {
-    if (!repo?.path || repo.error) return;
-    setPushBusy(true);
-    setOperationError(null);
-    try {
-      await invoke("push_to_origin", {
-        path: repo.path,
-        skipHooks: pushSkipHooks,
-      });
-      await refreshAfterMutation();
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    } finally {
-      setPushBusy(false);
-    }
-  }
-
-  async function onCommitAndPush() {
-    if (!repo?.path || repo.error || repo.detached) return;
-    if (invalidCommitDraft) {
-      setOperationError("Add a commit title before the description.");
-      return;
-    }
-    const msg = commitMessage.trim();
-    if (!msg) return;
-    if (!workingTreeFiles.some((f) => f.staged)) return;
-    setCommitPushBusy(true);
-    setOperationError(null);
-    try {
-      await invoke("commit_staged", { path: repo.path, message: msg });
-      setCommitTitle("");
-      setCommitBody("");
-      await invoke("push_to_origin", {
-        path: repo.path,
-        skipHooks: pushSkipHooks,
-      });
-      await refreshAfterMutation();
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-      void refreshAfterMutation();
-    } finally {
-      setCommitPushBusy(false);
-    }
-  }
-
   const canShowBranches = Boolean(repo && !repo.error && !loading);
   const currentBranchName = repo?.detached ? null : (repo?.branch ?? null);
   const commitsSectionTitle =
@@ -2982,11 +2907,17 @@ export default function App({
         : "Detached HEAD"
       : (repo?.headShort ?? "Current branch"));
 
-  const hasStagedFiles = workingTreeFiles.some((f) => f.staged);
-  const unstagedFiles = workingTreeFiles.filter((f) => f.unstaged);
-  const stagedFiles = workingTreeFiles.filter((f) => f.staged);
-  const unstagedPaths = unstagedFiles.map((f) => f.path);
-  const stagedPaths = stagedFiles.map((f) => f.path);
+  const unstagedFiles = useMemo(
+    () => workingTreeFiles.filter((file) => file.unstaged),
+    [workingTreeFiles],
+  );
+  const stagedFiles = useMemo(
+    () => workingTreeFiles.filter((file) => file.staged),
+    [workingTreeFiles],
+  );
+  const hasStagedFiles = stagedFiles.length > 0;
+  const unstagedPaths = useMemo(() => unstagedFiles.map((file) => file.path), [unstagedFiles]);
+  const stagedPaths = useMemo(() => stagedFiles.map((file) => file.path), [stagedFiles]);
   const wipChangedFileCount = useMemo(() => {
     const paths = new Set<string>();
     for (const f of workingTreeFiles) {
@@ -2994,75 +2925,11 @@ export default function App({
     }
     return paths.size;
   }, [workingTreeFiles]);
-  const stageSyncBusy = syncingStagePaths.size > 0;
-  const commitTitleTrimmed = commitTitle.trim();
-  const commitBodyTrimmed = commitBody.trim();
-  const commitMessage = useMemo(
-    () => composeCommitMessage(commitTitle, commitBody),
-    [commitTitle, commitBody],
+  const preferredWipFile = useMemo(
+    () => unstagedFiles[0] ?? stagedFiles[0] ?? null,
+    [stagedFiles, unstagedFiles],
   );
-  const invalidCommitDraft = commitTitleTrimmed.length === 0 && commitBodyTrimmed.length > 0;
-  const canCommitAmend =
-    amendLastCommit && !invalidCommitDraft && (commitTitleTrimmed.length > 0 || hasStagedFiles);
-  const canCommitNormal =
-    !amendLastCommit && !invalidCommitDraft && hasStagedFiles && commitTitleTrimmed.length > 0;
-  const canCommit =
-    Boolean(repo?.path && !repo.error && !loading) &&
-    (canCommitAmend || canCommitNormal) &&
-    !stageSyncBusy &&
-    !stageCommitBusy &&
-    !commitPushBusy;
-  const canPush =
-    Boolean(repo?.path && !repo.error && !loading) &&
-    !repo?.detached &&
-    !stageSyncBusy &&
-    !stageCommitBusy &&
-    !commitPushBusy &&
-    !pushBusy;
-  const canCommitAndPush = canCommit && !repo?.detached && !pushBusy && !amendLastCommit;
-
-  async function onAiGenerateCommitMessage() {
-    if (!repo?.path || repo.error) return;
-    if (!hasStagedFiles) return;
-    const key = openaiApiKey.trim();
-    if (!key) return;
-    setAiCommitBusy(true);
-    setOperationError(null);
-    try {
-      const stagedDiff = await invoke<string>("get_staged_diff_all", {
-        path: repo.path,
-      });
-      if (!stagedDiff.trim()) {
-        setOperationError("Staged diff is empty; nothing to summarize.");
-        return;
-      }
-      const nextMessage = await generateCommitMessageFromStagedDiff({
-        apiKey: key,
-        model: openaiModel.trim() || DEFAULT_OPENAI_MODEL,
-        stagedDiff,
-      });
-      if (!nextMessage.title) {
-        setOperationError("The model returned an empty message.");
-        return;
-      }
-      setCommitTitle(nextMessage.title);
-      setCommitBody(nextMessage.description);
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    } finally {
-      setAiCommitBusy(false);
-    }
-  }
-
-  const hasOpenAiApiKey = openaiApiKey.trim().length > 0;
-  const canUseAiCommit =
-    hasOpenAiApiKey &&
-    Boolean(repo?.path && !repo.error && !loading) &&
-    hasStagedFiles &&
-    !stageSyncBusy &&
-    !stageCommitBusy &&
-    !commitPushBusy &&
-    !aiCommitBusy;
+  const stageSyncBusy = syncingStagePaths.size > 0;
 
   const newBranchTrimmed = newBranchName.trim();
   const newBranchNameInvalid =
@@ -3099,6 +2966,240 @@ export default function App({
   );
   const browsingCurrentRepoWorktree = worktreeBrowseTarget?.path === repo?.path;
   const canEditSelectedDiff = selectedDiffRepoPath === repo?.path;
+  const selectedDiffBusy =
+    selectedDiffPath !== null &&
+    (stageCommitBusy || commitPushBusy || syncingStagePaths.has(selectedDiffPath));
+  const stagedSelectedDiffImagePreview = useMemo(() => {
+    if (
+      selectedDiffSide !== "staged" ||
+      !diffImagePreview ||
+      !selectedDiffPath ||
+      !pathLooksLikeRenderableImage(selectedDiffPath) ||
+      (!diffImagePreview.before && !diffImagePreview.after)
+    ) {
+      return null;
+    }
+    return {
+      beforeUrl: diffImagePreview.before,
+      afterUrl: diffImagePreview.after,
+      fileLabel: selectedDiffPath,
+    };
+  }, [diffImagePreview, selectedDiffPath, selectedDiffSide]);
+  const unstagedSelectedDiffImagePreview = useMemo(() => {
+    if (
+      selectedDiffSide !== "unstaged" ||
+      !diffImagePreview ||
+      !selectedDiffPath ||
+      !pathLooksLikeRenderableImage(selectedDiffPath) ||
+      (!diffImagePreview.before && !diffImagePreview.after)
+    ) {
+      return null;
+    }
+    return {
+      beforeUrl: diffImagePreview.before,
+      afterUrl: diffImagePreview.after,
+      fileLabel: selectedDiffPath,
+    };
+  }, [diffImagePreview, selectedDiffPath, selectedDiffSide]);
+  const applySelectedStagedPatch = useCallback(
+    (patch: string) => {
+      if (!selectedDiffPath) return;
+      void runPartialStagePatch(selectedDiffPath, "unstage", patch);
+    },
+    [runPartialStagePatch, selectedDiffPath],
+  );
+  const applySelectedUnstagedPatch = useCallback(
+    (patch: string) => {
+      if (!selectedDiffPath) return;
+      void runPartialStagePatch(selectedDiffPath, "stage", patch);
+    },
+    [runPartialStagePatch, selectedDiffPath],
+  );
+  const discardSelectedUnstagedPatch = useCallback(
+    (patch: string) => {
+      if (!selectedDiffPath) return;
+      void runDiscardHunkPatch(selectedDiffPath, patch);
+    },
+    [runDiscardHunkPatch, selectedDiffPath],
+  );
+  const stagedSelectedDiffAction = useMemo(() => {
+    if (!canEditSelectedDiff || selectedDiffSide !== "staged" || !selectedDiffPath) return null;
+    return {
+      kind: "unstage" as const,
+      busy: selectedDiffBusy,
+      onApplyPatch: applySelectedStagedPatch,
+    };
+  }, [
+    applySelectedStagedPatch,
+    canEditSelectedDiff,
+    selectedDiffBusy,
+    selectedDiffPath,
+    selectedDiffSide,
+  ]);
+  const unstagedSelectedDiffAction = useMemo(() => {
+    if (!canEditSelectedDiff || selectedDiffSide !== "unstaged" || !selectedDiffPath) return null;
+    return {
+      kind: "stage" as const,
+      busy: selectedDiffBusy,
+      onApplyPatch: applySelectedUnstagedPatch,
+    };
+  }, [
+    applySelectedUnstagedPatch,
+    canEditSelectedDiff,
+    selectedDiffBusy,
+    selectedDiffPath,
+    selectedDiffSide,
+  ]);
+  const discardSelectedDiffAction = useMemo(() => {
+    if (!canEditSelectedDiff || selectedDiffSide !== "unstaged" || !selectedDiffPath) return null;
+    return {
+      label: "Discard hunk",
+      buttonClassName: "btn-error",
+      busy: selectedDiffBusy,
+      onApplyPatch: discardSelectedUnstagedPatch,
+    };
+  }, [
+    canEditSelectedDiff,
+    discardSelectedUnstagedPatch,
+    selectedDiffBusy,
+    selectedDiffPath,
+    selectedDiffSide,
+  ]);
+  const commitDiffBinaryImagePreview = useMemo(() => {
+    if (
+      !commitDiffImagePreview ||
+      !commitDiffPath ||
+      !pathLooksLikeRenderableImage(commitDiffPath) ||
+      (!commitDiffImagePreview.before && !commitDiffImagePreview.after)
+    ) {
+      return null;
+    }
+    return {
+      beforeUrl: commitDiffImagePreview.before,
+      afterUrl: commitDiffImagePreview.after,
+      fileLabel: commitDiffPath,
+    };
+  }, [commitDiffImagePreview, commitDiffPath]);
+  const clearGraphFilters = useCallback(() => {
+    setGraphAuthorFilter("");
+    setGraphDateFrom("");
+    setGraphDateTo("");
+  }, []);
+  const handleLoadMoreGraphCommits = useCallback(() => {
+    void loadMoreGraphCommits();
+  }, [loadMoreGraphCommits]);
+  const handleGraphRowCommitSelect = useCallback(
+    (hash: string) => {
+      void selectCommit(hash);
+    },
+    [selectCommit],
+  );
+  const handleExportGraphCommits = useCallback(() => {
+    void exportFilteredCommitsList();
+  }, [exportFilteredCommitsList]);
+  const handleSelectWipRow = useCallback(() => {
+    if (!preferredWipFile) return;
+    void loadDiffForFile(preferredWipFile, preferredWipFile.unstaged ? "unstaged" : "staged");
+  }, [loadDiffForFile, preferredWipFile]);
+  const clearGitCommandStream = useCallback(() => {
+    setGitCommandStream(null);
+    gitStreamSessionRef.current = null;
+  }, []);
+  const handleCheckoutLocal = useCallback(
+    (branchName: string) => {
+      void onCheckoutLocal(branchName);
+    },
+    [onCheckoutLocal],
+  );
+  const handleCreateFromRemote = useCallback(
+    (remoteRef: string) => {
+      void onCreateFromRemote(remoteRef);
+    },
+    [onCreateFromRemote],
+  );
+  const handleOpenWorktree = useCallback(
+    (path: string) => {
+      void loadRepo(path);
+    },
+    [loadRepo],
+  );
+  const handlePreviewWorktreeDiff = useCallback(
+    (worktree: WorktreeEntry) => {
+      void openWorktreeBrowse(worktree);
+    },
+    [openWorktreeBrowse],
+  );
+  const submitCommit = useCallback(
+    async ({ message, amendLastCommit }: { message: string; amendLastCommit: boolean }) => {
+      if (!repo?.path || repo.error) return false;
+      if (!amendLastCommit && !message) return false;
+      if (amendLastCommit && message.length === 0 && !hasStagedFiles) return false;
+      setStageCommitBusy(true);
+      setOperationError(null);
+      try {
+        if (amendLastCommit) {
+          await invoke("amend_last_commit", {
+            path: repo.path,
+            message: message.length > 0 ? message : null,
+          });
+        } else {
+          await invoke("commit_staged", { path: repo.path, message });
+        }
+        await refreshAfterMutation();
+        return true;
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+        return false;
+      } finally {
+        setStageCommitBusy(false);
+      }
+    },
+    [hasStagedFiles, refreshAfterMutation, repo],
+  );
+  const pushCurrentBranchToOrigin = useCallback(
+    async ({ skipHooks }: { skipHooks: boolean }) => {
+      if (!repo?.path || repo.error) return;
+      setPushBusy(true);
+      setOperationError(null);
+      try {
+        await invoke("push_to_origin", {
+          path: repo.path,
+          skipHooks,
+        });
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setPushBusy(false);
+      }
+    },
+    [refreshAfterMutation, repo],
+  );
+  const submitCommitAndPush = useCallback(
+    async ({ message, skipHooks }: { message: string; skipHooks: boolean }) => {
+      if (!repo?.path || repo.error || repo.detached || !message || !hasStagedFiles) return false;
+      setCommitPushBusy(true);
+      setOperationError(null);
+      let committed = false;
+      try {
+        await invoke("commit_staged", { path: repo.path, message });
+        committed = true;
+        await invoke("push_to_origin", {
+          path: repo.path,
+          skipHooks,
+        });
+        await refreshAfterMutation();
+        return true;
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+        void refreshAfterMutation();
+        return committed;
+      } finally {
+        setCommitPushBusy(false);
+      }
+    },
+    [hasStagedFiles, refreshAfterMutation, repo],
+  );
 
   /** Branch/stash sidebar hidden; main column spans 9 — when viewing a commit, file diff, history, or blame. */
   const showExpandedDiff =
@@ -3497,19 +3598,11 @@ export default function App({
             branchSidebarSections={branchSidebarSections}
             onBranchSidebarSectionsChange={persistBranchSidebarSections}
             onSelectLocalBranchTip={onSelectLocalBranchTip}
-            onCheckoutLocal={(name) => {
-              void onCheckoutLocal(name);
-            }}
+            onCheckoutLocal={handleCheckoutLocal}
             onSelectRemoteBranchTip={onSelectRemoteBranchTip}
-            onCreateFromRemote={(remoteRef) => {
-              void onCreateFromRemote(remoteRef);
-            }}
-            onOpenWorktree={(path) => {
-              void loadRepo(path);
-            }}
-            onPreviewWorktreeDiff={(worktree) => {
-              void openWorktreeBrowse(worktree);
-            }}
+            onCreateFromRemote={handleCreateFromRemote}
+            onOpenWorktree={handleOpenWorktree}
+            onPreviewWorktreeDiff={handlePreviewWorktreeDiff}
             onWorktreeContextMenu={runWorktreeSidebarContextMenu}
             onStashClick={onStashSidebarClick}
             onTagClick={onTagSidebarClick}
@@ -3517,102 +3610,12 @@ export default function App({
             openGraphStashMenu={openGraphStashMenu}
             openTagSidebarMenu={openTagSidebarMenu}
           />
-          <div className="card shrink-0 border-base-300 bg-base-100 shadow-sm">
-            <div className="card-body gap-0 p-0">
-              <div
-                className={`collapse-arrow collapse border-0 bg-transparent shadow-none ${
-                  gitCommandSectionOpen ? "collapse-open" : ""
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={gitCommandSectionOpen}
-                  onChange={(e) => {
-                    setGitCommandSectionOpen(e.target.checked);
-                  }}
-                  aria-label="Show or hide git command output"
-                />
-                <div className="collapse-title block! min-h-0 min-w-0 border-b border-base-300/80 px-3! py-2! pr-9! text-left!">
-                  <h2 className="m-0 text-xs font-semibold tracking-wide uppercase opacity-70">
-                    Git command
-                  </h2>
-                  <p className="mt-0.5 mb-0 text-xs text-base-content/60">
-                    {gitCommandStream
-                      ? gitCommandStream.finished
-                        ? gitCommandStream.success
-                          ? "Finished"
-                          : "Failed"
-                        : "Running…"
-                      : "No recent command output"}
-                  </p>
-                </div>
-                <div className="collapse-content px-0! pt-0! pb-0!">
-                  <div className="space-y-2 p-3">
-                    {gitCommandStream ? (
-                      <>
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <p className="m-0 text-sm font-semibold text-base-content">
-                              {gitCommandStream.operation}
-                            </p>
-                            <code
-                              className="mt-1 block max-h-10 overflow-y-auto font-mono text-[10px] leading-tight wrap-anywhere text-base-content/70"
-                              title={gitCommandStream.commandLine}
-                            >
-                              {gitCommandStream.commandLine}
-                            </code>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn shrink-0 btn-ghost btn-xs"
-                            onClick={() => {
-                              setGitCommandStream(null);
-                              gitStreamSessionRef.current = null;
-                            }}
-                          >
-                            Clear
-                          </button>
-                        </div>
-                        <div
-                          ref={gitCommandStreamScrollRef}
-                          className="max-h-[min(12rem,35vh)] min-h-12 overflow-x-hidden overflow-y-auto rounded border border-base-300 bg-base-200/40 px-2 py-1.5 font-mono text-[11px] leading-snug wrap-anywhere [scrollbar-gutter:stable]"
-                        >
-                          {gitCommandStream.lines.length === 0 && !gitCommandStream.finished ? (
-                            <span className="text-base-content/60">Running…</span>
-                          ) : null}
-                          {gitCommandStream.lines.map((line, i) => (
-                            <div
-                              key={i}
-                              className={
-                                line.stream === "stderr" ? "text-warning" : "text-base-content/85"
-                              }
-                            >
-                              {line.text}
-                            </div>
-                          ))}
-                          {gitCommandStream.finished ? (
-                            <div
-                              className={
-                                gitCommandStream.success
-                                  ? "mt-1 border-t border-base-300 pt-1 text-success"
-                                  : "mt-1 border-t border-base-300 pt-1 text-error"
-                              }
-                            >
-                              {gitCommandStream.success
-                                ? "Finished."
-                                : gitCommandStream.error?.trim() || "Command failed."}
-                            </div>
-                          ) : null}
-                        </div>
-                      </>
-                    ) : (
-                      <p className="m-0 text-xs text-base-content/50">No recent command output</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <GitCommandPanel
+            repoPath={repo?.path ?? null}
+            gitCommandStream={gitCommandStream}
+            scrollRef={gitCommandStreamScrollRef}
+            onClear={clearGitCommandStream}
+          />
         </aside>
 
         <div
@@ -3854,41 +3857,9 @@ export default function App({
                                                   text={diffStagedText}
                                                   emptyLabel="(no staged diff)"
                                                   binaryImagePreview={
-                                                    selectedDiffSide === "staged" &&
-                                                    diffImagePreview &&
-                                                    selectedDiffPath &&
-                                                    pathLooksLikeRenderableImage(
-                                                      selectedDiffPath,
-                                                    ) &&
-                                                    (diffImagePreview.before ||
-                                                      diffImagePreview.after)
-                                                      ? {
-                                                          beforeUrl: diffImagePreview.before,
-                                                          afterUrl: diffImagePreview.after,
-                                                          fileLabel: selectedDiffPath,
-                                                        }
-                                                      : null
+                                                    stagedSelectedDiffImagePreview
                                                   }
-                                                  partialAction={
-                                                    canEditSelectedDiff &&
-                                                    selectedDiffSide === "staged" &&
-                                                    selectedDiffPath
-                                                      ? {
-                                                          kind: "unstage",
-                                                          busy:
-                                                            stageCommitBusy ||
-                                                            commitPushBusy ||
-                                                            syncingStagePaths.has(selectedDiffPath),
-                                                          onApplyPatch: (patch) => {
-                                                            void runPartialStagePatch(
-                                                              selectedDiffPath,
-                                                              "unstage",
-                                                              patch,
-                                                            );
-                                                          },
-                                                        }
-                                                      : null
-                                                  }
+                                                  partialAction={stagedSelectedDiffAction}
                                                 />
                                               </div>
                                             ) : null}
@@ -3901,61 +3872,10 @@ export default function App({
                                                   text={diffUnstagedText}
                                                   emptyLabel="(no unstaged diff)"
                                                   binaryImagePreview={
-                                                    selectedDiffSide === "unstaged" &&
-                                                    diffImagePreview &&
-                                                    selectedDiffPath &&
-                                                    pathLooksLikeRenderableImage(
-                                                      selectedDiffPath,
-                                                    ) &&
-                                                    (diffImagePreview.before ||
-                                                      diffImagePreview.after)
-                                                      ? {
-                                                          beforeUrl: diffImagePreview.before,
-                                                          afterUrl: diffImagePreview.after,
-                                                          fileLabel: selectedDiffPath,
-                                                        }
-                                                      : null
+                                                    unstagedSelectedDiffImagePreview
                                                   }
-                                                  partialAction={
-                                                    canEditSelectedDiff &&
-                                                    selectedDiffSide === "unstaged" &&
-                                                    selectedDiffPath
-                                                      ? {
-                                                          kind: "stage",
-                                                          busy:
-                                                            stageCommitBusy ||
-                                                            commitPushBusy ||
-                                                            syncingStagePaths.has(selectedDiffPath),
-                                                          onApplyPatch: (patch) => {
-                                                            void runPartialStagePatch(
-                                                              selectedDiffPath,
-                                                              "stage",
-                                                              patch,
-                                                            );
-                                                          },
-                                                        }
-                                                      : null
-                                                  }
-                                                  secondaryHunkAction={
-                                                    canEditSelectedDiff &&
-                                                    selectedDiffSide === "unstaged" &&
-                                                    selectedDiffPath
-                                                      ? {
-                                                          label: "Discard hunk",
-                                                          buttonClassName: "btn-error",
-                                                          busy:
-                                                            stageCommitBusy ||
-                                                            commitPushBusy ||
-                                                            syncingStagePaths.has(selectedDiffPath),
-                                                          onApplyPatch: (patch) => {
-                                                            void runDiscardHunkPatch(
-                                                              selectedDiffPath,
-                                                              patch,
-                                                            );
-                                                          },
-                                                        }
-                                                      : null
-                                                  }
+                                                  partialAction={unstagedSelectedDiffAction}
+                                                  secondaryHunkAction={discardSelectedDiffAction}
                                                 />
                                               </div>
                                             ) : null}
@@ -4137,39 +4057,8 @@ export default function App({
                                           <UnifiedDiff
                                             text={diffStagedText}
                                             emptyLabel="(no staged diff)"
-                                            binaryImagePreview={
-                                              selectedDiffSide === "staged" &&
-                                              diffImagePreview &&
-                                              selectedDiffPath &&
-                                              pathLooksLikeRenderableImage(selectedDiffPath) &&
-                                              (diffImagePreview.before || diffImagePreview.after)
-                                                ? {
-                                                    beforeUrl: diffImagePreview.before,
-                                                    afterUrl: diffImagePreview.after,
-                                                    fileLabel: selectedDiffPath,
-                                                  }
-                                                : null
-                                            }
-                                            partialAction={
-                                              canEditSelectedDiff &&
-                                              selectedDiffSide === "staged" &&
-                                              selectedDiffPath
-                                                ? {
-                                                    kind: "unstage",
-                                                    busy:
-                                                      stageCommitBusy ||
-                                                      commitPushBusy ||
-                                                      syncingStagePaths.has(selectedDiffPath),
-                                                    onApplyPatch: (patch) => {
-                                                      void runPartialStagePatch(
-                                                        selectedDiffPath,
-                                                        "unstage",
-                                                        patch,
-                                                      );
-                                                    },
-                                                  }
-                                                : null
-                                            }
+                                            binaryImagePreview={stagedSelectedDiffImagePreview}
+                                            partialAction={stagedSelectedDiffAction}
                                           />
                                         </div>
                                       ) : null}
@@ -4181,59 +4070,9 @@ export default function App({
                                           <UnifiedDiff
                                             text={diffUnstagedText}
                                             emptyLabel="(no unstaged diff)"
-                                            binaryImagePreview={
-                                              selectedDiffSide === "unstaged" &&
-                                              diffImagePreview &&
-                                              selectedDiffPath &&
-                                              pathLooksLikeRenderableImage(selectedDiffPath) &&
-                                              (diffImagePreview.before || diffImagePreview.after)
-                                                ? {
-                                                    beforeUrl: diffImagePreview.before,
-                                                    afterUrl: diffImagePreview.after,
-                                                    fileLabel: selectedDiffPath,
-                                                  }
-                                                : null
-                                            }
-                                            partialAction={
-                                              canEditSelectedDiff &&
-                                              selectedDiffSide === "unstaged" &&
-                                              selectedDiffPath
-                                                ? {
-                                                    kind: "stage",
-                                                    busy:
-                                                      stageCommitBusy ||
-                                                      commitPushBusy ||
-                                                      syncingStagePaths.has(selectedDiffPath),
-                                                    onApplyPatch: (patch) => {
-                                                      void runPartialStagePatch(
-                                                        selectedDiffPath,
-                                                        "stage",
-                                                        patch,
-                                                      );
-                                                    },
-                                                  }
-                                                : null
-                                            }
-                                            secondaryHunkAction={
-                                              canEditSelectedDiff &&
-                                              selectedDiffSide === "unstaged" &&
-                                              selectedDiffPath
-                                                ? {
-                                                    label: "Discard hunk",
-                                                    buttonClassName: "btn-error",
-                                                    busy:
-                                                      stageCommitBusy ||
-                                                      commitPushBusy ||
-                                                      syncingStagePaths.has(selectedDiffPath),
-                                                    onApplyPatch: (patch) => {
-                                                      void runDiscardHunkPatch(
-                                                        selectedDiffPath,
-                                                        patch,
-                                                      );
-                                                    },
-                                                  }
-                                                : null
-                                            }
+                                            binaryImagePreview={unstagedSelectedDiffImagePreview}
+                                            partialAction={unstagedSelectedDiffAction}
+                                            secondaryHunkAction={discardSelectedDiffAction}
                                           />
                                         </div>
                                       ) : null}
@@ -4564,19 +4403,7 @@ export default function App({
                                             <UnifiedDiff
                                               text={commitDiffText ?? ""}
                                               emptyLabel="(no diff for this file)"
-                                              binaryImagePreview={
-                                                commitDiffImagePreview &&
-                                                commitDiffPath &&
-                                                pathLooksLikeRenderableImage(commitDiffPath) &&
-                                                (commitDiffImagePreview.before ||
-                                                  commitDiffImagePreview.after)
-                                                  ? {
-                                                      beforeUrl: commitDiffImagePreview.before,
-                                                      afterUrl: commitDiffImagePreview.after,
-                                                      fileLabel: commitDiffPath,
-                                                    }
-                                                  : null
-                                              }
+                                              binaryImagePreview={commitDiffBinaryImagePreview}
                                             />
                                           </div>
                                         )}
@@ -4706,12 +4533,8 @@ export default function App({
                                 }
                                 graphCommitsHasMore={graphCommitsHasMore}
                                 loadingMoreGraphCommits={loadingMoreGraphCommits}
-                                loadMoreGraphCommits={() => {
-                                  void loadMoreGraphCommits();
-                                }}
-                                onRowCommitSelect={(hash) => {
-                                  void selectCommit(hash);
-                                }}
+                                loadMoreGraphCommits={handleLoadMoreGraphCommits}
+                                onRowCommitSelect={handleGraphRowCommitSelect}
                                 openGraphBranchLocalMenu={openGraphBranchLocalMenu}
                                 openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
                                 openGraphStashMenu={openGraphStashMenu}
@@ -4725,24 +4548,11 @@ export default function App({
                                 onGraphDateFromChange={setGraphDateFrom}
                                 onGraphDateToChange={setGraphDateTo}
                                 graphFiltersActive={graphCommitFiltersActive}
-                                onClearGraphFilters={() => {
-                                  setGraphAuthorFilter("");
-                                  setGraphDateFrom("");
-                                  setGraphDateTo("");
-                                }}
-                                onExportGraphCommits={() => {
-                                  void exportFilteredCommitsList();
-                                }}
+                                onClearGraphFilters={clearGraphFilters}
+                                onExportGraphCommits={handleExportGraphCommits}
                                 exportGraphCommitsDisabled={graphExportCommits.length === 0}
                                 wipChangedFileCount={wipChangedFileCount}
-                                onWipSelect={() => {
-                                  const first = unstagedFiles[0] ?? stagedFiles[0];
-                                  if (!first) return;
-                                  void loadDiffForFile(
-                                    first,
-                                    first.unstaged ? "unstaged" : "staged",
-                                  );
-                                }}
+                                onWipSelect={handleSelectWipRow}
                               />
                             )}
                           </div>
@@ -4906,155 +4716,22 @@ export default function App({
                 </div>
               </section>
 
-              <section
-                className="flex min-h-0 min-w-0 flex-[1_1_0%] flex-col border-t border-base-300 bg-base-100"
-                aria-labelledby="sidebar-commit-heading"
-              >
-                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
-                  <div className="flex shrink-0 flex-col gap-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h2
-                        id="sidebar-commit-heading"
-                        className="m-0 text-xs font-semibold tracking-wide uppercase opacity-80"
-                      >
-                        Commit
-                      </h2>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <label className="label cursor-pointer gap-1.5 py-0">
-                          <input
-                            type="checkbox"
-                            className="checkbox checkbox-xs"
-                            checked={pushSkipHooks}
-                            onChange={(e) => {
-                              setPushSkipHooks(e.target.checked);
-                            }}
-                          />
-                          <span
-                            className="label-text text-[0.65rem] leading-tight"
-                            title="Skip local pre-push and other hooks (--no-verify)"
-                          >
-                            Skip hooks
-                          </span>
-                        </label>
-                        <button
-                          type="button"
-                          className="btn shrink-0 gap-1 px-2 btn-ghost btn-xs"
-                          disabled={!canPush}
-                          title="Push the current branch to origin"
-                          onClick={() => void onPushToOrigin()}
-                        >
-                          {pushBusy ? (
-                            <span className="loading loading-xs loading-spinner" />
-                          ) : (
-                            <>
-                              <span aria-hidden>↑</span>
-                              <span className="hidden sm:inline">Push</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex cursor-pointer items-center gap-2.5">
-                      <input
-                        id="commit-amend-checkbox"
-                        type="checkbox"
-                        className="checkbox checkbox-sm"
-                        checked={amendLastCommit}
-                        disabled={
-                          !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy
-                        }
-                        onChange={(e) => {
-                          setAmendLastCommit(e.target.checked);
-                        }}
-                      />
-                      <label
-                        htmlFor="commit-amend-checkbox"
-                        className="cursor-pointer text-xs leading-snug text-base-content/90"
-                      >
-                        Amend last commit
-                      </label>
-                    </div>
-                  </div>
-                  <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-                    <div className="form-control min-w-0">
-                      <input
-                        type="text"
-                        className="input-bordered input input-sm w-full font-sans text-sm"
-                        placeholder={
-                          amendLastCommit
-                            ? "Title: leave empty to keep the previous message"
-                            : "Title"
-                        }
-                        value={commitTitle}
-                        disabled={
-                          !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy
-                        }
-                        onChange={(e) => {
-                          setCommitTitle(e.target.value);
-                        }}
-                      />
-                    </div>
-                    <div className="form-control flex min-h-0 min-w-0 flex-1 flex-col gap-1">
-                      <textarea
-                        className="textarea-bordered textarea min-h-0 w-full flex-1 resize-none overflow-y-auto font-sans text-sm textarea-sm"
-                        placeholder="Description"
-                        value={commitBody}
-                        disabled={
-                          !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy
-                        }
-                        onChange={(e) => {
-                          setCommitBody(e.target.value);
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-outline btn-sm"
-                      disabled={!canCommitAndPush}
-                      title="Create the commit, then push the branch to origin"
-                      onClick={() => void onCommitAndPush()}
-                    >
-                      {commitPushBusy ? (
-                        <span className="loading loading-xs loading-spinner" />
-                      ) : (
-                        "Commit & Push"
-                      )}
-                    </button>
-                    <div className="ml-auto flex flex-wrap items-center gap-2">
-                      {hasOpenAiApiKey ? (
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-primary"
-                          disabled={!canUseAiCommit}
-                          title="Generate a commit title and description from staged changes using OpenAI"
-                          aria-label="Generate a commit title and description from staged changes using OpenAI"
-                          onClick={() => void onAiGenerateCommitMessage()}
-                        >
-                          {aiCommitBusy ? (
-                            <span className="loading loading-xs loading-spinner" />
-                          ) : (
-                            "✨"
-                          )}
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        disabled={!canCommit}
-                        onClick={() => void onCommit()}
-                      >
-                        {stageCommitBusy ? (
-                          <span className="loading loading-xs loading-spinner" />
-                        ) : (
-                          "Commit"
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </section>
+              <CommitComposer
+                repoPath={repo?.path ?? null}
+                repoDetached={Boolean(repo?.detached)}
+                canShowBranches={canShowBranches}
+                hasStagedFiles={hasStagedFiles}
+                stageSyncBusy={stageSyncBusy}
+                stageCommitBusy={stageCommitBusy}
+                commitPushBusy={commitPushBusy}
+                pushBusy={pushBusy}
+                openaiApiKey={openaiApiKey}
+                openaiModel={openaiModel}
+                onCommit={submitCommit}
+                onCommitAndPush={submitCommitAndPush}
+                onPushToOrigin={pushCurrentBranchToOrigin}
+                onOperationError={setOperationError}
+              />
             </div>
           </div>
         </aside>
