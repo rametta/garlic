@@ -320,7 +320,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
               {visibleTags.map((t) => (
                 <span
                   key={`tag:${t.name}`}
-                  className="badge inline-flex max-w-[7rem] min-w-0 shrink-0 cursor-context-menu truncate badge-ghost font-mono badge-xs text-[0.6rem] text-accent"
+                  className="badge inline-flex max-w-28 min-w-0 shrink-0 cursor-context-menu truncate badge-ghost font-mono badge-xs text-[0.6rem] text-accent"
                   title={t.name}
                   onContextMenu={(e) => {
                     if (branchBusy || pushBusy) return;
