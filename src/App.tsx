@@ -10,7 +10,6 @@ import {
   useState,
 } from "react";
 import type { BranchSidebarSectionsState } from "./repoTypes";
-import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -21,7 +20,13 @@ import { BranchSidebar, type BranchGraphControls } from "./components/BranchSide
 import { CommitComposer } from "./components/CommitComposer";
 import { CommitGraphSection } from "./components/CommitGraphSection";
 import { GitCommandPanel } from "./components/GitCommandPanel";
-import { UnifiedDiff } from "./components/UnifiedDiff";
+import { OpenAiSettingsDialog } from "./components/OpenAiSettingsDialog";
+import {
+  UnifiedDiff,
+  type BinaryImagePreview,
+  type HunkAction,
+  type PartialDiffAction,
+} from "./components/UnifiedDiff";
 import {
   computeCommitGraphLayout,
   type BranchTip,
@@ -559,6 +564,232 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+const StandaloneDiffPane = memo(function StandaloneDiffPane({
+  path,
+  side,
+  diffLoading,
+  diffError,
+  onDismissDiffError,
+  onBack,
+  stagedText,
+  unstagedText,
+  stagedImagePreview,
+  unstagedImagePreview,
+  stagedAction,
+  unstagedAction,
+  discardAction,
+}: {
+  path: string;
+  side: "unstaged" | "staged" | null;
+  diffLoading: boolean;
+  diffError: string | null;
+  onDismissDiffError: () => void;
+  onBack: () => void;
+  stagedText: string | null;
+  unstagedText: string | null;
+  stagedImagePreview: BinaryImagePreview | null;
+  unstagedImagePreview: BinaryImagePreview | null;
+  stagedAction: PartialDiffAction | null;
+  unstagedAction: PartialDiffAction | null;
+  discardAction: HunkAction | null;
+}) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+        <div className="min-w-0">
+          <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+            Diff
+          </h2>
+          <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
+            {path}
+          </code>
+          {side ? (
+            <p className="mt-1 mb-0 text-xs text-base-content/65">
+              {side === "staged" ? "Staged changes" : "Unstaged changes"}
+            </p>
+          ) : null}
+        </div>
+        <button type="button" className="btn shrink-0 btn-sm btn-primary" onClick={onBack}>
+          Back to commits
+        </button>
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {diffLoading ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+            <span className="loading loading-md loading-spinner text-primary" />
+            <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
+          </div>
+        ) : diffError ? (
+          <DismissibleAlert className="alert text-sm alert-error" onDismiss={onDismissDiffError}>
+            <span className="wrap-break-word">{diffError}</span>
+          </DismissibleAlert>
+        ) : (
+          <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
+            {stagedText !== null ? (
+              <div className="mb-8 last:mb-0">
+                <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                  Staged
+                </div>
+                <UnifiedDiff
+                  text={stagedText}
+                  emptyLabel="(no staged diff)"
+                  binaryImagePreview={stagedImagePreview}
+                  partialAction={stagedAction}
+                />
+              </div>
+            ) : null}
+            {unstagedText !== null ? (
+              <div>
+                <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                  Unstaged
+                </div>
+                <UnifiedDiff
+                  text={unstagedText}
+                  emptyLabel="(no unstaged diff)"
+                  binaryImagePreview={unstagedImagePreview}
+                  partialAction={unstagedAction}
+                  secondaryHunkAction={discardAction}
+                />
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+const FileBlamePane = memo(function FileBlamePane({
+  path,
+  loading,
+  error,
+  text,
+  onBack,
+  onDismissError,
+}: {
+  path: string;
+  loading: boolean;
+  error: string | null;
+  text: string | null;
+  onBack: () => void;
+  onDismissError: () => void;
+}) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+        <div className="min-w-0">
+          <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+            Blame
+          </h2>
+          <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
+            {path}
+          </code>
+        </div>
+        <button type="button" className="btn shrink-0 btn-sm btn-primary" onClick={onBack}>
+          Back to commits
+        </button>
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {loading ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+            <span className="loading loading-md loading-spinner text-primary" />
+            <p className="m-0 text-sm text-base-content/70">Loading blame…</p>
+          </div>
+        ) : error ? (
+          <DismissibleAlert className="alert text-sm alert-error" onDismiss={onDismissError}>
+            <span className="wrap-break-word">{error}</span>
+          </DismissibleAlert>
+        ) : (
+          <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
+            {text ?? ""}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+});
+
+const FileHistoryPane = memo(function FileHistoryPane({
+  path,
+  loading,
+  error,
+  commits,
+  onBack,
+  onDismissError,
+  onPickCommit,
+}: {
+  path: string;
+  loading: boolean;
+  error: string | null;
+  commits: CommitEntry[];
+  onBack: () => void;
+  onDismissError: () => void;
+  onPickCommit: (hash: string) => void;
+}) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+        <div className="min-w-0">
+          <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+            File history
+          </h2>
+          <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
+            {path}
+          </code>
+          <p className="mt-1 mb-0 text-xs text-base-content/60">
+            Commits that touched this path (newest first). Click a row to open the diff for that
+            revision.
+          </p>
+        </div>
+        <button type="button" className="btn shrink-0 btn-sm btn-primary" onClick={onBack}>
+          Back to commits
+        </button>
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {loading ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+            <span className="loading loading-md loading-spinner text-primary" />
+            <p className="m-0 text-sm text-base-content/70">Loading history…</p>
+          </div>
+        ) : error ? (
+          <DismissibleAlert className="alert text-sm alert-error" onDismiss={onDismissError}>
+            <span className="wrap-break-word">{error}</span>
+          </DismissibleAlert>
+        ) : commits.length === 0 ? (
+          <p className="m-0 text-center text-sm text-base-content/60">
+            No commits found for this file
+          </p>
+        ) : (
+          <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1.5 overflow-y-auto pr-0.5">
+            {commits.map((commit) => (
+              <li key={commit.hash}>
+                <button
+                  type="button"
+                  className="flex w-full flex-col gap-0.5 rounded-lg border border-base-300/50 bg-base-200/40 px-3 py-2 text-left transition-colors hover:border-base-300 hover:bg-base-300/35"
+                  onClick={() => {
+                    onPickCommit(commit.hash);
+                  }}
+                >
+                  <span className="font-mono text-[0.65rem] text-base-content/70">
+                    {commit.shortHash}
+                  </span>
+                  <span className="text-sm leading-snug text-base-content/95">
+                    {commit.subject}
+                  </span>
+                  <span className="text-[0.65rem] text-base-content/55">
+                    {formatAuthorDisplay(commit.author)} ·{" "}
+                    {formatRelativeShort(commit.date) ?? formatDate(commit.date) ?? "—"}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+});
+
 export default function App({
   startup,
   themePreference: initialThemePreference,
@@ -716,73 +947,18 @@ export default function App({
   const newBranchInputRef = useRef<HTMLInputElement>(null);
   const editOriginUrlDialogRef = useRef<HTMLDialogElement>(null);
   const editOriginUrlInputRef = useRef<HTMLInputElement>(null);
-  const openaiKeyInputRef = useRef<HTMLInputElement>(null);
   const [openaiApiKey, setOpenaiApiKey] = useState(() => initialOpenaiApiKey?.trim() ?? "");
-  const [openaiKeyDraft, setOpenaiKeyDraft] = useState(() => initialOpenaiApiKey?.trim() ?? "");
   const [openaiModel, setOpenaiModel] = useState(
     () => initialOpenaiModel.trim() || DEFAULT_OPENAI_MODEL,
   );
-  const [openaiModelDraft, setOpenaiModelDraft] = useState(
-    () => initialOpenaiModel.trim() || DEFAULT_OPENAI_MODEL,
-  );
   const [openaiSettingsOpen, setOpenaiSettingsOpen] = useState(false);
-  const [openaiSettingsBusy, setOpenaiSettingsBusy] = useState(false);
   const closeOpenAiSettingsDialog = useCallback(() => {
     setOpenaiSettingsOpen(false);
-    setOpenaiKeyDraft(openaiApiKey);
-    setOpenaiModelDraft(openaiModel);
-  }, [openaiApiKey, openaiModel]);
+  }, []);
 
   const openOpenAiSettingsDialog = useCallback(() => {
-    setOpenaiKeyDraft(openaiApiKey);
-    setOpenaiModelDraft(openaiModel);
     setOpenaiSettingsOpen(true);
-  }, [openaiApiKey, openaiModel]);
-
-  useEffect(() => {
-    if (!openaiSettingsOpen) return;
-    const id = requestAnimationFrame(() => {
-      openaiKeyInputRef.current?.focus();
-      openaiKeyInputRef.current?.select();
-    });
-    return () => {
-      cancelAnimationFrame(id);
-    };
-  }, [openaiSettingsOpen]);
-
-  useEffect(() => {
-    if (!openaiSettingsOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeOpenAiSettingsDialog();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [openaiSettingsOpen, closeOpenAiSettingsDialog]);
-
-  async function saveOpenAiSettings() {
-    setOpenaiSettingsBusy(true);
-    setOperationError(null);
-    try {
-      const trimmed = openaiKeyDraft.trim();
-      const modelTrim = openaiModelDraft.trim();
-      await invoke("set_openai_settings", {
-        key: trimmed.length > 0 ? trimmed : null,
-        model: modelTrim.length > 0 ? modelTrim : null,
-      });
-      setOpenaiApiKey(trimmed);
-      setOpenaiModel(modelTrim || DEFAULT_OPENAI_MODEL);
-      setOpenaiSettingsOpen(false);
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    } finally {
-      setOpenaiSettingsBusy(false);
-    }
-  }
+  }, []);
   const [editOriginUrl, setEditOriginUrl] = useState("");
   /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
   const lastFullBranchListRefreshAtRef = useRef(0);
@@ -4005,200 +4181,48 @@ export default function App({
                                 </div>
                               </div>
                             ) : !listsError && selectedDiffPath ? (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
-                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
-                                  <div className="min-w-0">
-                                    <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
-                                      Diff
-                                    </h2>
-                                    <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
-                                      {selectedDiffPath}
-                                    </code>
-                                    {selectedDiffSide ? (
-                                      <p className="mt-1 mb-0 text-xs text-base-content/65">
-                                        {selectedDiffSide === "staged"
-                                          ? "Staged changes"
-                                          : "Unstaged changes"}
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="btn shrink-0 btn-sm btn-primary"
-                                    onClick={clearDiffSelection}
-                                  >
-                                    Back to commits
-                                  </button>
-                                </div>
-                                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                                  {diffLoading ? (
-                                    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
-                                      <span className="loading loading-md loading-spinner text-primary" />
-                                      <p className="m-0 text-sm text-base-content/70">
-                                        Loading diff…
-                                      </p>
-                                    </div>
-                                  ) : diffError ? (
-                                    <DismissibleAlert
-                                      className="alert text-sm alert-error"
-                                      onDismiss={() => {
-                                        setDiffError(null);
-                                      }}
-                                    >
-                                      <span className="wrap-break-word">{diffError}</span>
-                                    </DismissibleAlert>
-                                  ) : (
-                                    <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
-                                      {diffStagedText !== null ? (
-                                        <div className="mb-8 last:mb-0">
-                                          <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                                            Staged
-                                          </div>
-                                          <UnifiedDiff
-                                            text={diffStagedText}
-                                            emptyLabel="(no staged diff)"
-                                            binaryImagePreview={stagedSelectedDiffImagePreview}
-                                            partialAction={stagedSelectedDiffAction}
-                                          />
-                                        </div>
-                                      ) : null}
-                                      {diffUnstagedText !== null ? (
-                                        <div>
-                                          <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                                            Unstaged
-                                          </div>
-                                          <UnifiedDiff
-                                            text={diffUnstagedText}
-                                            emptyLabel="(no unstaged diff)"
-                                            binaryImagePreview={unstagedSelectedDiffImagePreview}
-                                            partialAction={unstagedSelectedDiffAction}
-                                            secondaryHunkAction={discardSelectedDiffAction}
-                                          />
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
+                              <StandaloneDiffPane
+                                path={selectedDiffPath}
+                                side={selectedDiffSide}
+                                diffLoading={diffLoading}
+                                diffError={diffError}
+                                onDismissDiffError={() => {
+                                  setDiffError(null);
+                                }}
+                                onBack={clearDiffSelection}
+                                stagedText={diffStagedText}
+                                unstagedText={diffUnstagedText}
+                                stagedImagePreview={stagedSelectedDiffImagePreview}
+                                unstagedImagePreview={unstagedSelectedDiffImagePreview}
+                                stagedAction={stagedSelectedDiffAction}
+                                unstagedAction={unstagedSelectedDiffAction}
+                                discardAction={discardSelectedDiffAction}
+                              />
                             ) : !listsError && fileBlamePath ? (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
-                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
-                                  <div className="min-w-0">
-                                    <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                      Blame
-                                    </h2>
-                                    <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
-                                      {fileBlamePath}
-                                    </code>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="btn shrink-0 btn-sm btn-primary"
-                                    onClick={() => {
-                                      clearFileToolView();
-                                    }}
-                                  >
-                                    Back to commits
-                                  </button>
-                                </div>
-                                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                                  {fileBlameLoading ? (
-                                    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
-                                      <span className="loading loading-md loading-spinner text-primary" />
-                                      <p className="m-0 text-sm text-base-content/70">
-                                        Loading blame…
-                                      </p>
-                                    </div>
-                                  ) : fileBlameError ? (
-                                    <DismissibleAlert
-                                      className="alert text-sm alert-error"
-                                      onDismiss={() => {
-                                        setFileBlameError(null);
-                                      }}
-                                    >
-                                      <span className="wrap-break-word">{fileBlameError}</span>
-                                    </DismissibleAlert>
-                                  ) : (
-                                    <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
-                                      {fileBlameText ?? ""}
-                                    </pre>
-                                  )}
-                                </div>
-                              </div>
+                              <FileBlamePane
+                                path={fileBlamePath}
+                                loading={fileBlameLoading}
+                                error={fileBlameError}
+                                text={fileBlameText}
+                                onBack={clearFileToolView}
+                                onDismissError={() => {
+                                  setFileBlameError(null);
+                                }}
+                              />
                             ) : !listsError && fileHistoryPath ? (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
-                                <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
-                                  <div className="min-w-0">
-                                    <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
-                                      File history
-                                    </h2>
-                                    <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/85">
-                                      {fileHistoryPath}
-                                    </code>
-                                    <p className="mt-1 mb-0 text-xs text-base-content/60">
-                                      Commits that touched this path (newest first). Click a row to
-                                      open the diff for that revision.
-                                    </p>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="btn shrink-0 btn-sm btn-primary"
-                                    onClick={() => {
-                                      clearFileToolView();
-                                    }}
-                                  >
-                                    Back to commits
-                                  </button>
-                                </div>
-                                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                                  {fileHistoryLoading ? (
-                                    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
-                                      <span className="loading loading-md loading-spinner text-primary" />
-                                      <p className="m-0 text-sm text-base-content/70">
-                                        Loading history…
-                                      </p>
-                                    </div>
-                                  ) : fileHistoryError ? (
-                                    <DismissibleAlert
-                                      className="alert text-sm alert-error"
-                                      onDismiss={() => {
-                                        setFileHistoryError(null);
-                                      }}
-                                    >
-                                      <span className="wrap-break-word">{fileHistoryError}</span>
-                                    </DismissibleAlert>
-                                  ) : fileHistoryCommits.length === 0 ? (
-                                    <p className="m-0 text-center text-sm text-base-content/60">
-                                      No commits found for this file
-                                    </p>
-                                  ) : (
-                                    <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1.5 overflow-y-auto pr-0.5">
-                                      {fileHistoryCommits.map((c) => (
-                                        <li key={c.hash}>
-                                          <button
-                                            type="button"
-                                            className="flex w-full flex-col gap-0.5 rounded-lg border border-base-300/50 bg-base-200/40 px-3 py-2 text-left transition-colors hover:border-base-300 hover:bg-base-300/35"
-                                            onClick={() => void onPickFileHistoryCommit(c.hash)}
-                                          >
-                                            <span className="font-mono text-[0.65rem] text-base-content/70">
-                                              {c.shortHash}
-                                            </span>
-                                            <span className="text-sm leading-snug text-base-content/95">
-                                              {c.subject}
-                                            </span>
-                                            <span className="text-[0.65rem] text-base-content/55">
-                                              {formatAuthorDisplay(c.author)} ·{" "}
-                                              {formatRelativeShort(c.date) ??
-                                                formatDate(c.date) ??
-                                                "—"}
-                                            </span>
-                                          </button>
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  )}
-                                </div>
-                              </div>
+                              <FileHistoryPane
+                                path={fileHistoryPath}
+                                loading={fileHistoryLoading}
+                                error={fileHistoryError}
+                                commits={fileHistoryCommits}
+                                onBack={clearFileToolView}
+                                onDismissError={() => {
+                                  setFileHistoryError(null);
+                                }}
+                                onPickCommit={(hash) => {
+                                  void onPickFileHistoryCommit(hash);
+                                }}
+                              />
                             ) : !listsError && commitBrowseHash ? (
                               <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden px-4 pt-3 pb-4">
                                 <div className="shrink-0 rounded-xl border border-base-300/80 bg-base-200/35 p-3">
@@ -4736,107 +4760,19 @@ export default function App({
           </div>
         </aside>
       </div>
-      {createPortal(
-        openaiSettingsOpen ? (
-          <div
-            className="modal-open modal pointer-events-auto z-9999"
-            role="presentation"
-            onClick={() => {
-              closeOpenAiSettingsDialog();
-            }}
-          >
-            <div
-              className="modal-box"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="openai-settings-title"
-              onClick={(e) => {
-                e.stopPropagation();
-              }}
-            >
-              <h3 id="openai-settings-title" className="m-0 text-lg font-bold">
-                OpenAI settings
-              </h3>
-              <p className="mt-1 mb-0 text-sm text-base-content/70">
-                Stored only on this device in Garlic settings. Used to suggest commit titles and
-                descriptions from your staged diff via the OpenAI API.
-              </p>
-              <label className="form-control mt-4 w-full">
-                <span className="label-text mb-1">API key</span>
-                <input
-                  ref={openaiKeyInputRef}
-                  type="password"
-                  className="input-bordered input w-full font-mono text-sm"
-                  value={openaiKeyDraft}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={openaiSettingsBusy}
-                  placeholder="sk-…"
-                  onChange={(e) => {
-                    setOpenaiKeyDraft(e.target.value);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void saveOpenAiSettings();
-                    }
-                  }}
-                />
-              </label>
-              <label className="form-control mt-3 w-full">
-                <span className="label-text mb-1">Model</span>
-                <input
-                  type="text"
-                  className="input-bordered input w-full font-mono text-sm"
-                  value={openaiModelDraft}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={openaiSettingsBusy}
-                  placeholder={DEFAULT_OPENAI_MODEL}
-                  title="OpenAI model id (e.g. gpt-5.4-mini)"
-                  onChange={(e) => {
-                    setOpenaiModelDraft(e.target.value);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void saveOpenAiSettings();
-                    }
-                  }}
-                />
-                <span className="label-text-alt text-base-content/60">
-                  Default is {DEFAULT_OPENAI_MODEL} (fast). Leave empty to use the default.
-                </span>
-              </label>
-              <div className="modal-action">
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={openaiSettingsBusy}
-                  onClick={() => {
-                    closeOpenAiSettingsDialog();
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={openaiSettingsBusy}
-                  onClick={() => void saveOpenAiSettings()}
-                >
-                  {openaiSettingsBusy ? (
-                    <span className="loading loading-sm loading-spinner" />
-                  ) : (
-                    "Save"
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null,
-        document.body,
-      )}
+      {openaiSettingsOpen ? (
+        <OpenAiSettingsDialog
+          isOpen
+          apiKey={openaiApiKey}
+          model={openaiModel}
+          onClose={closeOpenAiSettingsDialog}
+          onSaved={({ apiKey, model }) => {
+            setOpenaiApiKey(apiKey);
+            setOpenaiModel(model);
+          }}
+          onError={setOperationError}
+        />
+      ) : null}
     </main>
   );
 }
