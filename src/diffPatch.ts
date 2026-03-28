@@ -32,11 +32,11 @@ function joinPatch(headerLines: readonly string[], hunkLines: readonly string[])
 }
 
 export function extractPatchHeaderLines(text: string): string[] {
-  const normalized = text.replaceAll("\r\n", "\n");
+  const normalized = text.replace(/\r\n/g, "\n");
   const lines = normalized.split("\n");
-  const firstHunkIndex = lines.findIndex((line) => line.startsWith("@@ "));
+  const firstHunkIndex = lines.findIndex((line: string) => line.startsWith("@@ "));
   if (firstHunkIndex === -1) {
-    return lines.filter((line) => line.length > 0);
+    return lines.filter((line: string) => line.length > 0);
   }
   return lines.slice(0, firstHunkIndex);
 }
