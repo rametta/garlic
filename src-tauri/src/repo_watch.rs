@@ -34,7 +34,10 @@ pub fn start_repo_watch(app: AppHandle, path: String) -> Result<(), String> {
     }
 
     let state = app.state::<RepoWatchState>();
-    let mut g = state.0.lock().map_err(|e: std::sync::PoisonError<_>| e.to_string())?;
+    let mut g = state
+        .0
+        .lock()
+        .map_err(|e: std::sync::PoisonError<_>| e.to_string())?;
     *g = None;
 
     let (tx, rx) = mpsc::channel();

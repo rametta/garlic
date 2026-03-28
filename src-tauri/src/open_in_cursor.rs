@@ -75,11 +75,7 @@ pub fn open_in_cursor(path: String, file_path: String) -> Result<(), String> {
         }
     }
 
-    #[cfg(not(any(
-        target_os = "macos",
-        target_os = "windows",
-        target_os = "linux"
-    )))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = full;
         Err("Unsupported platform".to_string())

@@ -5,8 +5,8 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -119,8 +119,14 @@ fn run_git_streaming(
     let mut cmd = git_cmd(workdir);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("Could not run git: {e}"))?;
-    let stdout = child.stdout.take().ok_or_else(|| "git: no stdout".to_string())?;
-    let stderr = child.stderr.take().ok_or_else(|| "git: no stderr".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "git: no stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "git: no stderr".to_string())?;
 
     let stderr_acc = Arc::new(Mutex::new(String::new()));
 
@@ -340,6 +346,7 @@ pub struct RepoMetadata {
 }
 
 static GIT_AUDIT_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+static GIT_HOOK_ENV_OVERRIDES: Mutex<Option<Vec<(String, String)>>> = Mutex::new(None);
 
 /// Rotate before the log exceeds this size (append of one line can push slightly over until next write).
 const GIT_AUDIT_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
@@ -378,10 +385,108 @@ fn augmented_path_for_git_hooks() -> String {
     prefixes.join(":")
 }
 
+fn is_shell_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
+fn should_forward_shell_env_var(name: &str) -> bool {
+    !matches!(
+        name,
+        "_" | "OLDPWD" | "PROMPT" | "PROMPT_COMMAND" | "PS1" | "PWD" | "RPS1" | "RPROMPT" | "SHLVL"
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_env_command_attempts() -> Vec<Vec<String>> {
+    vec![
+        vec!["-i".into(), "-l".into(), "-c".into(), "env".into()],
+        vec!["-l".into(), "-c".into(), "env".into()],
+        vec!["-c".into(), "env".into()],
+    ]
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_shell_env_for_git_hooks() -> Option<Vec<(String, String)>> {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            #[cfg(target_os = "macos")]
+            {
+                "/bin/zsh".to_string()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                "/bin/sh".to_string()
+            }
+        });
+
+    for args in shell_env_command_attempts() {
+        let output = match Command::new(&shell)
+            .args(&args)
+            .stdin(Stdio::null())
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => continue,
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut resolved: Vec<(String, String)> = stdout
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once('=')?;
+                let name = name.trim();
+                if !is_shell_env_var_name(name) || !should_forward_shell_env_var(name) {
+                    return None;
+                }
+                Some((name.to_string(), value.to_string()))
+            })
+            .collect();
+        if resolved.iter().all(|(name, _)| name != "PATH") {
+            resolved.push(("PATH".into(), augmented_path_for_git_hooks()));
+        }
+        if !resolved.is_empty() {
+            return Some(resolved);
+        }
+    }
+    None
+}
+
+fn git_hook_env_overrides() -> Vec<(String, String)> {
+    if let Ok(guard) = GIT_HOOK_ENV_OVERRIDES.lock() {
+        if let Some(cached) = guard.as_ref() {
+            return cached.clone();
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    let resolved = resolve_shell_env_for_git_hooks()
+        .unwrap_or_else(|| vec![("PATH".into(), augmented_path_for_git_hooks())]);
+
+    #[cfg(target_os = "windows")]
+    let resolved = vec![("PATH".into(), augmented_path_for_git_hooks())];
+
+    if let Ok(mut guard) = GIT_HOOK_ENV_OVERRIDES.lock() {
+        if guard.is_none() {
+            *guard = Some(resolved.clone());
+        }
+    }
+
+    resolved
+}
+
 fn git_cmd(workdir: &Path) -> Command {
     let mut c = Command::new("git");
     c.current_dir(workdir);
-    c.env("PATH", augmented_path_for_git_hooks());
+    c.envs(git_hook_env_overrides());
     c
 }
 
@@ -435,10 +540,7 @@ fn write_git_audit_line(cwd: &Path, args: &[&str], ok: bool, err: &str) {
     if let Err(e) = trim_audit_log_if_needed(&path, line_bytes.len()) {
         let _ = std::fs::write(
             &path,
-            format!(
-                "# --- audit log reset (rotation failed: {e}) ---\n{}",
-                line
-            ),
+            format!("# --- audit log reset (rotation failed: {e}) ---\n{}", line),
         );
         return;
     }
@@ -578,7 +680,11 @@ fn parse_git_clone_progress_percent(line: &str) -> Option<u32> {
 /// does not block the webview. Progress is emitted on `clone-progress`; the final path or error on
 /// `clone-complete`.
 #[tauri::command]
-pub fn start_clone_repository(app: AppHandle, parent_path: String, remote_url: String) -> Result<u64, String> {
+pub fn start_clone_repository(
+    app: AppHandle,
+    parent_path: String,
+    remote_url: String,
+) -> Result<u64, String> {
     let parent = PathBuf::from(parent_path.trim());
     if !parent.is_dir() {
         return Err("That folder does not exist.".to_string());
@@ -609,7 +715,8 @@ pub fn start_clone_repository(app: AppHandle, parent_path: String, remote_url: S
     );
 
     std::thread::spawn(move || {
-        let result = run_git_clone_with_progress(app_clone.clone(), session_id, parent, url_owned, dest);
+        let result =
+            run_git_clone_with_progress(app_clone.clone(), session_id, parent, url_owned, dest);
         let event = match result {
             Ok(path) => CloneCompleteEvent {
                 session_id,
@@ -642,7 +749,10 @@ fn run_git_clone_with_progress(
         .spawn()
         .map_err(|e| format!("Could not run git: {e}"))?;
 
-    let mut stderr = child.stderr.take().ok_or_else(|| "git clone: no stderr pipe.".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "git clone: no stderr pipe.".to_string())?;
     let mut stderr_acc = String::new();
 
     // `BufRead::lines()` waits for `\n`; git progress uses `\r` without newlines for long stretches,
@@ -1384,15 +1494,9 @@ pub fn create_tag(
     }
     let verify_spec = format!("{commit}^{{commit}}");
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
-    let msg = message
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
+    let msg = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
     if let Some(m) = msg {
-        git_output(
-            &path_buf,
-            &["tag", "-a", tag, "-m", m, commit],
-        )?;
+        git_output(&path_buf, &["tag", "-a", tag, "-m", m, commit])?;
     } else {
         git_output(&path_buf, &["tag", tag, commit])?;
     }
@@ -1659,7 +1763,10 @@ fn parse_porcelain_v1_z(out: &str) -> Vec<WtAcc> {
             continue;
         }
         let rename_from = if xy.contains('R') || xy.contains('C') {
-            fields.next().filter(|field| !field.is_empty()).map(str::to_string)
+            fields
+                .next()
+                .filter(|field| !field.is_empty())
+                .map(str::to_string)
         } else {
             None
         };
@@ -1718,16 +1825,11 @@ pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, Str
             let staged = acc.staged;
             let unstaged = acc.unstaged || acc.untracked;
             let staged_stats = if staged && !acc.untracked {
-                Some(
-                    staged_map
-                        .get(&acc.path)
-                        .cloned()
-                        .unwrap_or(LineStat {
-                            additions: 0,
-                            deletions: 0,
-                            is_binary: false,
-                        }),
-                )
+                Some(staged_map.get(&acc.path).cloned().unwrap_or(LineStat {
+                    additions: 0,
+                    deletions: 0,
+                    is_binary: false,
+                }))
             } else {
                 None
             };
@@ -1843,7 +1945,11 @@ pub fn commit_staged(app: AppHandle, path: String, message: String) -> Result<()
 /// Amend `HEAD` with staged changes. With a non-empty `message`, replaces the commit message (`git commit --amend -m`).
 /// With `None` or empty message, keeps the previous message (`git commit --amend --no-edit`).
 #[tauri::command]
-pub fn amend_last_commit(app: AppHandle, path: String, message: Option<String>) -> Result<(), String> {
+pub fn amend_last_commit(
+    app: AppHandle,
+    path: String,
+    message: Option<String>,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let trimmed = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
@@ -1896,7 +2002,13 @@ pub fn cherry_pick_commit(app: AppHandle, path: String, commit_hash: String) -> 
     }
     let verify_spec = format!("{hash}^{{commit}}");
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
-    run_git_streaming(&app, &path, &path_buf, &["cherry-pick", hash], "cherry-pick")?;
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["cherry-pick", hash],
+        "cherry-pick",
+    )?;
     Ok(())
 }
 
@@ -2065,7 +2177,8 @@ fn commit_signature_verified_flag(workdir: &Path, hash: &str) -> Option<bool> {
 
 fn verify_commit_quiet(workdir: &Path, hash: &str) -> Option<bool> {
     let mut cmd = git_cmd(workdir);
-    cmd.args(["verify-commit", hash]).env("GIT_TERMINAL_PROMPT", "0");
+    cmd.args(["verify-commit", hash])
+        .env("GIT_TERMINAL_PROMPT", "0");
     let output = cmd.output().ok()?;
     Some(output.status.success())
 }
@@ -2530,9 +2643,8 @@ pub fn delete_remote_tag(path: String, tag: String) -> Result<(), String> {
     if tag.is_empty() {
         return Err("Tag name cannot be empty.".to_string());
     }
-    git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
-        "No remote named \"origin\" configured.".to_string()
-    })?;
+    git_output(&path_buf, &["remote", "get-url", "origin"])
+        .map_err(|_| "No remote named \"origin\" configured.".to_string())?;
     git_output(&path_buf, &["push", "origin", "--delete", tag])?;
     Ok(())
 }
@@ -2546,9 +2658,8 @@ pub fn push_tag_to_origin(path: String, tag: String) -> Result<(), String> {
     if tag.is_empty() {
         return Err("Tag name cannot be empty.".to_string());
     }
-    git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
-        "No remote named \"origin\" configured.".to_string()
-    })?;
+    git_output(&path_buf, &["remote", "get-url", "origin"])
+        .map_err(|_| "No remote named \"origin\" configured.".to_string())?;
     let tag_ref = format!("refs/tags/{tag}");
     git_output(&path_buf, &["rev-parse", "--verify", &tag_ref])?;
     git_output(&path_buf, &["push", "origin", tag])?;

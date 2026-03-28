@@ -313,10 +313,16 @@ fn resolve_openai_model(settings: &AppSettings) -> String {
 
 /// Persists OpenAI API key and model for AI-generated commit messages.
 #[tauri::command]
-pub fn set_openai_settings(app: AppHandle, key: Option<String>, model: Option<String>) -> Result<(), String> {
+pub fn set_openai_settings(
+    app: AppHandle,
+    key: Option<String>,
+    model: Option<String>,
+) -> Result<(), String> {
     let mut s = load_settings(&app)?;
     s.openai_api_key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
-    s.openai_model = model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+    s.openai_model = model
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
     save_settings(&app, &s)
 }
 
