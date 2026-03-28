@@ -1546,13 +1546,25 @@ export default function App({
               files = await refreshLists(pathAtStart);
             } else {
               try {
-                const [worktree, stashList] = await Promise.all([
+                // Focus refreshes still need to pick up external ref-only changes
+                // like new tags or branches created outside Garlic.
+                const [locals, remotes, tagList, worktree, stashList] = await Promise.all([
+                  invoke<LocalBranchEntry[]>("list_local_branches", {
+                    path: pathAtStart,
+                  }),
+                  invoke<RemoteBranchEntry[]>("list_remote_branches", {
+                    path: pathAtStart,
+                  }),
+                  invoke<TagEntry[]>("list_tags", { path: pathAtStart }),
                   invoke<WorkingTreeFile[]>("list_working_tree_files", {
                     path: pathAtStart,
                   }),
                   invoke<StashEntry[]>("list_stashes", { path: pathAtStart }),
                 ]);
                 if (activeRepoPathRef.current !== pathAtStart) return;
+                setLocalBranches(locals);
+                setRemoteBranches(remotes);
+                setTags(tagList);
                 setWorkingTreeFiles(worktree);
                 setStashes(stashList);
                 setListsError(null);
