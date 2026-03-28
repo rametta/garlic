@@ -107,6 +107,7 @@ pub fn run() {
             git::set_remote_url,
             git::rebase_current_branch_onto,
             git::list_working_tree_files,
+            git::list_worktrees,
             git::stage_paths,
             git::stage_patch,
             git::unstage_paths,

@@ -45,6 +45,8 @@ pub struct BranchSidebarSections {
     pub local_open: bool,
     #[serde(default = "default_true")]
     pub remote_open: bool,
+    #[serde(default = "default_false")]
+    pub worktrees_open: bool,
     #[serde(default = "default_true")]
     pub tags_open: bool,
     #[serde(default = "default_false")]
@@ -56,6 +58,7 @@ impl Default for BranchSidebarSections {
         Self {
             local_open: true,
             remote_open: true,
+            worktrees_open: false,
             tags_open: true,
             stash_open: false,
         }
@@ -147,6 +150,7 @@ pub struct RestoreLastRepo {
     pub metadata: Option<git::RepoMetadata>,
     pub local_branches: Vec<git::LocalBranchEntry>,
     pub remote_branches: Vec<git::RemoteBranchEntry>,
+    pub worktrees: Vec<git::WorktreeEntry>,
     pub tags: Vec<git::TagEntry>,
     pub stashes: Vec<git::StashEntry>,
     pub commits: Vec<git::CommitEntry>,
@@ -163,6 +167,7 @@ impl RestoreLastRepo {
             metadata: None,
             local_branches: Vec::new(),
             remote_branches: Vec::new(),
+            worktrees: Vec::new(),
             tags: Vec::new(),
             stashes: Vec::new(),
             commits: Vec::new(),
@@ -191,35 +196,41 @@ fn restore_repo_snapshot(
                 });
             }
 
-            let (locals, remotes, working_tree, stashes, tags) = std::thread::scope(|s| {
-                let h1 = s.spawn({
-                    let p = path.clone();
-                    move || git::list_local_branches(p)
+            let (locals, remotes, worktrees, working_tree, stashes, tags) =
+                std::thread::scope(|s| {
+                    let h1 = s.spawn({
+                        let p = path.clone();
+                        move || git::list_local_branches(p)
+                    });
+                    let h2 = s.spawn({
+                        let p = path.clone();
+                        move || git::list_remote_branches(p)
+                    });
+                    let h3 = s.spawn({
+                        let p = path.clone();
+                        move || git::list_worktrees(p)
+                    });
+                    let h4 = s.spawn({
+                        let p = path.clone();
+                        move || git::list_working_tree_files(p)
+                    });
+                    let h5 = s.spawn({
+                        let p = path.clone();
+                        move || git::list_stashes(p)
+                    });
+                    let h6 = s.spawn({
+                        let p = path.clone();
+                        move || git::list_tags(p)
+                    });
+                    (
+                        h1.join().unwrap(),
+                        h2.join().unwrap(),
+                        h3.join().unwrap(),
+                        h4.join().unwrap(),
+                        h5.join().unwrap(),
+                        h6.join().unwrap(),
+                    )
                 });
-                let h2 = s.spawn({
-                    let p = path.clone();
-                    move || git::list_remote_branches(p)
-                });
-                let h3 = s.spawn({
-                    let p = path.clone();
-                    move || git::list_working_tree_files(p)
-                });
-                let h4 = s.spawn({
-                    let p = path.clone();
-                    move || git::list_stashes(p)
-                });
-                let h5 = s.spawn({
-                    let p = path.clone();
-                    move || git::list_tags(p)
-                });
-                (
-                    h1.join().unwrap(),
-                    h2.join().unwrap(),
-                    h3.join().unwrap(),
-                    h4.join().unwrap(),
-                    h5.join().unwrap(),
-                )
-            });
             let commits_page = match (&locals, &remotes) {
                 (Ok(loc), Ok(rem)) => {
                     let mut refs: Vec<String> = loc.iter().map(|b| b.name.clone()).collect();
@@ -237,6 +248,7 @@ fn restore_repo_snapshot(
                 .cloned()
                 .or(remotes.as_ref().err().cloned())
                 .or(commits_page.as_ref().err().cloned())
+                .or(worktrees.as_ref().err().cloned())
                 .or(working_tree.as_ref().err().cloned())
                 .or(stashes.as_ref().err().cloned())
                 .or(tags.as_ref().err().cloned());
@@ -251,6 +263,7 @@ fn restore_repo_snapshot(
                 metadata: Some(meta),
                 local_branches: locals.unwrap_or_default(),
                 remote_branches: remotes.unwrap_or_default(),
+                worktrees: worktrees.unwrap_or_default(),
                 tags: tags.unwrap_or_default(),
                 stashes: stashes.unwrap_or_default(),
                 commits,
@@ -345,7 +358,7 @@ pub fn recent_repo_paths(app: &AppHandle) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Persists which branch-sidebar sections (local / remote / stashes) are expanded.
+/// Persists which branch-sidebar sections are expanded.
 #[tauri::command]
 pub fn set_branch_sidebar_sections(
     app: AppHandle,

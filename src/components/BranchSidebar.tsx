@@ -7,6 +7,7 @@ import type {
   RemoteBranchEntry,
   StashEntry,
   TagEntry,
+  WorktreeEntry,
 } from "../repoTypes";
 
 function IconEye({ className }: { className?: string }) {
@@ -530,11 +531,115 @@ function renderRemoteBranchTrieChildren(
   });
 }
 
+function worktreePrimaryLabel(worktree: WorktreeEntry): string {
+  if (worktree.branch) return worktree.branch;
+  if (worktree.detached) {
+    return worktree.headShort ? `Detached (${worktree.headShort})` : "Detached HEAD";
+  }
+  const parts = worktree.path.split(/[\\/]/).filter((part) => part.length > 0);
+  return parts.length > 0 ? parts[parts.length - 1] : worktree.path;
+}
+
+function WorktreeRow({
+  worktree,
+  onOpenWorktree,
+  onPreviewWorktreeDiff,
+}: {
+  worktree: WorktreeEntry;
+  onOpenWorktree: (path: string) => void;
+  onPreviewWorktreeDiff: (worktree: WorktreeEntry) => void;
+}) {
+  const summaryLabel =
+    worktree.changedFileCount === 0
+      ? "Clean"
+      : worktree.changedFileCount === 1
+        ? "1 changed"
+        : `${worktree.changedFileCount} changed`;
+  const detailBits = [
+    worktree.stagedFileCount > 0 ? `${worktree.stagedFileCount} staged` : null,
+    worktree.unstagedFileCount > 0 ? `${worktree.unstagedFileCount} unstaged` : null,
+    worktree.untrackedFileCount > 0 ? `${worktree.untrackedFileCount} untracked` : null,
+    worktree.lockedReason ? `Locked ${worktree.lockedReason}` : null,
+    worktree.prunableReason ? `Prunable ${worktree.prunableReason}` : null,
+  ].filter((value): value is string => value !== null);
+
+  return (
+    <li
+      className={
+        worktree.isCurrent ? "rounded-md bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""
+      }
+    >
+      <div className="flex min-w-0 flex-col gap-2 px-2 py-2">
+        <div className="flex min-w-0 items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="max-w-full min-w-0 font-mono text-[0.8125rem] leading-snug wrap-break-word">
+                {worktreePrimaryLabel(worktree)}
+              </span>
+              {worktree.isCurrent ? (
+                <span className="badge h-auto badge-outline px-1.5 py-0.5 text-[0.6rem] badge-primary">
+                  current
+                </span>
+              ) : null}
+              {worktree.headShort ? (
+                <span className="badge h-auto badge-ghost px-1.5 py-0.5 font-mono text-[0.6rem]">
+                  {worktree.headShort}
+                </span>
+              ) : null}
+            </div>
+            <div
+              className="mt-1 font-mono text-[0.65rem] leading-snug break-all text-base-content/60"
+              title={worktree.path}
+            >
+              {worktree.path}
+            </div>
+          </div>
+          <span
+            className={`badge h-auto px-1.5 py-0.5 text-[0.6rem] ${
+              worktree.changedFileCount === 0 ? "badge-ghost" : "badge-outline badge-warning"
+            }`}
+          >
+            {summaryLabel}
+          </span>
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <span className="min-w-0 flex-1 text-[0.65rem] leading-snug wrap-break-word text-base-content/55">
+            {detailBits.length > 0 ? detailBits.join(" | ") : "No local changes"}
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              disabled={worktree.isCurrent}
+              onClick={() => {
+                onOpenWorktree(worktree.path);
+              }}
+            >
+              Open
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              disabled={worktree.changedFileCount === 0}
+              onClick={() => {
+                onPreviewWorktreeDiff(worktree);
+              }}
+            >
+              Diff
+            </button>
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
 export type BranchSidebarProps = {
   repoPath: string | null;
   canShowBranches: boolean;
   localBranches: LocalBranchEntry[];
   remoteBranches: RemoteBranchEntry[];
+  worktrees: WorktreeEntry[];
   tags: TagEntry[];
   stashes: StashEntry[];
   branchBusy: string | null;
@@ -546,6 +651,8 @@ export type BranchSidebarProps = {
   onCheckoutLocal: (name: string) => void;
   onSelectRemoteBranchTip: (fullRef: string) => void;
   onCreateFromRemote: (remoteRef: string) => void;
+  onOpenWorktree: (path: string) => void;
+  onPreviewWorktreeDiff: (worktree: WorktreeEntry) => void;
   onStashClick: (stash: StashEntry) => void;
   onTagClick: (tag: TagEntry) => void;
   runBranchSidebarContextMenu: (
@@ -564,6 +671,7 @@ export function BranchSidebar({
   canShowBranches,
   localBranches,
   remoteBranches,
+  worktrees,
   tags,
   stashes,
   branchBusy,
@@ -575,6 +683,8 @@ export function BranchSidebar({
   onCheckoutLocal,
   onSelectRemoteBranchTip,
   onCreateFromRemote,
+  onOpenWorktree,
+  onPreviewWorktreeDiff,
   onStashClick,
   onTagClick,
   runBranchSidebarContextMenu,
@@ -585,18 +695,21 @@ export function BranchSidebar({
 }: BranchSidebarProps) {
   const [localBranchListFilter, setLocalBranchListFilter] = useState("");
   const [remoteBranchListFilter, setRemoteBranchListFilter] = useState("");
+  const [worktreeListFilter, setWorktreeListFilter] = useState("");
   const [tagListFilter, setTagListFilter] = useState("");
   const [stashListFilter, setStashListFilter] = useState("");
 
   useEffect(() => {
     setLocalBranchListFilter("");
     setRemoteBranchListFilter("");
+    setWorktreeListFilter("");
     setTagListFilter("");
     setStashListFilter("");
   }, [repoPath]);
 
   const localBranchFilterNorm = localBranchListFilter.trim().toLowerCase();
   const remoteBranchFilterNorm = remoteBranchListFilter.trim().toLowerCase();
+  const worktreeFilterNorm = worktreeListFilter.trim().toLowerCase();
   const tagFilterNorm = tagListFilter.trim().toLowerCase();
   const stashFilterNorm = stashListFilter.trim().toLowerCase();
 
@@ -609,6 +722,20 @@ export function BranchSidebar({
     if (!remoteBranchFilterNorm) return remoteBranches;
     return remoteBranches.filter((r) => r.name.toLowerCase().includes(remoteBranchFilterNorm));
   }, [remoteBranches, remoteBranchFilterNorm]);
+
+  const filteredWorktrees = useMemo(() => {
+    const sorted = [...worktrees].sort((a, b) => {
+      const aLabel = `${a.branch ?? ""}\0${a.path}`.toLowerCase();
+      const bLabel = `${b.branch ?? ""}\0${b.path}`.toLowerCase();
+      return Number(b.isCurrent) - Number(a.isCurrent) || aLabel.localeCompare(bLabel);
+    });
+    if (!worktreeFilterNorm) return sorted;
+    return sorted.filter((worktree) => {
+      const haystack =
+        `${worktree.branch ?? ""}\n${worktree.path}\n${worktree.headShort ?? ""}`.toLowerCase();
+      return haystack.includes(worktreeFilterNorm);
+    });
+  }, [worktrees, worktreeFilterNorm]);
 
   const filteredTags = useMemo(() => {
     if (!tagFilterNorm) return tags;
@@ -637,6 +764,7 @@ export function BranchSidebar({
     localBranches.length === 0 ? "No local branches" : "No branches match filter";
   const remoteBranchesEmptyHint =
     remoteBranches.length === 0 ? "No remote-tracking branches" : "No branches match filter";
+  const worktreesEmptyHint = worktrees.length === 0 ? "No worktrees" : "No worktrees match filter";
   const tagsEmptyHint = tags.length === 0 ? "No tags" : "No tags match filter";
   const stashesEmptyHint = stashes.length === 0 ? "No stashes" : "No stashes match filter";
 
@@ -730,6 +858,47 @@ export function BranchSidebar({
                   runBranchSidebarContextMenu({ kind: "remote", fullRef }, clientX, clientY);
                 },
               )}
+            </ul>
+          ) : null}
+        </BranchPanel>
+
+        <BranchPanel
+          title="Worktrees"
+          entityCount={worktrees.length}
+          open={branchSidebarSections.worktreesOpen}
+          onOpenChange={(next) => {
+            onBranchSidebarSectionsChange({ ...branchSidebarSections, worktreesOpen: next });
+          }}
+          empty={canShowBranches && filteredWorktrees.length === 0}
+          emptyHint={worktreesEmptyHint}
+          isLastSection={false}
+          belowHeader={
+            canShowBranches ? (
+              <input
+                type="search"
+                className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
+                value={worktreeListFilter}
+                onChange={(e) => {
+                  setWorktreeListFilter(e.target.value);
+                }}
+                placeholder="Filter worktrees…"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Filter worktrees by branch or path"
+              />
+            ) : null
+          }
+        >
+          {canShowBranches ? (
+            <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
+              {filteredWorktrees.map((worktree) => (
+                <WorktreeRow
+                  key={worktree.path}
+                  worktree={worktree}
+                  onOpenWorktree={onOpenWorktree}
+                  onPreviewWorktreeDiff={onPreviewWorktreeDiff}
+                />
+              ))}
             </ul>
           ) : null}
         </BranchPanel>

@@ -21,6 +21,7 @@ export const emptyAppBootstrap: AppBootstrap = {
     metadata: null,
     localBranches: [],
     remoteBranches: [],
+    worktrees: [],
     tags: [],
     stashes: [],
     commits: [],
@@ -34,6 +35,7 @@ export const emptyAppBootstrap: AppBootstrap = {
   branchSidebarSections: {
     localOpen: true,
     remoteOpen: true,
+    worktreesOpen: false,
     tagsOpen: true,
     stashOpen: false,
   },

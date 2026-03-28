@@ -50,10 +50,27 @@ export interface StashEntry {
   commitHash: string;
 }
 
+/** One linked checkout from `list_worktrees`. */
+export interface WorktreeEntry {
+  path: string;
+  branch: string | null;
+  headHash: string | null;
+  headShort: string | null;
+  detached: boolean;
+  isCurrent: boolean;
+  changedFileCount: number;
+  stagedFileCount: number;
+  unstagedFileCount: number;
+  untrackedFileCount: number;
+  lockedReason?: string | null;
+  prunableReason?: string | null;
+}
+
 /** Which branch-sidebar panels are expanded (persisted in settings.json). */
 export type BranchSidebarSectionsState = {
   localOpen: boolean;
   remoteOpen: boolean;
+  worktreesOpen: boolean;
   tagsOpen: boolean;
   stashOpen: boolean;
 };

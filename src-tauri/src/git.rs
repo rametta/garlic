@@ -338,6 +338,25 @@ pub struct WorkingTreeFile {
     pub unstaged_stats: Option<LineStat>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeEntry {
+    pub path: String,
+    pub branch: Option<String>,
+    pub head_hash: Option<String>,
+    pub head_short: Option<String>,
+    pub detached: bool,
+    pub is_current: bool,
+    pub changed_file_count: u32,
+    pub staged_file_count: u32,
+    pub unstaged_file_count: u32,
+    pub untracked_file_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locked_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prunable_reason: Option<String>,
+}
+
 /// One entry from `git stash list` (`stash@{n}: message`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1885,6 +1904,24 @@ struct WtAcc {
     untracked: bool,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct WorktreeStatusSummary {
+    changed_file_count: u32,
+    staged_file_count: u32,
+    unstaged_file_count: u32,
+    untracked_file_count: u32,
+}
+
+#[derive(Debug, Default, Clone)]
+struct WorktreeListAcc {
+    path: String,
+    branch: Option<String>,
+    head_hash: Option<String>,
+    detached: bool,
+    locked_reason: Option<String>,
+    prunable_reason: Option<String>,
+}
+
 fn parse_porcelain_xy(xy: &str) -> Option<(bool, bool, bool)> {
     if xy.len() != 2 {
         return None;
@@ -1933,6 +1970,109 @@ fn parse_porcelain_v1_z(out: &str) -> Vec<WtAcc> {
             unstaged,
             untracked,
         });
+    }
+    entries
+}
+
+fn normalize_worktree_branch_name(branch: Option<String>) -> Option<String> {
+    branch.and_then(|name| {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            None
+        } else if let Some(short) = trimmed.strip_prefix("refs/heads/") {
+            Some(short.to_string())
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn short_oid(oid: &str) -> String {
+    let trimmed = oid.trim();
+    if trimmed.chars().count() <= 7 {
+        trimmed.to_string()
+    } else {
+        trimmed.chars().take(7).collect()
+    }
+}
+
+fn normalize_existing_path(path: &Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+fn summarize_worktree_status(workdir: &Path) -> Result<WorktreeStatusSummary, String> {
+    ensure_git_repo(workdir)?;
+    let porcelain = git_output_raw(
+        workdir,
+        &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+    )?;
+    let mut map: HashMap<String, WtAcc> = HashMap::new();
+    for acc in parse_porcelain_v1_z(&porcelain) {
+        let path_key = acc.path.clone();
+        map.entry(path_key.clone())
+            .and_modify(|e| {
+                e.staged |= acc.staged;
+                e.unstaged |= acc.unstaged;
+                e.untracked |= acc.untracked;
+                if acc.rename_from.is_some() {
+                    e.rename_from = acc.rename_from.clone();
+                }
+            })
+            .or_insert(acc);
+    }
+    let mut summary = WorktreeStatusSummary::default();
+    summary.changed_file_count = map.len() as u32;
+    for entry in map.values() {
+        if entry.staged {
+            summary.staged_file_count += 1;
+        }
+        if entry.unstaged || entry.untracked {
+            summary.unstaged_file_count += 1;
+        }
+        if entry.untracked {
+            summary.untracked_file_count += 1;
+        }
+    }
+    Ok(summary)
+}
+
+fn parse_worktree_list_porcelain(out: &str) -> Vec<WorktreeListAcc> {
+    let mut entries = Vec::new();
+    let mut current = WorktreeListAcc::default();
+    for line in out.lines() {
+        if line.trim().is_empty() {
+            if !current.path.is_empty() {
+                entries.push(current);
+            }
+            current = WorktreeListAcc::default();
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            current.path = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("HEAD ") {
+            let hash = rest.trim();
+            current.head_hash = if hash.is_empty() {
+                None
+            } else {
+                Some(hash.to_string())
+            };
+        } else if let Some(rest) = line.strip_prefix("branch ") {
+            current.branch = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("locked") {
+            let reason = rest.trim();
+            current.locked_reason = (!reason.is_empty()).then(|| reason.to_string());
+        } else if let Some(rest) = line.strip_prefix("prunable") {
+            let reason = rest.trim();
+            current.prunable_reason = (!reason.is_empty()).then(|| reason.to_string());
+        } else if line.trim() == "detached" {
+            current.detached = true;
+        }
+    }
+    if !current.path.is_empty() {
+        entries.push(current);
     }
     entries
 }
@@ -2014,6 +2154,51 @@ pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, Str
             }
         })
         .collect())
+}
+
+/// All worktrees known to this repository, including the currently open checkout.
+#[tauri::command]
+pub fn list_worktrees(path: String) -> Result<Vec<WorktreeEntry>, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let current_norm = normalize_existing_path(&path_buf);
+    let out = git_output_raw(&path_buf, &["worktree", "list", "--porcelain"])?;
+    let mut entries = parse_worktree_list_porcelain(&out)
+        .into_iter()
+        .map(|acc| {
+            let worktree_path = PathBuf::from(&acc.path);
+            let summary = if worktree_path.is_dir() {
+                summarize_worktree_status(&worktree_path).unwrap_or_default()
+            } else {
+                WorktreeStatusSummary::default()
+            };
+            let is_current = if worktree_path.exists() {
+                normalize_existing_path(&worktree_path) == current_norm
+            } else {
+                acc.path == path
+            };
+            WorktreeEntry {
+                path: acc.path,
+                branch: normalize_worktree_branch_name(acc.branch),
+                head_hash: acc.head_hash.clone(),
+                head_short: acc.head_hash.as_deref().map(short_oid),
+                detached: acc.detached,
+                is_current,
+                changed_file_count: summary.changed_file_count,
+                staged_file_count: summary.staged_file_count,
+                unstaged_file_count: summary.unstaged_file_count,
+                untracked_file_count: summary.untracked_file_count,
+                locked_reason: acc.locked_reason,
+                prunable_reason: acc.prunable_reason,
+            }
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| {
+        b.is_current
+            .cmp(&a.is_current)
+            .then_with(|| a.path.to_lowercase().cmp(&b.path.to_lowercase()))
+    });
+    Ok(entries)
 }
 
 #[tauri::command]

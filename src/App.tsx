@@ -42,6 +42,7 @@ import type {
   StashEntry,
   TagEntry,
   TagOriginStatus,
+  WorktreeEntry,
 } from "./repoTypes";
 import { DEFAULT_OPENAI_MODEL, generateCommitTitleFromStagedDiff } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
@@ -60,6 +61,7 @@ export type {
   StashEntry,
   TagEntry,
   TagOriginStatus,
+  WorktreeEntry,
 } from "./repoTypes";
 
 /** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
@@ -255,6 +257,7 @@ export interface RestoreLastRepo {
   metadata: RepoMetadata | null;
   localBranches: LocalBranchEntry[];
   remoteBranches: RemoteBranchEntry[];
+  worktrees: WorktreeEntry[];
   tags: TagEntry[];
   stashes: StashEntry[];
   commits: CommitEntry[];
@@ -614,6 +617,7 @@ export default function App({
   const [remoteBranches, setRemoteBranches] = useState<RemoteBranchEntry[]>(
     () => startup.remoteBranches,
   );
+  const [worktrees, setWorktrees] = useState<WorktreeEntry[]>(() => startup.worktrees);
   const [tags, setTags] = useState<TagEntry[]>(() => startup.tags);
   const [stashes, setStashes] = useState<StashEntry[]>(() => startup.stashes);
   const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
@@ -636,10 +640,15 @@ export default function App({
   const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(null);
   /** Which sidebar list opened the diff (staged vs unstaged); matters when both apply to the same path. */
   const [selectedDiffSide, setSelectedDiffSide] = useState<"unstaged" | "staged" | null>(null);
+  const [selectedDiffRepoPath, setSelectedDiffRepoPath] = useState<string | null>(null);
   const [diffStagedText, setDiffStagedText] = useState<string | null>(null);
   const [diffUnstagedText, setDiffUnstagedText] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const [worktreeBrowseTarget, setWorktreeBrowseTarget] = useState<WorktreeEntry | null>(null);
+  const [worktreeBrowseFiles, setWorktreeBrowseFiles] = useState<WorkingTreeFile[]>([]);
+  const [worktreeBrowseLoading, setWorktreeBrowseLoading] = useState(false);
+  const [worktreeBrowseError, setWorktreeBrowseError] = useState<string | null>(null);
   const [commitBrowseHash, setCommitBrowseHash] = useState<string | null>(null);
   const [commitBrowseFiles, setCommitBrowseFiles] = useState<CommitFileEntry[]>([]);
   const [commitBrowseLoading, setCommitBrowseLoading] = useState(false);
@@ -683,10 +692,13 @@ export default function App({
   const [fileBlameText, setFileBlameText] = useState<string | null>(null);
   const [fileBlameLoading, setFileBlameLoading] = useState(false);
   const [fileBlameError, setFileBlameError] = useState<string | null>(null);
+  const inspectorFileCount = worktreeBrowseTarget
+    ? worktreeBrowseFiles.length
+    : commitBrowseFiles.length;
   const createBranchDialogRef = useRef<HTMLDialogElement>(null);
   const commitBrowseFileListScrollRef = useRef<HTMLDivElement>(null);
   const commitBrowseFileVirtualizer = useVirtualizer({
-    count: commitBrowseFiles.length,
+    count: inspectorFileCount,
     getScrollElement: () => commitBrowseFileListScrollRef.current,
     estimateSize: () => COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX,
     overscan: 12,
@@ -782,15 +794,17 @@ export default function App({
   const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
     setListsError(null);
     try {
-      const [locals, remotes, tagList, worktree, stashList] = await Promise.all([
+      const [locals, remotes, worktreeList, tagList, worktree, stashList] = await Promise.all([
         invoke<LocalBranchEntry[]>("list_local_branches", { path: repoPath }),
         invoke<RemoteBranchEntry[]>("list_remote_branches", { path: repoPath }),
+        invoke<WorktreeEntry[]>("list_worktrees", { path: repoPath }),
         invoke<TagEntry[]>("list_tags", { path: repoPath }),
         invoke<WorkingTreeFile[]>("list_working_tree_files", { path: repoPath }),
         invoke<StashEntry[]>("list_stashes", { path: repoPath }),
       ]);
       setLocalBranches(locals);
       setRemoteBranches(remotes);
+      setWorktrees(worktreeList);
       setTags(tagList);
       setWorkingTreeFiles(worktree);
       setStashes(stashList);
@@ -1042,13 +1056,21 @@ export default function App({
     clearFileToolView();
   }, [clearFileToolView]);
 
+  const clearWorktreeBrowse = useCallback(() => {
+    setWorktreeBrowseTarget(null);
+    setWorktreeBrowseFiles([]);
+    setWorktreeBrowseLoading(false);
+    setWorktreeBrowseError(null);
+  }, []);
+
   const focusGraphOnCommitHash = useCallback(
     (hash: string) => {
+      clearWorktreeBrowse();
       clearCommitBrowse();
       setGraphFocusHash(hash);
       setGraphScrollNonce((n) => n + 1);
     },
-    [clearCommitBrowse],
+    [clearCommitBrowse, clearWorktreeBrowse],
   );
 
   const onSelectLocalBranchTip = useCallback(
@@ -1093,8 +1115,19 @@ export default function App({
   }, [graphFilteredCommits, commitBrowseHash, clearCommitBrowse]);
 
   useEffect(() => {
+    if (!worktreeBrowseTarget) return;
+    const nextTarget = worktrees.find((entry) => entry.path === worktreeBrowseTarget.path) ?? null;
+    if (nextTarget) {
+      setWorktreeBrowseTarget(nextTarget);
+    }
+    if (repo?.path === worktreeBrowseTarget.path) {
+      setWorktreeBrowseFiles(workingTreeFiles);
+    }
+  }, [worktreeBrowseTarget, worktrees, repo?.path, workingTreeFiles]);
+
+  useEffect(() => {
     commitBrowseFileListScrollRef.current?.scrollTo(0, 0);
-  }, [commitBrowseHash]);
+  }, [commitBrowseHash, worktreeBrowseTarget?.path]);
 
   const exportFilteredCommitsList = useCallback(async () => {
     if (!repo?.path || repo.error) return;
@@ -1126,14 +1159,22 @@ export default function App({
   }, [repo, graphExportCommits, graphAuthorFilter, graphDateFrom, graphDateTo]);
 
   const loadDiffForFile = useCallback(
-    async (f: WorkingTreeFile, side: "unstaged" | "staged") => {
-      if (!repo?.path || repo.error) return;
+    async (
+      f: WorkingTreeFile,
+      side: "unstaged" | "staged",
+      options?: { repoPath?: string; clearCommitBrowse?: boolean },
+    ) => {
+      const pathAtStart = options?.repoPath ?? repo?.path ?? null;
+      const guardActiveRepo = options?.repoPath == null;
+      if (!pathAtStart) return;
       if (side === "unstaged" && !f.unstaged) return;
       if (side === "staged" && !f.staged) return;
-      const pathAtStart = repo.path;
-      clearCommitBrowse();
+      if (options?.clearCommitBrowse ?? true) {
+        clearCommitBrowse();
+      }
       setSelectedDiffPath(f.path);
       setSelectedDiffSide(side);
+      setSelectedDiffRepoPath(pathAtStart);
       setDiffLoading(true);
       setDiffError(null);
       setDiffStagedText(null);
@@ -1145,7 +1186,7 @@ export default function App({
             path: pathAtStart,
             filePath: f.path,
           });
-          if (activeRepoPathRef.current !== pathAtStart) return;
+          if (guardActiveRepo && activeRepoPathRef.current !== pathAtStart) return;
           setDiffUnstagedText(unstaged);
           if (pathLooksLikeRenderableImage(f.path)) {
             try {
@@ -1153,10 +1194,10 @@ export default function App({
                 path: pathAtStart,
                 filePath: f.path,
               });
-              if (activeRepoPathRef.current !== pathAtStart) return;
+              if (guardActiveRepo && activeRepoPathRef.current !== pathAtStart) return;
               setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
             } catch {
-              if (activeRepoPathRef.current === pathAtStart) {
+              if (!guardActiveRepo || activeRepoPathRef.current === pathAtStart) {
                 setDiffImagePreview(null);
               }
             }
@@ -1166,7 +1207,7 @@ export default function App({
             path: pathAtStart,
             filePath: f.path,
           });
-          if (activeRepoPathRef.current !== pathAtStart) return;
+          if (guardActiveRepo && activeRepoPathRef.current !== pathAtStart) return;
           setDiffStagedText(staged);
           if (pathLooksLikeRenderableImage(f.path)) {
             try {
@@ -1174,26 +1215,67 @@ export default function App({
                 path: pathAtStart,
                 filePath: f.path,
               });
-              if (activeRepoPathRef.current !== pathAtStart) return;
+              if (guardActiveRepo && activeRepoPathRef.current !== pathAtStart) return;
               setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
             } catch {
-              if (activeRepoPathRef.current === pathAtStart) {
+              if (!guardActiveRepo || activeRepoPathRef.current === pathAtStart) {
                 setDiffImagePreview(null);
               }
             }
           }
         }
       } catch (e) {
-        if (activeRepoPathRef.current === pathAtStart) {
+        if (!guardActiveRepo || activeRepoPathRef.current === pathAtStart) {
           setDiffError(invokeErrorMessage(e));
         }
       } finally {
-        if (activeRepoPathRef.current === pathAtStart) {
+        if (!guardActiveRepo || activeRepoPathRef.current === pathAtStart) {
           setDiffLoading(false);
         }
       }
     },
-    [repo, clearCommitBrowse],
+    [repo?.path, clearCommitBrowse],
+  );
+
+  const openWorktreeBrowse = useCallback(
+    async (worktree: WorktreeEntry) => {
+      clearCommitBrowse();
+      clearFileToolView();
+      setGraphFocusHash(null);
+      setSelectedDiffPath(null);
+      setSelectedDiffSide(null);
+      setSelectedDiffRepoPath(null);
+      setDiffStagedText(null);
+      setDiffUnstagedText(null);
+      setDiffError(null);
+      setDiffLoading(false);
+      setDiffImagePreview(null);
+      setWorktreeBrowseTarget(worktree);
+      setWorktreeBrowseError(null);
+      setWorktreeBrowseLoading(true);
+      try {
+        const files =
+          repo?.path === worktree.path
+            ? workingTreeFiles
+            : await invoke<WorkingTreeFile[]>("list_working_tree_files", {
+                path: worktree.path,
+              });
+        setWorktreeBrowseFiles(files);
+        const first = files.find((f) => f.unstaged) ?? files.find((f) => f.staged) ?? null;
+        if (first) {
+          void loadDiffForFile(first, first.unstaged ? "unstaged" : "staged", {
+            repoPath: worktree.path,
+            clearCommitBrowse: false,
+          });
+        }
+      } catch (e) {
+        setWorktreeBrowseFiles([]);
+        setWorktreeBrowseError(invokeErrorMessage(e));
+      } finally {
+        setWorktreeBrowseLoading(false);
+      }
+    },
+    [clearCommitBrowse, clearFileToolView, loadDiffForFile, repo?.path, workingTreeFiles],
   );
 
   const loadCommitFileDiff = useCallback(
@@ -1247,9 +1329,11 @@ export default function App({
       const pathAtStart = repo.path;
       const seq = ++selectCommitSeqRef.current;
       setGraphFocusHash(null);
+      clearWorktreeBrowse();
       clearFileToolView();
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
+      setSelectedDiffRepoPath(null);
       setDiffStagedText(null);
       setDiffUnstagedText(null);
       setDiffError(null);
@@ -1316,12 +1400,13 @@ export default function App({
         requestId: seq,
       }).catch(() => {});
     },
-    [repo, clearFileToolView, loadCommitFileDiff],
+    [repo, clearFileToolView, loadCommitFileDiff, clearWorktreeBrowse],
   );
 
   const clearDiffSelection = useCallback(() => {
     setSelectedDiffPath(null);
     setSelectedDiffSide(null);
+    setSelectedDiffRepoPath(null);
     setDiffStagedText(null);
     setDiffUnstagedText(null);
     setDiffError(null);
@@ -1341,9 +1426,11 @@ export default function App({
       setLoading(true);
       setLoadError(null);
       setOperationError(null);
+      clearWorktreeBrowse();
       clearCommitBrowse();
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
+      setSelectedDiffRepoPath(null);
       setDiffStagedText(null);
       setDiffUnstagedText(null);
       setDiffError(null);
@@ -1364,6 +1451,7 @@ export default function App({
         } else {
           setLocalBranches([]);
           setRemoteBranches([]);
+          setWorktrees([]);
           setTags([]);
           setStashes([]);
           setCommits([]);
@@ -1375,6 +1463,7 @@ export default function App({
         setRepo(null);
         setLocalBranches([]);
         setRemoteBranches([]);
+        setWorktrees([]);
         setTags([]);
         setStashes([]);
         setCommits([]);
@@ -1388,7 +1477,7 @@ export default function App({
         }
       }
     },
-    [refreshLists, clearCommitBrowse],
+    [refreshLists, clearCommitBrowse, clearWorktreeBrowse],
   );
 
   /** Coalesce rapid `clone-progress` events to one React update per frame (avoids UI freeze). */
@@ -1561,22 +1650,27 @@ export default function App({
               try {
                 // Focus refreshes still need to pick up external ref-only changes
                 // like new tags or branches created outside Garlic.
-                const [locals, remotes, tagList, worktree, stashList] = await Promise.all([
-                  invoke<LocalBranchEntry[]>("list_local_branches", {
-                    path: pathAtStart,
-                  }),
-                  invoke<RemoteBranchEntry[]>("list_remote_branches", {
-                    path: pathAtStart,
-                  }),
-                  invoke<TagEntry[]>("list_tags", { path: pathAtStart }),
-                  invoke<WorkingTreeFile[]>("list_working_tree_files", {
-                    path: pathAtStart,
-                  }),
-                  invoke<StashEntry[]>("list_stashes", { path: pathAtStart }),
-                ]);
+                const [locals, remotes, worktreeList, tagList, worktree, stashList] =
+                  await Promise.all([
+                    invoke<LocalBranchEntry[]>("list_local_branches", {
+                      path: pathAtStart,
+                    }),
+                    invoke<RemoteBranchEntry[]>("list_remote_branches", {
+                      path: pathAtStart,
+                    }),
+                    invoke<WorktreeEntry[]>("list_worktrees", {
+                      path: pathAtStart,
+                    }),
+                    invoke<TagEntry[]>("list_tags", { path: pathAtStart }),
+                    invoke<WorkingTreeFile[]>("list_working_tree_files", {
+                      path: pathAtStart,
+                    }),
+                    invoke<StashEntry[]>("list_stashes", { path: pathAtStart }),
+                  ]);
                 if (activeRepoPathRef.current !== pathAtStart) return;
                 setLocalBranches(locals);
                 setRemoteBranches(remotes);
+                setWorktrees(worktreeList);
                 setTags(tagList);
                 setWorkingTreeFiles(worktree);
                 setStashes(stashList);
@@ -1593,7 +1687,7 @@ export default function App({
 
           if (activeRepoPathRef.current !== pathAtStart) return;
 
-          if (selectedDiffPath && files) {
+          if (selectedDiffRepoPath === pathAtStart && selectedDiffPath && files) {
             const next = files.find((w) => w.path === selectedDiffPath);
             if (next && (next.staged || next.unstaged)) {
               const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
@@ -1627,7 +1721,15 @@ export default function App({
         }
       }
     },
-    [repo, refreshLists, selectedDiffPath, selectedDiffSide, loadDiffForFile, clearCommitBrowse],
+    [
+      repo,
+      refreshLists,
+      selectedDiffPath,
+      selectedDiffRepoPath,
+      selectedDiffSide,
+      loadDiffForFile,
+      clearCommitBrowse,
+    ],
   );
 
   useEffect(() => {
@@ -2587,6 +2689,7 @@ export default function App({
     });
     setWorkingTreeFiles((prev) => applyOptimisticStageChange(prev, nextPaths, "stage"));
     if (
+      selectedDiffRepoPath === repo.path &&
       selectedDiffPath !== null &&
       nextPaths.includes(selectedDiffPath) &&
       selectedDiffSide === "unstaged"
@@ -2623,6 +2726,7 @@ export default function App({
     });
     setWorkingTreeFiles((prev) => applyOptimisticStageChange(prev, nextPaths, "unstage"));
     if (
+      selectedDiffRepoPath === repo.path &&
       selectedDiffPath !== null &&
       nextPaths.includes(selectedDiffPath) &&
       selectedDiffSide === "staged"
@@ -2876,16 +2980,42 @@ export default function App({
     return commits.find((c) => c.hash === createTagCommit) ?? null;
   }, [commits, createTagCommit]);
 
+  const worktreeBrowseFileEntries = useMemo(
+    () =>
+      worktreeBrowseFiles.map((file) => ({
+        file,
+        stats: combineLineStats(file.stagedStats, file.unstagedStats) ?? {
+          additions: 0,
+          deletions: 0,
+          isBinary: false,
+        },
+      })),
+    [worktreeBrowseFiles],
+  );
+  const browsingCurrentRepoWorktree = worktreeBrowseTarget?.path === repo?.path;
+  const canEditSelectedDiff = selectedDiffRepoPath === repo?.path;
+
   /** Branch/stash sidebar hidden; main column spans 9 — when viewing a commit, file diff, history, or blame. */
   const showExpandedDiff =
     Boolean(
-      commitBrowseHash || selectedDiffPath || commitDiffPath || fileHistoryPath || fileBlamePath,
+      worktreeBrowseTarget ||
+      commitBrowseHash ||
+      selectedDiffPath ||
+      commitDiffPath ||
+      fileHistoryPath ||
+      fileBlamePath,
     ) &&
     !listsError &&
     Boolean(repo && !repo.error);
 
   const commitGraphLayout = useMemo((): CommitGraphLayout | null => {
-    if (commitBrowseHash || selectedDiffPath || fileBlamePath || fileHistoryPath) {
+    if (
+      worktreeBrowseTarget ||
+      commitBrowseHash ||
+      selectedDiffPath ||
+      fileBlamePath ||
+      fileHistoryPath
+    ) {
       return null;
     }
     return computeCommitGraphLayout(
@@ -2898,6 +3028,7 @@ export default function App({
       currentBranchName,
     );
   }, [
+    worktreeBrowseTarget,
     commitBrowseHash,
     selectedDiffPath,
     fileBlamePath,
@@ -3250,6 +3381,7 @@ export default function App({
             canShowBranches={canShowBranches}
             localBranches={localBranches}
             remoteBranches={remoteBranches}
+            worktrees={worktrees}
             tags={tags}
             stashes={stashes}
             branchBusy={branchBusy}
@@ -3266,6 +3398,12 @@ export default function App({
             onSelectRemoteBranchTip={onSelectRemoteBranchTip}
             onCreateFromRemote={(remoteRef) => {
               void onCreateFromRemote(remoteRef);
+            }}
+            onOpenWorktree={(path) => {
+              void loadRepo(path);
+            }}
+            onPreviewWorktreeDiff={(worktree) => {
+              void openWorktreeBrowse(worktree);
             }}
             onStashClick={onStashSidebarClick}
             onTagClick={onTagSidebarClick}
@@ -3516,7 +3654,331 @@ export default function App({
                           ) : null}
 
                           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                            {!listsError && selectedDiffPath ? (
+                            {!listsError && worktreeBrowseTarget ? (
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden px-4 pt-3 pb-4">
+                                <div className="shrink-0 rounded-xl border border-base-300/80 bg-base-200/35 p-3">
+                                  <div className="flex flex-wrap items-start justify-between gap-2">
+                                    <button
+                                      type="button"
+                                      className="btn shrink-0 btn-xs btn-primary"
+                                      onClick={() => {
+                                        clearWorktreeBrowse();
+                                        clearDiffSelection();
+                                      }}
+                                    >
+                                      Back to commits
+                                    </button>
+                                    <div className="min-w-0 text-right">
+                                      <p className="m-0 font-mono text-[0.65rem] text-base-content/60">
+                                        {worktreeBrowseTarget.headShort ??
+                                          (worktreeBrowseTarget.detached
+                                            ? "detached"
+                                            : (worktreeBrowseTarget.branch ?? "worktree"))}
+                                      </p>
+                                      <p className="mt-0.5 mb-0 text-[0.65rem] text-base-content/55">
+                                        {worktreeBrowseTarget.changedFileCount} changed file
+                                        {worktreeBrowseTarget.changedFileCount === 1 ? "" : "s"}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="mt-2 flex items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <p className="m-0 text-[0.68rem] text-base-content/55">
+                                        {worktreeBrowseTarget.branch
+                                          ? `Worktree: ${worktreeBrowseTarget.branch}`
+                                          : worktreeBrowseTarget.detached
+                                            ? "Worktree: Detached HEAD"
+                                            : "Worktree"}
+                                      </p>
+                                      <code className="mt-1 block font-mono text-[0.65rem] wrap-break-word text-base-content/60">
+                                        {worktreeBrowseTarget.path}
+                                      </code>
+                                    </div>
+                                    {!worktreeBrowseTarget.isCurrent ? (
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        onClick={() => {
+                                          void loadRepo(worktreeBrowseTarget.path);
+                                        }}
+                                      >
+                                        Open worktree
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <div className="flex min-h-0 min-w-0 flex-1 flex-row gap-3 overflow-hidden">
+                                  <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                                    {!selectedDiffPath ||
+                                    selectedDiffRepoPath !== worktreeBrowseTarget.path ? (
+                                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-2 py-10">
+                                        <p className="m-0 text-center text-xs text-base-content/55">
+                                          Select a file to view its diff
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-2">
+                                        {diffLoading ? (
+                                          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                            <span className="loading loading-md loading-spinner text-primary" />
+                                            <p className="m-0 text-sm text-base-content/70">
+                                              Loading diff...
+                                            </p>
+                                          </div>
+                                        ) : diffError ? (
+                                          <DismissibleAlert
+                                            className="alert text-sm alert-error"
+                                            onDismiss={() => {
+                                              setDiffError(null);
+                                            }}
+                                          >
+                                            <span className="wrap-break-word">{diffError}</span>
+                                          </DismissibleAlert>
+                                        ) : (
+                                          <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
+                                            <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                              Patch
+                                            </div>
+                                            {diffStagedText !== null ? (
+                                              <div className="mb-8 last:mb-0">
+                                                <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                                  Staged
+                                                </div>
+                                                <UnifiedDiff
+                                                  text={diffStagedText}
+                                                  emptyLabel="(no staged diff)"
+                                                  binaryImagePreview={
+                                                    selectedDiffSide === "staged" &&
+                                                    diffImagePreview &&
+                                                    selectedDiffPath &&
+                                                    pathLooksLikeRenderableImage(
+                                                      selectedDiffPath,
+                                                    ) &&
+                                                    (diffImagePreview.before ||
+                                                      diffImagePreview.after)
+                                                      ? {
+                                                          beforeUrl: diffImagePreview.before,
+                                                          afterUrl: diffImagePreview.after,
+                                                          fileLabel: selectedDiffPath,
+                                                        }
+                                                      : null
+                                                  }
+                                                  partialAction={
+                                                    canEditSelectedDiff &&
+                                                    selectedDiffSide === "staged" &&
+                                                    selectedDiffPath
+                                                      ? {
+                                                          kind: "unstage",
+                                                          busy:
+                                                            stageCommitBusy ||
+                                                            commitPushBusy ||
+                                                            syncingStagePaths.has(selectedDiffPath),
+                                                          onApplyPatch: (patch) => {
+                                                            void runPartialStagePatch(
+                                                              selectedDiffPath,
+                                                              "unstage",
+                                                              patch,
+                                                            );
+                                                          },
+                                                        }
+                                                      : null
+                                                  }
+                                                />
+                                              </div>
+                                            ) : null}
+                                            {diffUnstagedText !== null ? (
+                                              <div>
+                                                <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                                                  Unstaged
+                                                </div>
+                                                <UnifiedDiff
+                                                  text={diffUnstagedText}
+                                                  emptyLabel="(no unstaged diff)"
+                                                  binaryImagePreview={
+                                                    selectedDiffSide === "unstaged" &&
+                                                    diffImagePreview &&
+                                                    selectedDiffPath &&
+                                                    pathLooksLikeRenderableImage(
+                                                      selectedDiffPath,
+                                                    ) &&
+                                                    (diffImagePreview.before ||
+                                                      diffImagePreview.after)
+                                                      ? {
+                                                          beforeUrl: diffImagePreview.before,
+                                                          afterUrl: diffImagePreview.after,
+                                                          fileLabel: selectedDiffPath,
+                                                        }
+                                                      : null
+                                                  }
+                                                  partialAction={
+                                                    canEditSelectedDiff &&
+                                                    selectedDiffSide === "unstaged" &&
+                                                    selectedDiffPath
+                                                      ? {
+                                                          kind: "stage",
+                                                          busy:
+                                                            stageCommitBusy ||
+                                                            commitPushBusy ||
+                                                            syncingStagePaths.has(selectedDiffPath),
+                                                          onApplyPatch: (patch) => {
+                                                            void runPartialStagePatch(
+                                                              selectedDiffPath,
+                                                              "stage",
+                                                              patch,
+                                                            );
+                                                          },
+                                                        }
+                                                      : null
+                                                  }
+                                                  secondaryHunkAction={
+                                                    canEditSelectedDiff &&
+                                                    selectedDiffSide === "unstaged" &&
+                                                    selectedDiffPath
+                                                      ? {
+                                                          label: "Discard hunk",
+                                                          buttonClassName: "btn-error",
+                                                          busy:
+                                                            stageCommitBusy ||
+                                                            commitPushBusy ||
+                                                            syncingStagePaths.has(selectedDiffPath),
+                                                          onApplyPatch: (patch) => {
+                                                            void runDiscardHunkPatch(
+                                                              selectedDiffPath,
+                                                              patch,
+                                                            );
+                                                          },
+                                                        }
+                                                      : null
+                                                  }
+                                                />
+                                              </div>
+                                            ) : null}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-l border-base-300/80 pl-2">
+                                    <div className="shrink-0 border-b border-base-300/80 pb-2">
+                                      <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                        <span>Files</span>
+                                        {!worktreeBrowseLoading ? (
+                                          <span className="font-mono text-[0.65rem] font-normal tracking-normal text-base-content/45 normal-case tabular-nums">
+                                            ({worktreeBrowseFileEntries.length})
+                                          </span>
+                                        ) : null}
+                                      </h2>
+                                    </div>
+                                    <div className="flex min-h-0 flex-1 flex-col pt-2">
+                                      {worktreeBrowseLoading ? (
+                                        <div className="flex flex-col items-center justify-center gap-2 py-8">
+                                          <span className="loading loading-md loading-spinner text-primary" />
+                                          <p className="m-0 text-xs text-base-content/70">
+                                            Loading files...
+                                          </p>
+                                        </div>
+                                      ) : worktreeBrowseError ? (
+                                        <DismissibleAlert
+                                          className="alert py-2 text-xs alert-error"
+                                          onDismiss={() => {
+                                            setWorktreeBrowseError(null);
+                                          }}
+                                        >
+                                          <span className="wrap-break-word">
+                                            {worktreeBrowseError}
+                                          </span>
+                                        </DismissibleAlert>
+                                      ) : worktreeBrowseFileEntries.length === 0 ? (
+                                        <p className="m-0 text-center text-xs text-base-content/60">
+                                          No files changed in this worktree
+                                        </p>
+                                      ) : (
+                                        <div
+                                          ref={commitBrowseFileListScrollRef}
+                                          className="m-0 min-h-0 flex-1 overflow-y-auto py-1 pr-0.5"
+                                        >
+                                          <div
+                                            className="relative w-full"
+                                            style={{
+                                              height: commitBrowseFileVirtualizer.getTotalSize(),
+                                            }}
+                                          >
+                                            {commitBrowseFileVirtualizer
+                                              .getVirtualItems()
+                                              .map((virtualRow) => {
+                                                const entry =
+                                                  worktreeBrowseFileEntries[virtualRow.index];
+                                                if (!entry) return null;
+                                                const preferredSide = entry.file.unstaged
+                                                  ? "unstaged"
+                                                  : "staged";
+                                                const selected =
+                                                  selectedDiffRepoPath ===
+                                                    worktreeBrowseTarget.path &&
+                                                  selectedDiffPath === entry.file.path;
+                                                return (
+                                                  <div
+                                                    key={virtualRow.key}
+                                                    data-index={virtualRow.index}
+                                                    ref={commitBrowseFileVirtualizer.measureElement}
+                                                    className="absolute top-0 left-0 w-full pb-2"
+                                                    style={{
+                                                      transform: `translateY(${virtualRow.start}px)`,
+                                                    }}
+                                                  >
+                                                    <button
+                                                      type="button"
+                                                      className={`flex min-h-10 w-full items-center gap-2 rounded-lg border px-2 py-2 text-left text-[0.8125rem] leading-snug transition-colors ${
+                                                        selected
+                                                          ? "border-primary/50 bg-primary/10 ring-1 ring-primary/25"
+                                                          : "border-base-300/40 bg-base-200/50 hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
+                                                      }`}
+                                                      onClick={() => {
+                                                        void loadDiffForFile(
+                                                          entry.file,
+                                                          preferredSide,
+                                                          {
+                                                            repoPath: worktreeBrowseTarget.path,
+                                                            clearCommitBrowse: false,
+                                                          },
+                                                        );
+                                                      }}
+                                                      onContextMenu={
+                                                        browsingCurrentRepoWorktree
+                                                          ? (e) => {
+                                                              if (!nativeContextMenusAvailable())
+                                                                return;
+                                                              e.preventDefault();
+                                                              e.stopPropagation();
+                                                              openFileRowMenu(
+                                                                entry.file.path,
+                                                                e.clientX,
+                                                                e.clientY,
+                                                                {
+                                                                  source: "worktree",
+                                                                  variant: preferredSide,
+                                                                },
+                                                              );
+                                                            }
+                                                          : undefined
+                                                      }
+                                                    >
+                                                      <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
+                                                        {entry.file.path}
+                                                      </code>
+                                                      <DiffLineStatBadge stat={entry.stats} />
+                                                    </button>
+                                                  </div>
+                                                );
+                                              })}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : !listsError && selectedDiffPath ? (
                               <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
                                 <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
                                   <div className="min-w-0">
@@ -3583,7 +4045,9 @@ export default function App({
                                                 : null
                                             }
                                             partialAction={
-                                              selectedDiffSide === "staged" && selectedDiffPath
+                                              canEditSelectedDiff &&
+                                              selectedDiffSide === "staged" &&
+                                              selectedDiffPath
                                                 ? {
                                                     kind: "unstage",
                                                     busy:
@@ -3625,7 +4089,9 @@ export default function App({
                                                 : null
                                             }
                                             partialAction={
-                                              selectedDiffSide === "unstaged" && selectedDiffPath
+                                              canEditSelectedDiff &&
+                                              selectedDiffSide === "unstaged" &&
+                                              selectedDiffPath
                                                 ? {
                                                     kind: "stage",
                                                     busy:
@@ -3643,7 +4109,9 @@ export default function App({
                                                 : null
                                             }
                                             secondaryHunkAction={
-                                              selectedDiffSide === "unstaged" && selectedDiffPath
+                                              canEditSelectedDiff &&
+                                              selectedDiffSide === "unstaged" &&
+                                              selectedDiffPath
                                                 ? {
                                                     label: "Discard hunk",
                                                     buttonClassName: "btn-error",
