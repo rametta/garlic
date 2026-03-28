@@ -51,6 +51,8 @@ export interface CommitGraphSectionProps {
   exportGraphCommitsDisabled: boolean;
   /** Count of paths with staged or unstaged changes; when &gt; 0, a WIP row is shown above the graph. */
   wipChangedFileCount: number;
+  /** Opens the first available working-tree diff when the WIP row is activated. */
+  onWipSelect?: () => void;
 }
 
 type TipsAtHash = {
@@ -300,8 +302,8 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
             : isGraphFocus
               ? "bg-accent/15 ring-1 ring-accent/30 ring-inset"
               : isHeadBranchTipRow
-                ? "bg-primary/12 hover:bg-primary/18"
-                : "hover:bg-base-300/40"
+                ? "bg-primary/12 hover:bg-primary/26 hover:ring-1 hover:ring-primary/20 hover:ring-inset"
+                : "hover:bg-base-300/70 hover:ring-1 hover:ring-base-content/10 hover:ring-inset"
         }`}
         onClick={() => {
           onRowCommitSelect(c.hash);
@@ -439,6 +441,7 @@ export function CommitGraphSection({
   onExportGraphCommits,
   exportGraphCommitsDisabled,
   wipChangedFileCount,
+  onWipSelect,
 }: CommitGraphSectionProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const authorFilterWrapRef = useRef<HTMLDivElement>(null);
@@ -762,14 +765,33 @@ export function CommitGraphSection({
               })}
               {virtualRows.map((v) => {
                 if (showWipRow && v.index === 0) {
+                  const wipInteractive = typeof onWipSelect === "function";
                   return (
                     <div
                       key="graph-row-wip"
-                      className="absolute top-0 right-0 left-0 flex gap-x-1.5 px-0.5"
+                      role={wipInteractive ? "button" : undefined}
+                      tabIndex={wipInteractive ? 0 : undefined}
+                      aria-label={wipInteractive ? "Open first working tree diff" : undefined}
+                      className={`absolute top-0 right-0 left-0 flex gap-x-1.5 px-0.5 ${
+                        wipInteractive
+                          ? "cursor-pointer transition-colors hover:bg-base-300/60 hover:ring-1 hover:ring-base-content/10 hover:ring-inset focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40"
+                          : ""
+                      }`}
                       style={{
                         top: v.start,
                         height: v.size,
                       }}
+                      onClick={wipInteractive ? () => onWipSelect() : undefined}
+                      onKeyDown={
+                        wipInteractive
+                          ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                onWipSelect();
+                              }
+                            }
+                          : undefined
+                      }
                     >
                       <WipGraphRow
                         changedFileCount={wipChangedFileCount}

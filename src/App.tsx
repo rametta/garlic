@@ -3782,6 +3782,14 @@ export default function App({
                                 }}
                                 exportGraphCommitsDisabled={graphExportCommits.length === 0}
                                 wipChangedFileCount={wipChangedFileCount}
+                                onWipSelect={() => {
+                                  const first = unstagedFiles[0] ?? stagedFiles[0];
+                                  if (!first) return;
+                                  void loadDiffForFile(
+                                    first,
+                                    first.unstaged ? "unstaged" : "staged",
+                                  );
+                                }}
                               />
                             )}
                           </div>
@@ -4050,7 +4058,7 @@ export default function App({
                       {hasOpenAiApiKey ? (
                         <button
                           type="button"
-                          className="btn btn-outline btn-sm"
+                          className="btn btn-primary btn-sm"
                           disabled={!canUseAiCommit}
                           title="Generate a commit message from staged changes using OpenAI"
                           aria-label="Generate a commit message from staged changes using OpenAI"
