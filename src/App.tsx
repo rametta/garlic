@@ -34,6 +34,7 @@ import {
   popupGraphTagContextMenu,
   popupStashContextMenu,
   popupTagSidebarMenu,
+  popupWorktreeContextMenu,
 } from "./nativeContextMenu";
 import type {
   CommitEntry,
@@ -1971,6 +1972,75 @@ export default function App({
     [repo, refreshAfterMutation],
   );
 
+  const removeLinkedWorktree = useCallback(
+    async (worktree: WorktreeEntry) => {
+      if (!repo?.path || repo.error || worktree.isCurrent) return;
+      const hasLocalChanges = worktree.changedFileCount > 0;
+      const ok = await ask(
+        hasLocalChanges
+          ? `Delete worktree "${worktree.path}"? This worktree has local changes that will be lost.`
+          : `Delete worktree "${worktree.path}"?`,
+        { title: "Garlic", kind: "warning" },
+      );
+      if (!ok) return;
+      setBranchBusy(`worktree-remove:${worktree.path}`);
+      setOperationError(null);
+      try {
+        await invoke("remove_worktree", {
+          path: repo.path,
+          worktreePath: worktree.path,
+          force: hasLocalChanges,
+        });
+        if (worktreeBrowseTarget?.path === worktree.path) {
+          clearWorktreeBrowse();
+          clearDiffSelection();
+        }
+        await refreshAfterMutation();
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [
+      repo,
+      refreshAfterMutation,
+      worktreeBrowseTarget?.path,
+      clearWorktreeBrowse,
+      clearDiffSelection,
+    ],
+  );
+
+  const runWorktreeSidebarContextMenu = useCallback(
+    (worktree: WorktreeEntry, clientX: number, clientY: number) => {
+      const sameBranch =
+        !repo?.detached && !!repo?.branch && !!worktree.branch && repo.branch === worktree.branch;
+      const canApply =
+        !worktree.isCurrent && !repo?.detached && !!worktree.branch && !sameBranch && !branchBusy;
+      void popupWorktreeContextMenu(clientX, clientY, {
+        disabled: Boolean(branchBusy),
+        canOpen: !worktree.isCurrent,
+        canBrowse: worktree.changedFileCount > 0 || Boolean(worktree.branch),
+        canApply,
+        canDelete: !worktree.isCurrent,
+        onOpen: () => {
+          void loadRepo(worktree.path);
+        },
+        onBrowse: () => {
+          void openWorktreeBrowse(worktree);
+        },
+        onApply: () => {
+          if (!worktree.branch) return;
+          void mergeBranchIntoCurrent(worktree.branch);
+        },
+        onDelete: () => {
+          void removeLinkedWorktree(worktree);
+        },
+      });
+    },
+    [repo, branchBusy, loadRepo, openWorktreeBrowse, mergeBranchIntoCurrent, removeLinkedWorktree],
+  );
+
   const runBranchSidebarContextMenu = useCallback(
     (
       spec: { kind: "local"; branchName: string } | { kind: "remote"; fullRef: string },
@@ -3432,6 +3502,7 @@ export default function App({
             onPreviewWorktreeDiff={(worktree) => {
               void openWorktreeBrowse(worktree);
             }}
+            onWorktreeContextMenu={runWorktreeSidebarContextMenu}
             onStashClick={onStashSidebarClick}
             onTagClick={onTagSidebarClick}
             runBranchSidebarContextMenu={runBranchSidebarContextMenu}

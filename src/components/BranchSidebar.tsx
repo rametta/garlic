@@ -544,10 +544,12 @@ function WorktreeRow({
   worktree,
   onOpenWorktree,
   onPreviewWorktreeDiff,
+  onWorktreeContextMenu,
 }: {
   worktree: WorktreeEntry;
   onOpenWorktree: (path: string) => void;
   onPreviewWorktreeDiff: (worktree: WorktreeEntry) => void;
+  onWorktreeContextMenu: (worktree: WorktreeEntry, clientX: number, clientY: number) => void;
 }) {
   const summaryLabel =
     worktree.changedFileCount === 0
@@ -568,6 +570,11 @@ function WorktreeRow({
       className={
         worktree.isCurrent ? "rounded-md bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""
       }
+      onContextMenu={(e) => {
+        if (!nativeContextMenusAvailable()) return;
+        e.preventDefault();
+        onWorktreeContextMenu(worktree, e.clientX, e.clientY);
+      }}
     >
       <div className="flex min-w-0 flex-col gap-2 px-2 py-2">
         <div className="flex min-w-0 items-start justify-between gap-2">
@@ -653,6 +660,7 @@ export type BranchSidebarProps = {
   onCreateFromRemote: (remoteRef: string) => void;
   onOpenWorktree: (path: string) => void;
   onPreviewWorktreeDiff: (worktree: WorktreeEntry) => void;
+  onWorktreeContextMenu: (worktree: WorktreeEntry, clientX: number, clientY: number) => void;
   onStashClick: (stash: StashEntry) => void;
   onTagClick: (tag: TagEntry) => void;
   runBranchSidebarContextMenu: (
@@ -685,6 +693,7 @@ export function BranchSidebar({
   onCreateFromRemote,
   onOpenWorktree,
   onPreviewWorktreeDiff,
+  onWorktreeContextMenu,
   onStashClick,
   onTagClick,
   runBranchSidebarContextMenu,
@@ -862,46 +871,49 @@ export function BranchSidebar({
           ) : null}
         </BranchPanel>
 
-        <BranchPanel
-          title="Worktrees"
-          entityCount={worktrees.length}
-          open={branchSidebarSections.worktreesOpen}
-          onOpenChange={(next) => {
-            onBranchSidebarSectionsChange({ ...branchSidebarSections, worktreesOpen: next });
-          }}
-          empty={canShowBranches && filteredWorktrees.length === 0}
-          emptyHint={worktreesEmptyHint}
-          isLastSection={false}
-          belowHeader={
-            canShowBranches ? (
-              <input
-                type="search"
-                className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
-                value={worktreeListFilter}
-                onChange={(e) => {
-                  setWorktreeListFilter(e.target.value);
-                }}
-                placeholder="Filter worktrees…"
-                autoComplete="off"
-                spellCheck={false}
-                aria-label="Filter worktrees by branch or path"
-              />
-            ) : null
-          }
-        >
-          {canShowBranches ? (
-            <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
-              {filteredWorktrees.map((worktree) => (
-                <WorktreeRow
-                  key={worktree.path}
-                  worktree={worktree}
-                  onOpenWorktree={onOpenWorktree}
-                  onPreviewWorktreeDiff={onPreviewWorktreeDiff}
+        {worktrees.length > 1 ? (
+          <BranchPanel
+            title="Worktrees"
+            entityCount={worktrees.length}
+            open={branchSidebarSections.worktreesOpen}
+            onOpenChange={(next) => {
+              onBranchSidebarSectionsChange({ ...branchSidebarSections, worktreesOpen: next });
+            }}
+            empty={canShowBranches && filteredWorktrees.length === 0}
+            emptyHint={worktreesEmptyHint}
+            isLastSection={false}
+            belowHeader={
+              canShowBranches ? (
+                <input
+                  type="search"
+                  className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
+                  value={worktreeListFilter}
+                  onChange={(e) => {
+                    setWorktreeListFilter(e.target.value);
+                  }}
+                  placeholder="Filter worktrees…"
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label="Filter worktrees by branch or path"
                 />
-              ))}
-            </ul>
-          ) : null}
-        </BranchPanel>
+              ) : null
+            }
+          >
+            {canShowBranches ? (
+              <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
+                {filteredWorktrees.map((worktree) => (
+                  <WorktreeRow
+                    key={worktree.path}
+                    worktree={worktree}
+                    onOpenWorktree={onOpenWorktree}
+                    onPreviewWorktreeDiff={onPreviewWorktreeDiff}
+                    onWorktreeContextMenu={onWorktreeContextMenu}
+                  />
+                ))}
+              </ul>
+            ) : null}
+          </BranchPanel>
+        ) : null}
 
         <BranchPanel
           title="Tags"

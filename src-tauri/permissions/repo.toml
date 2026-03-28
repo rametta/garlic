@@ -23,6 +23,7 @@ commands.allow = [
   "rebase_current_branch_onto",
   "list_working_tree_files",
   "list_worktrees",
+  "remove_worktree",
   "stage_paths",
   "stage_patch",
   "unstage_paths",

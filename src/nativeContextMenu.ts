@@ -194,6 +194,63 @@ export async function popupStashContextMenu(
   }
 }
 
+export async function popupWorktreeContextMenu(
+  clientX: number,
+  clientY: number,
+  args: {
+    disabled: boolean;
+    canOpen: boolean;
+    canBrowse: boolean;
+    canApply: boolean;
+    canDelete: boolean;
+    onOpen: () => void;
+    onBrowse: () => void;
+    onApply: () => void;
+    onDelete: () => void;
+  },
+): Promise<void> {
+  if (!isTauri()) return;
+  const items: MenuItemOptions[] = [
+    {
+      id: "worktree_open",
+      text: "Open worktree",
+      enabled: !args.disabled && args.canOpen,
+      action: () => {
+        args.onOpen();
+      },
+    },
+    {
+      id: "worktree_browse",
+      text: "Browse changes",
+      enabled: !args.disabled && args.canBrowse,
+      action: () => {
+        args.onBrowse();
+      },
+    },
+    {
+      id: "worktree_apply",
+      text: "Apply branch to current branch…",
+      enabled: !args.disabled && args.canApply,
+      action: () => {
+        args.onApply();
+      },
+    },
+    {
+      id: "worktree_delete",
+      text: "Delete worktree…",
+      enabled: !args.disabled && args.canDelete,
+      action: () => {
+        args.onDelete();
+      },
+    },
+  ];
+  try {
+    await showMenuAt(clientX, clientY, items);
+  } catch (e) {
+    console.error("native worktree context menu failed", e);
+  }
+}
+
 export async function popupFileRowContextMenu(
   clientX: number,
   clientY: number,

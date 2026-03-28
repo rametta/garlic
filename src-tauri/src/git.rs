@@ -2201,6 +2201,25 @@ pub fn list_worktrees(path: String) -> Result<Vec<WorktreeEntry>, String> {
     Ok(entries)
 }
 
+/// Remove a linked worktree (`git worktree remove`).
+#[tauri::command]
+pub fn remove_worktree(path: String, worktree_path: String, force: bool) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let target = worktree_path.trim();
+    if target.is_empty() {
+        return Err("Worktree path is empty.".to_string());
+    }
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push("--");
+    args.push(target);
+    git_output(&path_buf, &args)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn stage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
