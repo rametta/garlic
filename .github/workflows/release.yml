@@ -132,6 +132,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+          TAURI_BUNDLER_DMG_IGNORE_CI: false
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Garlic ${{ github.ref_name }}
@@ -139,5 +140,5 @@ jobs:
           releaseDraft: false
           prerelease: false
           generateReleaseNotes: true
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --verbose
           tauriScript: bun run tauri
