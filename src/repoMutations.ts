@@ -1,6 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import type { BranchSidebarSectionsState, LocalBranchEntry, TagEntry } from "./repoTypes";
+import type {
+  BranchSidebarSectionsState,
+  LocalBranchEntry,
+  RemoteBranchEntry,
+  TagEntry,
+} from "./repoTypes";
 import {
   applyOptimisticDiscardPathChange,
   applyOptimisticStageChange,
@@ -22,6 +27,7 @@ type RepoMutationContext = {
 type RepoMutationOptions<TVariables extends RepoMutationVariables> = {
   mutationFn: (variables: TVariables) => Promise<void>;
   optimisticUpdate?: (snapshot: RepoSnapshot, variables: TVariables) => RepoSnapshot;
+  successUpdate?: (snapshot: RepoSnapshot, variables: TVariables) => RepoSnapshot;
   invalidateSnapshotOnSettled?: boolean;
 };
 
@@ -92,9 +98,55 @@ function withCurrentBranchAheadBumped(snapshot: RepoSnapshot): RepoSnapshot {
   }));
 }
 
+function withCurrentBranchPushedToOrigin(snapshot: RepoSnapshot): RepoSnapshot {
+  const branchName = currentBranchName(snapshot);
+  const headHash = snapshot.metadata?.headHash?.trim() ?? "";
+  if (!branchName) return withCurrentBranchAhead(snapshot, 0);
+
+  const upstreamName = `origin/${branchName}`;
+  const localBranches = snapshot.localBranches.map((branch) =>
+    branch.name === branchName
+      ? {
+          ...branch,
+          tipHash: headHash || branch.tipHash,
+          upstreamName,
+          ahead: 0,
+          behind: 0,
+        }
+      : branch,
+  );
+  const nextRemoteBranch: RemoteBranchEntry = {
+    name: upstreamName,
+    tipHash: headHash,
+  };
+  const remoteBranches = headHash
+    ? sortByName(
+        snapshot.remoteBranches.some((branch) => branch.name === upstreamName)
+          ? snapshot.remoteBranches.map((branch) =>
+              branch.name === upstreamName ? nextRemoteBranch : branch,
+            )
+          : snapshot.remoteBranches.concat(nextRemoteBranch),
+      )
+    : snapshot.remoteBranches;
+
+  return updateMetadata(
+    {
+      ...snapshot,
+      localBranches,
+      remoteBranches,
+    },
+    (metadata) => ({
+      ...metadata,
+      ahead: metadata.ahead === null ? metadata.ahead : 0,
+      behind: metadata.behind === null ? metadata.behind : 0,
+    }),
+  );
+}
+
 function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
   mutationFn,
   optimisticUpdate,
+  successUpdate,
   invalidateSnapshotOnSettled = true,
 }: RepoMutationOptions<TVariables>) {
   const queryClient = useQueryClient();
@@ -116,6 +168,12 @@ function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
     onError: (_error, variables, context) => {
       if (context?.previousSnapshot) {
         setRepoSnapshot(queryClient, variables.path, context.previousSnapshot);
+      }
+    },
+    onSuccess: (_data, variables) => {
+      const snapshot = getRepoSnapshot(queryClient, variables.path);
+      if (snapshot && successUpdate) {
+        setRepoSnapshot(queryClient, variables.path, successUpdate(snapshot, variables));
       }
     },
     onSettled: (_data, _error, variables) => {
@@ -509,6 +567,7 @@ export function usePushToOriginMutation() {
     mutationFn: (variables: { path: string; skipHooks: boolean }) =>
       invokeRepoMutation("push_to_origin", variables),
     optimisticUpdate: (snapshot) => withCurrentBranchAhead(snapshot, 0),
+    successUpdate: (snapshot) => withCurrentBranchPushedToOrigin(snapshot),
     invalidateSnapshotOnSettled: false,
   });
 }
