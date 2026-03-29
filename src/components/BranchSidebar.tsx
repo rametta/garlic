@@ -423,7 +423,7 @@ function LocalBranchFolderRow({
         </button>
         <button
           type="button"
-          className="min-w-0 flex-1 py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word"
+          className="min-w-0 flex-1 rounded-md py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word transition-colors hover:bg-base-200/50"
           aria-label={`${expanded ? "Collapse" : "Expand"} ${label} folder`}
           aria-expanded={expanded}
           onClick={onToggle}
@@ -512,7 +512,7 @@ function LocalBranchRow({
             if (busy || isCurrent) return;
             onCheckoutLocal(branch.name);
           }}
-          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 py-2 pr-2 pl-1 text-left ${busy ? "opacity-60" : ""}`}
+          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 rounded-md py-2 pr-2 pl-1 text-left transition-colors hover:bg-base-200/50 ${busy ? "opacity-60" : ""}`}
         >
           <span
             className="min-w-0 flex-1 truncate text-[0.8125rem] leading-snug"
@@ -602,7 +602,7 @@ function RemoteBranchFolderRow({
         </button>
         <button
           type="button"
-          className="min-w-0 flex-1 py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word"
+          className="min-w-0 flex-1 rounded-md py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word transition-colors hover:bg-base-200/50"
           aria-label={`${expanded ? "Collapse" : "Expand"} ${label} folder`}
           aria-expanded={expanded}
           onClick={onToggle}
@@ -683,7 +683,7 @@ function RemoteBranchRow({
             if (busy) return;
             onCreateFromRemote(fullRef);
           }}
-          className={`flex h-auto min-h-0 min-w-0 flex-1 justify-start py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] whitespace-normal ${busy ? "opacity-60" : ""}`}
+          className={`flex h-auto min-h-0 min-w-0 flex-1 justify-start rounded-md py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] whitespace-normal transition-colors hover:bg-base-200/50 ${busy ? "opacity-60" : ""}`}
         >
           {busy ? "Creating…" : fullRef}
         </button>
