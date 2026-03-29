@@ -3146,7 +3146,7 @@ pub fn delete_remote_tag(path: String, tag: String) -> Result<(), String> {
 
 /// Push a local tag to `origin` (`git push origin <tag>`).
 #[tauri::command]
-pub fn push_tag_to_origin(path: String, tag: String) -> Result<(), String> {
+pub fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let tag = tag.trim();
@@ -3157,7 +3157,7 @@ pub fn push_tag_to_origin(path: String, tag: String) -> Result<(), String> {
         .map_err(|_| "No remote named \"origin\" configured.".to_string())?;
     let tag_ref = format!("refs/tags/{tag}");
     git_output(&path_buf, &["rev-parse", "--verify", &tag_ref])?;
-    git_output(&path_buf, &["push", "origin", tag])?;
+    run_git_streaming(&app, &path, &path_buf, &["push", "origin", tag], "push")?;
     Ok(())
 }
 

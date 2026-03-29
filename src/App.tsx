@@ -988,6 +988,9 @@ export default function App({
   const [newTagName, setNewTagName] = useState("");
   const [createTagMessage, setCreateTagMessage] = useState("");
   const [createTagFieldError, setCreateTagFieldError] = useState<string | null>(null);
+  const [createTagSubmitAction, setCreateTagSubmitAction] = useState<
+    "create" | "create-and-push" | null
+  >(null);
   const refreshLists = useCallback(
     async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
       setListsError(null);
@@ -1898,6 +1901,7 @@ export default function App({
     setNewTagName("");
     setCreateTagMessage("");
     setCreateTagFieldError(null);
+    setCreateTagSubmitAction(null);
     setCreateTagCommit(null);
   }, []);
 
@@ -2977,7 +2981,7 @@ export default function App({
     }
   }
 
-  async function submitCreateTag() {
+  async function submitCreateTag({ pushToOrigin }: { pushToOrigin: boolean }) {
     const trimmed = newTagName.trim();
     if (!repo?.path || repo.error) return;
     if (!createTagCommit) return;
@@ -2991,8 +2995,11 @@ export default function App({
       return;
     }
     setCreateTagFieldError(null);
+    setCreateTagSubmitAction(pushToOrigin ? "create-and-push" : "create");
     setBranchBusy("tag");
     setOperationError(null);
+    let tagCreatedLocally = false;
+    let startedPush = false;
     try {
       const msg = createTagMessage.trim();
       await createTagMutation.mutateAsync({
@@ -3001,11 +3008,27 @@ export default function App({
         commit: createTagCommit,
         message: msg.length > 0 ? msg : null,
       });
+      tagCreatedLocally = true;
+      if (pushToOrigin) {
+        setBranchBusy(null);
+        startedPush = true;
+        setPushBusy(true);
+        await pushTagToOriginMutation.mutateAsync({ path: repo.path, tag: trimmed });
+      }
       closeCreateTagDialog();
     } catch (e) {
-      setOperationError(invokeErrorMessage(e));
+      if (tagCreatedLocally && pushToOrigin) {
+        closeCreateTagDialog();
+        setOperationError(
+          `Tag created locally, but pushing it to origin failed.\n\n${invokeErrorMessage(e)}`,
+        );
+      } else {
+        setOperationError(invokeErrorMessage(e));
+      }
     } finally {
       setBranchBusy(null);
+      if (startedPush) setPushBusy(false);
+      setCreateTagSubmitAction(null);
     }
   }
 
@@ -3278,7 +3301,10 @@ export default function App({
   const newTagTrimmed = newTagName.trim();
   const newTagNameInvalid =
     newTagTrimmed.length > 0 && tagNameValidationError(newTagTrimmed) !== null;
-  const canSubmitNewTag = newTagTrimmed.length > 0 && !newTagNameInvalid && branchBusy !== "tag";
+  const createTagDialogBusy = branchBusy === "tag" || pushBusy;
+  const canSubmitNewTag = newTagTrimmed.length > 0 && !newTagNameInvalid && !createTagDialogBusy;
+  const createTagBusy = createTagSubmitAction === "create" && createTagDialogBusy;
+  const createAndPushTagBusy = createTagSubmitAction === "create-and-push" && createTagDialogBusy;
 
   const createBranchStartEntry = useMemo(() => {
     if (!createBranchStartCommit) return null;
@@ -3792,7 +3818,7 @@ export default function App({
                     value={newTagName}
                     autoComplete="off"
                     spellCheck={false}
-                    disabled={branchBusy === "tag"}
+                    disabled={createTagDialogBusy}
                     onChange={(e) => {
                       setNewTagName(e.target.value);
                       if (createTagFieldError) setCreateTagFieldError(null);
@@ -3800,7 +3826,7 @@ export default function App({
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        void submitCreateTag();
+                        void submitCreateTag({ pushToOrigin: false });
                       }
                     }}
                   />
@@ -3820,7 +3846,7 @@ export default function App({
                     className="textarea-bordered textarea min-h-18 w-full font-mono text-sm textarea-sm"
                     value={createTagMessage}
                     placeholder="Leave empty for a lightweight tag"
-                    disabled={branchBusy === "tag"}
+                    disabled={createTagDialogBusy}
                     onChange={(e) => {
                       setCreateTagMessage(e.target.value);
                     }}
@@ -3830,21 +3856,39 @@ export default function App({
                   <button
                     type="button"
                     className="btn"
-                    disabled={branchBusy === "tag"}
+                    disabled={createTagDialogBusy}
                     onClick={closeCreateTagDialog}
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
-                    className="btn btn-primary"
+                    className="btn"
                     disabled={!canSubmitNewTag}
-                    onClick={() => void submitCreateTag()}
+                    onClick={() => void submitCreateTag({ pushToOrigin: false })}
                   >
-                    {branchBusy === "tag" ? (
-                      <span className="loading loading-sm loading-spinner" />
+                    {createTagBusy ? (
+                      <>
+                        <span className="loading loading-sm loading-spinner" />
+                        Creating...
+                      </>
                     ) : (
                       "Create tag"
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={!canSubmitNewTag}
+                    onClick={() => void submitCreateTag({ pushToOrigin: true })}
+                  >
+                    {createAndPushTagBusy ? (
+                      <>
+                        <span className="loading loading-sm loading-spinner" />
+                        {pushBusy ? "Pushing..." : "Creating..."}
+                      </>
+                    ) : (
+                      "Create tag and push"
                     )}
                   </button>
                 </div>
