@@ -81,6 +81,16 @@ const BRANCH_TREE_INDENT_PX = 14;
 const BRANCH_ROW_ESTIMATE_PX = 36;
 const TAG_ROW_ESTIMATE_PX = 40;
 
+function togglePathInSet(current: ReadonlySet<string>, path: string): Set<string> {
+  const next = new Set(current);
+  if (next.has(path)) {
+    next.delete(path);
+  } else {
+    next.add(path);
+  }
+  return next;
+}
+
 function BranchPanel({
   title,
   entityCount,
@@ -226,9 +236,11 @@ type LocalBranchListRow =
   | {
       kind: "folder";
       key: string;
+      path: string;
       depth: number;
       label: string;
       node: BranchTrieNode;
+      expanded: boolean;
     }
   | {
       kind: "branch";
@@ -241,9 +253,11 @@ type RemoteBranchListRow =
   | {
       kind: "folder";
       key: string;
+      path: string;
       depth: number;
       label: string;
       node: RemoteTrieNode;
+      expanded: boolean;
     }
   | {
       kind: "branch";
@@ -254,6 +268,8 @@ type RemoteBranchListRow =
 
 function flattenLocalBranchRows(
   node: BranchTrieNode,
+  collapsedPaths: ReadonlySet<string>,
+  forceExpand: boolean,
   depth = 0,
   prefix = "",
 ): LocalBranchListRow[] {
@@ -263,38 +279,46 @@ function flattenLocalBranchRows(
   );
   for (const [segment, child] of sorted) {
     const path = prefix ? `${prefix}/${segment}` : segment;
-    const leafOnly = child.children.size === 0 && child.branchHere !== null;
+    const branchHere = child.branchHere;
+    const leafOnly = child.children.size === 0 && branchHere !== null;
     if (leafOnly) {
       rows.push({
         kind: "branch",
-        key: `branch:${child.branchHere.name}`,
+        key: `branch:${branchHere.name}`,
         depth,
-        branch: child.branchHere,
+        branch: branchHere,
       });
       continue;
     }
+    const expanded = forceExpand || !collapsedPaths.has(path);
     rows.push({
       kind: "folder",
       key: `folder:${path}`,
+      path,
       depth,
       label: segment,
       node: child,
+      expanded,
     });
-    if (child.branchHere) {
+    if (expanded && branchHere) {
       rows.push({
         kind: "branch",
-        key: `branch:${child.branchHere.name}`,
+        key: `branch:${branchHere.name}`,
         depth: depth + 1,
-        branch: child.branchHere,
+        branch: branchHere,
       });
     }
-    rows.push(...flattenLocalBranchRows(child, depth + 1, path));
+    if (expanded) {
+      rows.push(...flattenLocalBranchRows(child, collapsedPaths, forceExpand, depth + 1, path));
+    }
   }
   return rows;
 }
 
 function flattenRemoteBranchRows(
   node: RemoteTrieNode,
+  collapsedPaths: ReadonlySet<string>,
+  forceExpand: boolean,
   depth = 0,
   prefix = "",
 ): RemoteBranchListRow[] {
@@ -304,32 +328,38 @@ function flattenRemoteBranchRows(
   );
   for (const [segment, child] of sorted) {
     const path = prefix ? `${prefix}/${segment}` : segment;
-    const leafOnly = child.children.size === 0 && child.refHere !== null;
+    const refHere = child.refHere;
+    const leafOnly = child.children.size === 0 && refHere !== null;
     if (leafOnly) {
       rows.push({
         kind: "branch",
-        key: `remote:${child.refHere}`,
+        key: `remote:${refHere}`,
         depth,
-        fullRef: child.refHere,
+        fullRef: refHere,
       });
       continue;
     }
+    const expanded = forceExpand || !collapsedPaths.has(path);
     rows.push({
       kind: "folder",
       key: `folder:${path}`,
+      path,
       depth,
       label: segment,
       node: child,
+      expanded,
     });
-    if (child.refHere) {
+    if (expanded && refHere) {
       rows.push({
         kind: "branch",
-        key: `remote:${child.refHere}`,
+        key: `remote:${refHere}`,
         depth: depth + 1,
-        fullRef: child.refHere,
+        fullRef: refHere,
       });
     }
-    rows.push(...flattenRemoteBranchRows(child, depth + 1, path));
+    if (expanded) {
+      rows.push(...flattenRemoteBranchRows(child, collapsedPaths, forceExpand, depth + 1, path));
+    }
   }
   return rows;
 }
@@ -338,11 +368,15 @@ function LocalBranchFolderRow({
   label,
   node,
   depth,
+  expanded,
+  onToggle,
   graph,
 }: {
   label: string;
   node: BranchTrieNode;
   depth: number;
+  expanded: boolean;
+  onToggle: () => void;
   graph: BranchGraphControls;
 }) {
   const folderGraphVisible = graph.graphFolderAnyVisibleLocal(node);
@@ -354,9 +388,17 @@ function LocalBranchFolderRow({
       }}
     >
       <div className="flex w-full min-w-0 items-center gap-0">
-        <span className="flex h-9 w-5 shrink-0 items-center justify-center opacity-40" aria-hidden>
-          <IconChevronRight className="h-3.5 w-3.5 rotate-90" />
-        </span>
+        <button
+          type="button"
+          className="flex h-9 w-5 shrink-0 items-center justify-center opacity-40 transition-transform hover:opacity-65"
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${label} folder`}
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          <IconChevronRight
+            className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-90" : ""}`}
+          />
+        </button>
         <button
           type="button"
           className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
@@ -379,9 +421,15 @@ function LocalBranchFolderRow({
             <IconEyeOff className="text-success/45" />
           )}
         </button>
-        <span className="min-w-0 flex-1 py-2 pr-2 pl-1 font-mono text-[0.8125rem] wrap-break-word">
+        <button
+          type="button"
+          className="min-w-0 flex-1 py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word"
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${label} folder`}
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
           {label}
-        </span>
+        </button>
       </div>
     </div>
   );
@@ -499,11 +547,15 @@ function RemoteBranchFolderRow({
   label,
   node,
   depth,
+  expanded,
+  onToggle,
   graph,
 }: {
   label: string;
   node: RemoteTrieNode;
   depth: number;
+  expanded: boolean;
+  onToggle: () => void;
   graph: BranchGraphControls;
 }) {
   const folderGraphVisible = graph.graphFolderAnyVisibleRemote(node);
@@ -515,9 +567,17 @@ function RemoteBranchFolderRow({
       }}
     >
       <div className="flex w-full min-w-0 items-center gap-0">
-        <span className="flex h-9 w-5 shrink-0 items-center justify-center opacity-40" aria-hidden>
-          <IconChevronRight className="h-3.5 w-3.5 rotate-90" />
-        </span>
+        <button
+          type="button"
+          className="flex h-9 w-5 shrink-0 items-center justify-center opacity-40 transition-transform hover:opacity-65"
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${label} folder`}
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          <IconChevronRight
+            className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-90" : ""}`}
+          />
+        </button>
         <button
           type="button"
           className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
@@ -540,9 +600,15 @@ function RemoteBranchFolderRow({
             <IconEyeOff className="text-success/45" />
           )}
         </button>
-        <span className="min-w-0 flex-1 py-2 pr-2 pl-1 font-mono text-[0.8125rem] wrap-break-word">
+        <button
+          type="button"
+          className="min-w-0 flex-1 py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word"
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${label} folder`}
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
           {label}
-        </span>
+        </button>
       </div>
     </div>
   );
@@ -854,6 +920,12 @@ export const BranchSidebar = memo(function BranchSidebar({
 }: BranchSidebarProps) {
   const [localBranchListFilter, setLocalBranchListFilter] = useState("");
   const [remoteBranchListFilter, setRemoteBranchListFilter] = useState("");
+  const [collapsedLocalBranchFolders, setCollapsedLocalBranchFolders] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [collapsedRemoteBranchFolders, setCollapsedRemoteBranchFolders] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [worktreeListFilter, setWorktreeListFilter] = useState("");
   const [tagListFilter, setTagListFilter] = useState("");
   const [stashListFilter, setStashListFilter] = useState("");
@@ -861,6 +933,8 @@ export const BranchSidebar = memo(function BranchSidebar({
   useEffect(() => {
     setLocalBranchListFilter("");
     setRemoteBranchListFilter("");
+    setCollapsedLocalBranchFolders(new Set());
+    setCollapsedRemoteBranchFolders(new Set());
     setWorktreeListFilter("");
     setTagListFilter("");
     setStashListFilter("");
@@ -876,6 +950,8 @@ export const BranchSidebar = memo(function BranchSidebar({
   const showWorktreeRows = canShowBranches && branchSidebarSections.worktreesOpen;
   const showTagRows = canShowBranches && branchSidebarSections.tagsOpen;
   const showStashRows = canShowBranches && branchSidebarSections.stashOpen;
+  const forceExpandLocalFolders = localBranchFilterNorm.length > 0;
+  const forceExpandRemoteFolders = remoteBranchFilterNorm.length > 0;
   const localBranchScrollRef = useRef<HTMLDivElement | null>(null);
   const remoteBranchScrollRef = useRef<HTMLDivElement | null>(null);
   const tagScrollRef = useRef<HTMLDivElement | null>(null);
@@ -934,12 +1010,36 @@ export const BranchSidebar = memo(function BranchSidebar({
     [filteredRemoteBranches, showRemoteBranchRows],
   );
   const localBranchRows = useMemo(
-    () => (showLocalBranchRows ? flattenLocalBranchRows(localBranchTrieRoot) : []),
-    [localBranchTrieRoot, showLocalBranchRows],
+    () =>
+      showLocalBranchRows
+        ? flattenLocalBranchRows(
+            localBranchTrieRoot,
+            collapsedLocalBranchFolders,
+            forceExpandLocalFolders,
+          )
+        : [],
+    [
+      collapsedLocalBranchFolders,
+      forceExpandLocalFolders,
+      localBranchTrieRoot,
+      showLocalBranchRows,
+    ],
   );
   const remoteBranchRows = useMemo(
-    () => (showRemoteBranchRows ? flattenRemoteBranchRows(remoteBranchTrieRoot) : []),
-    [remoteBranchTrieRoot, showRemoteBranchRows],
+    () =>
+      showRemoteBranchRows
+        ? flattenRemoteBranchRows(
+            remoteBranchTrieRoot,
+            collapsedRemoteBranchFolders,
+            forceExpandRemoteFolders,
+          )
+        : [],
+    [
+      collapsedRemoteBranchFolders,
+      forceExpandRemoteFolders,
+      remoteBranchTrieRoot,
+      showRemoteBranchRows,
+    ],
   );
 
   const localBranchVirtualizer = useVirtualizer({
@@ -1036,6 +1136,12 @@ export const BranchSidebar = memo(function BranchSidebar({
                         label={row.label}
                         node={row.node}
                         depth={row.depth}
+                        expanded={row.expanded}
+                        onToggle={() => {
+                          setCollapsedLocalBranchFolders((current) =>
+                            togglePathInSet(current, row.path),
+                          );
+                        }}
                         graph={branchGraphControls}
                       />
                     ) : (
@@ -1112,6 +1218,12 @@ export const BranchSidebar = memo(function BranchSidebar({
                         label={row.label}
                         node={row.node}
                         depth={row.depth}
+                        expanded={row.expanded}
+                        onToggle={() => {
+                          setCollapsedRemoteBranchFolders((current) =>
+                            togglePathInSet(current, row.path),
+                          );
+                        }}
                         graph={branchGraphControls}
                       />
                     ) : (
