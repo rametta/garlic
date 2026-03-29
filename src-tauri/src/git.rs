@@ -1806,6 +1806,86 @@ pub fn rebase_current_branch_onto(
     Ok(())
 }
 
+/// Drop a single commit from the current branch by rebasing its descendants onto the commit's
+/// parent (`git rebase --onto <parent> <commit>`). Limited to non-merge commits on HEAD's
+/// first-parent history.
+#[tauri::command]
+pub fn drop_commit(app: AppHandle, path: String, commit_hash: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let hash = commit_hash.trim();
+    if hash.is_empty() {
+        return Err("Commit hash cannot be empty.".to_string());
+    }
+
+    git_output(&path_buf, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .map_err(|_| "Drop commit requires the current branch to be checked out.".to_string())?;
+
+    let verify_spec = format!("{hash}^{{commit}}");
+    let resolved_hash = git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+
+    let parents_line = git_output(
+        &path_buf,
+        &["rev-list", "--parents", "-n", "1", &resolved_hash],
+    )?;
+    let mut parts = parents_line.split_whitespace();
+    let _ = parts.next();
+    let parents: Vec<&str> = parts.collect();
+    if parents.is_empty() {
+        return Err("Dropping the root commit is not supported.".to_string());
+    }
+    if parents.len() > 1 {
+        return Err("Dropping merge commits is not supported yet.".to_string());
+    }
+    let parent_hash = parents[0];
+
+    let merge_base_args = ["merge-base", "--is-ancestor", &resolved_hash, "HEAD"];
+    let ancestor_status = git_cmd(&path_buf)
+        .args(merge_base_args)
+        .status()
+        .map_err(|e| format!("Could not run git: {e}"))?;
+    write_git_audit_line(
+        &path_buf,
+        &merge_base_args,
+        ancestor_status.success(),
+        if ancestor_status.success() {
+            ""
+        } else {
+            "Commit is not on the current branch."
+        },
+    );
+    match ancestor_status.code() {
+        Some(0) => {}
+        Some(1) => {
+            return Err("Only commits on the current branch can be dropped.".to_string());
+        }
+        _ => {
+            return Err(
+                "Could not verify whether the commit is on the current branch.".to_string(),
+            );
+        }
+    }
+
+    let first_parent_history = git_output(&path_buf, &["rev-list", "--first-parent", "HEAD"])?;
+    if !first_parent_history
+        .lines()
+        .any(|line| line.trim() == resolved_hash)
+    {
+        return Err(
+            "Only commits on the current branch's primary history can be dropped.".to_string(),
+        );
+    }
+
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["rebase", "--onto", parent_hash, &resolved_hash],
+        "drop commit",
+    )?;
+    Ok(())
+}
+
 /// `git show` prints commit metadata before the patch; `react-diff-view` needs a patch-only string.
 fn unified_diff_patch_only(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();

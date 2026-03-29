@@ -289,6 +289,13 @@ export function useCherryPickCommitMutation() {
   });
 }
 
+export function useDropCommitMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string; commitHash: string }) =>
+      invokeRepoMutation("drop_commit", variables),
+  });
+}
+
 export function useDiscardPathChangesMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; filePath: string; fromUnstaged: boolean }) =>

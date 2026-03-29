@@ -329,9 +329,11 @@ export async function popupGraphCommitContextMenu(
   args: {
     branchBusy: boolean;
     cherryPickDisabled: boolean;
+    dropCommitDisabled: boolean;
     rebaseOntoDisabled: boolean;
     onBrowse: () => void;
     onCherryPick: () => void;
+    onDropCommit: () => void;
     onRebaseCurrentOnto: () => void;
     onCreateBranch: () => void;
     onCreateTag: () => void;
@@ -364,6 +366,14 @@ export async function popupGraphCommitContextMenu(
         enabled: !args.cherryPickDisabled,
         action: () => {
           args.onCherryPick();
+        },
+      },
+      {
+        id: "commit_drop",
+        text: "Drop Commit",
+        enabled: !args.dropCommitDisabled,
+        action: () => {
+          args.onDropCommit();
         },
       },
       {

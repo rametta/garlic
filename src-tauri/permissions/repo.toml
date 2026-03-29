@@ -21,6 +21,7 @@ commands.allow = [
   "get_remote_url",
   "set_remote_url",
   "rebase_current_branch_onto",
+  "drop_commit",
   "list_working_tree_files",
   "list_worktrees",
   "remove_worktree",

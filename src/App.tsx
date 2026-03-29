@@ -80,6 +80,7 @@ import {
   useDeleteRemoteBranchMutation,
   useDeleteRemoteTagMutation,
   useDeleteTagMutation,
+  useDropCommitMutation,
   useDiscardPatchMutation,
   useDiscardPathChangesMutation,
   useMergeBranchMutation,
@@ -933,6 +934,7 @@ export default function App({
   const checkoutLocalBranchMutation = useCheckoutLocalBranchMutation();
   const createBranchFromRemoteMutation = useCreateBranchFromRemoteMutation();
   const cherryPickCommitMutation = useCherryPickCommitMutation();
+  const dropCommitMutation = useDropCommitMutation();
   const discardPathChangesMutation = useDiscardPathChangesMutation();
   const pushTagToOriginMutation = usePushTagToOriginMutation();
   const createBranchAtCommitMutation = useCreateBranchAtCommitMutation();
@@ -1190,6 +1192,19 @@ export default function App({
     () => reachableCommitHashesFromHead(commits, repo?.headHash ?? null),
     [commits, repo?.headHash],
   );
+  const graphHeadFirstParentHashes = useMemo(() => {
+    const hashes = new Set<string>();
+    if (!repo?.headHash) return hashes;
+    const byHash = new Map(commits.map((commit) => [commit.hash, commit] as const));
+    let next: string | undefined = repo.headHash;
+    while (next) {
+      hashes.add(next);
+      const commit = byHash.get(next);
+      if (!commit) break;
+      next = commit.parentHashes[0];
+    }
+    return hashes;
+  }, [commits, repo?.headHash]);
 
   const graphExportCommits = useMemo(
     () => graphFilteredCommits.filter((c) => graphCommitsReachableFromHead.has(c.hash)),
@@ -2406,6 +2421,31 @@ export default function App({
     [repo, commits, rebaseCurrentBranchOntoMutation],
   );
 
+  const dropCommit = useCallback(
+    async (hash: string) => {
+      if (!repo?.path || repo.error || repo.detached) return;
+      const short = commits.find((c) => c.hash === hash)?.shortHash ?? hash.slice(0, 7);
+      const ok = await ask(
+        `Drop commit ${short} from the current branch? This rewrites this branch's history.`,
+        { title: "Garlic", kind: "warning" },
+      );
+      if (!ok) return;
+      setBranchBusy("rebase");
+      setOperationError(null);
+      try {
+        await dropCommitMutation.mutateAsync({
+          path: repo.path,
+          commitHash: hash,
+        });
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, commits, dropCommitMutation],
+  );
+
   const discardPathChanges = useCallback(
     async (filePath: string, fromUnstaged: boolean) => {
       if (!repo?.path || repo.error) return;
@@ -2573,12 +2613,19 @@ export default function App({
         branchBusy: Boolean(branchBusy),
         cherryPickDisabled:
           Boolean(branchBusy) || Boolean(repo?.detached) || Boolean(entry?.stashRef),
+        dropCommitDisabled:
+          Boolean(branchBusy) ||
+          Boolean(repo?.detached) ||
+          Boolean(entry?.stashRef) ||
+          entry?.parentHashes.length !== 1 ||
+          !graphHeadFirstParentHashes.has(hash),
         rebaseOntoDisabled:
           Boolean(branchBusy) ||
           Boolean(repo?.detached) ||
           Boolean(repo?.headHash && repo.headHash === hash),
         onBrowse: () => void selectCommit(hash),
         onCherryPick: () => void cherryPickCommit(hash),
+        onDropCommit: () => void dropCommit(hash),
         onRebaseCurrentOnto: () => void rebaseCurrentBranchOntoCommit(hash),
         onCreateBranch: () => {
           setCreateBranchStartCommit(hash);
@@ -2599,7 +2646,16 @@ export default function App({
         onCopyShort: () => void navigator.clipboard.writeText(shortHash),
       });
     },
-    [branchBusy, repo, commits, selectCommit, cherryPickCommit, rebaseCurrentBranchOntoCommit],
+    [
+      branchBusy,
+      repo,
+      commits,
+      graphHeadFirstParentHashes,
+      selectCommit,
+      cherryPickCommit,
+      dropCommit,
+      rebaseCurrentBranchOntoCommit,
+    ],
   );
 
   const runPushTagToOrigin = useCallback(

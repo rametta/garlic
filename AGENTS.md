@@ -10,6 +10,7 @@ Desktop **Git client** with a simple UI: open or clone repos, manage branches an
 
 - **Desktop shell:** Tauri 2 (`src-tauri/`, Rust)
 - **Frontend:** React + TypeScript (`src/`)
+- **Client state / caching:** React Query (`@tanstack/react-query`) for repo data, mutations, cache updates, and refreshes
 - **Styling:** Tailwind CSS v4 with the Vite plugin (`@tailwindcss/vite`): `@import "tailwindcss"` in `src/index.css`, utilities in components — see [Tailwind + Vite](https://tailwindcss.com/docs/installation/using-vite)
 - **Bundler:** Vite
 - **Package manager:** Bun (user preference; scripts in `package.json` work with `bun run …`)
@@ -24,6 +25,12 @@ Git operations should run where it fits the design: typically **Tauri commands**
 ### React / `useEffect`
 
 Treat **`useEffect` as a last resort**. Prefer: **event handlers** and **data from props** (including values resolved before `createRoot` in `main.tsx`), **`useMemo` / `useCallback`** for derived state, and **Tauri events** with `listen` only when you truly need a subscription to a side channel (e.g. menu → `open-repo-request`). Avoid “load data on mount” effects when the same data can come from a Tauri command awaited at startup or from user actions.
+
+### React Query / optimistic updates
+
+Use **React Query** as the default client-side data layer for repo state and mutations instead of ad hoc fetch state. Prefer shared query keys, typed mutation helpers, and cache updates that keep the UI responsive while still reconciling with the backend after Git operations complete.
+
+Use **optimistic updates whenever they clearly make sense**: when the expected result is local, predictable, and easy to roll back if the command fails (for example staging, unstaging, deleting a local branch, or updating cached metadata after a straightforward mutation). Avoid optimistic updates for operations that rewrite history, can conflict, or have broad / hard-to-predict side effects unless the UI model already has a safe, well-scoped way to represent the temporary state.
 
 ## Core features (must support)
 
