@@ -247,6 +247,7 @@ type LocalBranchListRow =
       key: string;
       depth: number;
       branch: LocalBranchEntry;
+      label: string;
     };
 
 type RemoteBranchListRow =
@@ -264,6 +265,7 @@ type RemoteBranchListRow =
       key: string;
       depth: number;
       fullRef: string;
+      label: string;
     };
 
 function flattenLocalBranchRows(
@@ -287,6 +289,7 @@ function flattenLocalBranchRows(
         key: `branch:${branchHere.name}`,
         depth,
         branch: branchHere,
+        label: segment,
       });
       continue;
     }
@@ -306,6 +309,7 @@ function flattenLocalBranchRows(
         key: `branch:${branchHere.name}`,
         depth: depth + 1,
         branch: branchHere,
+        label: segment,
       });
     }
     if (expanded) {
@@ -336,6 +340,7 @@ function flattenRemoteBranchRows(
         key: `remote:${refHere}`,
         depth,
         fullRef: refHere,
+        label: segment,
       });
       continue;
     }
@@ -355,6 +360,7 @@ function flattenRemoteBranchRows(
         key: `remote:${refHere}`,
         depth: depth + 1,
         fullRef: refHere,
+        label: segment,
       });
     }
     if (expanded) {
@@ -437,6 +443,7 @@ function LocalBranchFolderRow({
 
 function LocalBranchRow({
   branch,
+  label,
   currentBranchName,
   branchBusy,
   depth = 0,
@@ -446,6 +453,7 @@ function LocalBranchRow({
   graph,
 }: {
   branch: LocalBranchEntry;
+  label: string;
   currentBranchName: string | null;
   branchBusy: string | null;
   depth?: number;
@@ -518,7 +526,7 @@ function LocalBranchRow({
             className="min-w-0 flex-1 truncate text-[0.8125rem] leading-snug"
             title={busy ? undefined : branch.name}
           >
-            {busy ? "Switching…" : branch.name}
+            {busy ? "Switching…" : label}
             {isCurrent && !busy ? (
               <span className="ml-1.5 text-xs font-normal opacity-70">(current)</span>
             ) : null}
@@ -616,6 +624,7 @@ function RemoteBranchFolderRow({
 
 function RemoteBranchRow({
   fullRef,
+  label,
   branchBusy,
   depth = 0,
   onSelectRemoteTip,
@@ -624,6 +633,7 @@ function RemoteBranchRow({
   graph,
 }: {
   fullRef: string;
+  label: string;
   branchBusy: string | null;
   depth?: number;
   onSelectRemoteTip: (remoteRef: string) => void;
@@ -684,8 +694,9 @@ function RemoteBranchRow({
             onCreateFromRemote(fullRef);
           }}
           className={`flex h-auto min-h-0 min-w-0 flex-1 justify-start rounded-md py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] whitespace-normal transition-colors hover:bg-base-200/50 ${busy ? "opacity-60" : ""}`}
+          title={busy ? undefined : fullRef}
         >
-          {busy ? "Creating…" : fullRef}
+          {busy ? "Creating…" : label}
         </button>
       </div>
     </div>
@@ -1147,6 +1158,7 @@ export const BranchSidebar = memo(function BranchSidebar({
                     ) : (
                       <LocalBranchRow
                         branch={row.branch}
+                        label={row.label}
                         depth={row.depth}
                         currentBranchName={currentBranchName}
                         branchBusy={branchBusy}
@@ -1229,6 +1241,7 @@ export const BranchSidebar = memo(function BranchSidebar({
                     ) : (
                       <RemoteBranchRow
                         fullRef={row.fullRef}
+                        label={row.label}
                         depth={row.depth}
                         branchBusy={branchBusy}
                         onSelectRemoteTip={onSelectRemoteBranchTip}
