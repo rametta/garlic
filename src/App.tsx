@@ -1088,7 +1088,7 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [repo?.path, repo?.error, graphRefsKey, graphRefs]);
+  }, [repo?.path, repo?.error, repo?.headHash, graphRefsKey, graphRefs]);
 
   const loadMoreGraphCommits = useCallback(async () => {
     if (!repo?.path || repo.error || !graphCommitsHasMore || loadingMoreGraphCommits) return;
@@ -1898,12 +1898,18 @@ export default function App({
       const pathAtStart = repo.path;
       const prevBranch = repo.branch;
       const prevDetached = repo.detached;
+      const prevHeadHash = repo.headHash ?? null;
+      const prevAhead = repo.ahead ?? null;
+      const prevBehind = repo.behind ?? null;
       try {
         const meta = await invoke<RepoMetadata>("get_repo_metadata", {
           path: pathAtStart,
         });
         if (activeRepoPathRef.current !== pathAtStart) return;
         const branchContextChanged = meta.branch !== prevBranch || meta.detached !== prevDetached;
+        const headChanged = (meta.headHash ?? null) !== prevHeadHash;
+        const upstreamCountsChanged =
+          (meta.ahead ?? null) !== prevAhead || (meta.behind ?? null) !== prevBehind;
         updateRepoSnapshot(queryClient, pathAtStart, (snapshot) => ({
           ...snapshot,
           metadata: meta,
@@ -1915,7 +1921,7 @@ export default function App({
 
           let files: WorkingTreeFile[] | null = null;
 
-          if (fromWatcher && !branchContextChanged) {
+          if (fromWatcher && !branchContextChanged && !headChanged && !upstreamCountsChanged) {
             try {
               const worktree = await invoke<WorkingTreeFile[]>("list_working_tree_files", {
                 path: pathAtStart,
