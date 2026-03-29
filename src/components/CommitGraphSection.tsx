@@ -16,6 +16,7 @@ export interface CommitGraphSectionProps {
   remoteBranches: RemoteBranchEntry[];
   tags: TagEntry[];
   graphBranchVisible: Record<string, boolean>;
+  remoteGraphDefaultVisible: boolean;
   currentBranchName: string | null;
   currentBranchTipHash: string | null;
   commitBrowseHash: string | null;
@@ -66,10 +67,13 @@ function buildTipsByHash(
   remoteBranches: RemoteBranchEntry[],
   tags: TagEntry[],
   graphBranchVisible: Record<string, boolean>,
+  remoteGraphDefaultVisible: boolean,
+  commitHashes: ReadonlySet<string>,
 ): Map<string, TipsAtHash> {
   const map = new Map<string, TipsAtHash>();
   for (const b of localBranches) {
     if (graphBranchVisible[`local:${b.name}`] === false) continue;
+    if (!commitHashes.has(b.tipHash)) continue;
     let e = map.get(b.tipHash);
     if (!e) {
       e = { locals: [], remotes: [], tagTips: [] };
@@ -78,7 +82,9 @@ function buildTipsByHash(
     e.locals.push(b);
   }
   for (const r of remoteBranches) {
-    if (graphBranchVisible[`remote:${r.name}`] === false) continue;
+    const visible = graphBranchVisible[`remote:${r.name}`] ?? remoteGraphDefaultVisible;
+    if (!visible) continue;
+    if (!commitHashes.has(r.tipHash)) continue;
     let e = map.get(r.tipHash);
     if (!e) {
       e = { locals: [], remotes: [], tagTips: [] };
@@ -87,6 +93,7 @@ function buildTipsByHash(
     e.remotes.push(r);
   }
   for (const t of tags) {
+    if (!commitHashes.has(t.tipHash)) continue;
     let e = map.get(t.tipHash);
     if (!e) {
       e = { locals: [], remotes: [], tagTips: [] };
@@ -411,6 +418,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   remoteBranches,
   tags,
   graphBranchVisible,
+  remoteGraphDefaultVisible,
   currentBranchName,
   currentBranchTipHash,
   commitBrowseHash,
@@ -464,9 +472,26 @@ export const CommitGraphSection = memo(function CommitGraphSection({
     };
   }, [authorFilterOpen, whenFilterOpen]);
 
+  const commitHashes = useMemo(() => new Set(commits.map((commit) => commit.hash)), [commits]);
+
   const tipsByHash = useMemo(
-    () => buildTipsByHash(localBranches, remoteBranches, tags, graphBranchVisible),
-    [localBranches, remoteBranches, tags, graphBranchVisible],
+    () =>
+      buildTipsByHash(
+        localBranches,
+        remoteBranches,
+        tags,
+        graphBranchVisible,
+        remoteGraphDefaultVisible,
+        commitHashes,
+      ),
+    [
+      localBranches,
+      remoteBranches,
+      tags,
+      graphBranchVisible,
+      remoteGraphDefaultVisible,
+      commitHashes,
+    ],
   );
 
   const rowLaneMetas = useMemo(() => {

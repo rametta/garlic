@@ -22,6 +22,7 @@ type RepoMutationContext = {
 type RepoMutationOptions<TVariables extends RepoMutationVariables> = {
   mutationFn: (variables: TVariables) => Promise<void>;
   optimisticUpdate?: (snapshot: RepoSnapshot, variables: TVariables) => RepoSnapshot;
+  invalidateSnapshotOnSettled?: boolean;
 };
 
 function sortByName<T extends { name: string }>(rows: T[]): T[] {
@@ -94,6 +95,7 @@ function withCurrentBranchAheadBumped(snapshot: RepoSnapshot): RepoSnapshot {
 function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
   mutationFn,
   optimisticUpdate,
+  invalidateSnapshotOnSettled = true,
 }: RepoMutationOptions<TVariables>) {
   const queryClient = useQueryClient();
 
@@ -117,6 +119,7 @@ function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
       }
     },
     onSettled: (_data, _error, variables) => {
+      if (!invalidateSnapshotOnSettled) return;
       void queryClient.invalidateQueries({
         queryKey: repoQueryKeys.root(variables.path),
       });
@@ -309,6 +312,7 @@ export function useDiscardPathChangesMutation() {
           variables.fromUnstaged,
         ),
       ),
+    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -437,6 +441,7 @@ export function useStagePathsMutation() {
         snapshot,
         applyOptimisticStageChange(snapshot.workingTreeFiles, variables.paths, "stage"),
       ),
+    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -449,6 +454,7 @@ export function useUnstagePathsMutation() {
         snapshot,
         applyOptimisticStageChange(snapshot.workingTreeFiles, variables.paths, "unstage"),
       ),
+    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -456,6 +462,7 @@ export function useStagePatchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; patch: string }) =>
       invokeRepoMutation("stage_patch", variables),
+    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -463,6 +470,7 @@ export function useUnstagePatchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; patch: string }) =>
       invokeRepoMutation("unstage_patch", variables),
+    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -470,6 +478,7 @@ export function useDiscardPatchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; patch: string }) =>
       invokeRepoMutation("discard_patch", variables),
+    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -479,6 +488,7 @@ export function useAmendLastCommitMutation() {
       invokeRepoMutation("amend_last_commit", variables),
     optimisticUpdate: (snapshot) =>
       withWorkingTreeFiles(snapshot, clearStagedWorkingTreeFiles(snapshot.workingTreeFiles)),
+    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -490,6 +500,7 @@ export function useCommitStagedMutation() {
       withCurrentBranchAheadBumped(
         withWorkingTreeFiles(snapshot, clearStagedWorkingTreeFiles(snapshot.workingTreeFiles)),
       ),
+    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -498,5 +509,6 @@ export function usePushToOriginMutation() {
     mutationFn: (variables: { path: string; skipHooks: boolean }) =>
       invokeRepoMutation("push_to_origin", variables),
     optimisticUpdate: (snapshot) => withCurrentBranchAhead(snapshot, 0),
+    invalidateSnapshotOnSettled: false,
   });
 }

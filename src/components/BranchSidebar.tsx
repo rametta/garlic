@@ -1,4 +1,5 @@
-import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { memo, type ReactNode, type Ref, useEffect, useMemo, useRef, useState } from "react";
 import type { BranchTrieNode, RemoteTrieNode } from "../branchTrie";
 import { nativeContextMenusAvailable } from "../nativeContextMenu";
 import type {
@@ -76,6 +77,10 @@ function localBranchUpstreamLabel(ahead: number | null, behind: number | null): 
   return `↑${ahead} ↓${behind}`;
 }
 
+const BRANCH_TREE_INDENT_PX = 14;
+const BRANCH_ROW_ESTIMATE_PX = 36;
+const TAG_ROW_ESTIMATE_PX = 40;
+
 function BranchPanel({
   title,
   entityCount,
@@ -86,6 +91,7 @@ function BranchPanel({
   belowHeader,
   children,
   isLastSection,
+  contentScrollRef,
 }: {
   title: string;
   entityCount: number;
@@ -96,6 +102,7 @@ function BranchPanel({
   belowHeader?: ReactNode;
   children: ReactNode;
   isLastSection: boolean;
+  contentScrollRef?: Ref<HTMLDivElement>;
 }) {
   return (
     <div
@@ -132,7 +139,10 @@ function BranchPanel({
           {belowHeader ? (
             <div className="shrink-0 border-b border-base-300">{belowHeader}</div>
           ) : null}
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
+          <div
+            ref={contentScrollRef}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2"
+          >
             {empty ? (
               <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
             ) : (
@@ -212,10 +222,176 @@ export type BranchGraphControls = {
   toggleGraphRemoteFolder: (node: RemoteTrieNode) => void;
 };
 
+type LocalBranchListRow =
+  | {
+      kind: "folder";
+      key: string;
+      depth: number;
+      label: string;
+      node: BranchTrieNode;
+    }
+  | {
+      kind: "branch";
+      key: string;
+      depth: number;
+      branch: LocalBranchEntry;
+    };
+
+type RemoteBranchListRow =
+  | {
+      kind: "folder";
+      key: string;
+      depth: number;
+      label: string;
+      node: RemoteTrieNode;
+    }
+  | {
+      kind: "branch";
+      key: string;
+      depth: number;
+      fullRef: string;
+    };
+
+function flattenLocalBranchRows(
+  node: BranchTrieNode,
+  depth = 0,
+  prefix = "",
+): LocalBranchListRow[] {
+  const rows: LocalBranchListRow[] = [];
+  const sorted = [...node.children.entries()].sort((a, b) =>
+    a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
+  );
+  for (const [segment, child] of sorted) {
+    const path = prefix ? `${prefix}/${segment}` : segment;
+    const leafOnly = child.children.size === 0 && child.branchHere !== null;
+    if (leafOnly) {
+      rows.push({
+        kind: "branch",
+        key: `branch:${child.branchHere.name}`,
+        depth,
+        branch: child.branchHere,
+      });
+      continue;
+    }
+    rows.push({
+      kind: "folder",
+      key: `folder:${path}`,
+      depth,
+      label: segment,
+      node: child,
+    });
+    if (child.branchHere) {
+      rows.push({
+        kind: "branch",
+        key: `branch:${child.branchHere.name}`,
+        depth: depth + 1,
+        branch: child.branchHere,
+      });
+    }
+    rows.push(...flattenLocalBranchRows(child, depth + 1, path));
+  }
+  return rows;
+}
+
+function flattenRemoteBranchRows(
+  node: RemoteTrieNode,
+  depth = 0,
+  prefix = "",
+): RemoteBranchListRow[] {
+  const rows: RemoteBranchListRow[] = [];
+  const sorted = [...node.children.entries()].sort((a, b) =>
+    a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
+  );
+  for (const [segment, child] of sorted) {
+    const path = prefix ? `${prefix}/${segment}` : segment;
+    const leafOnly = child.children.size === 0 && child.refHere !== null;
+    if (leafOnly) {
+      rows.push({
+        kind: "branch",
+        key: `remote:${child.refHere}`,
+        depth,
+        fullRef: child.refHere,
+      });
+      continue;
+    }
+    rows.push({
+      kind: "folder",
+      key: `folder:${path}`,
+      depth,
+      label: segment,
+      node: child,
+    });
+    if (child.refHere) {
+      rows.push({
+        kind: "branch",
+        key: `remote:${child.refHere}`,
+        depth: depth + 1,
+        fullRef: child.refHere,
+      });
+    }
+    rows.push(...flattenRemoteBranchRows(child, depth + 1, path));
+  }
+  return rows;
+}
+
+function LocalBranchFolderRow({
+  label,
+  node,
+  depth,
+  graph,
+}: {
+  label: string;
+  node: BranchTrieNode;
+  depth: number;
+  graph: BranchGraphControls;
+}) {
+  const folderGraphVisible = graph.graphFolderAnyVisibleLocal(node);
+  return (
+    <div
+      className="min-w-0"
+      style={{
+        paddingLeft: `${depth * BRANCH_TREE_INDENT_PX}px`,
+      }}
+    >
+      <div className="flex w-full min-w-0 items-center gap-0">
+        <span className="flex h-9 w-5 shrink-0 items-center justify-center opacity-40" aria-hidden>
+          <IconChevronRight className="h-3.5 w-3.5 rotate-90" />
+        </span>
+        <button
+          type="button"
+          className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
+          title={
+            folderGraphVisible
+              ? "Hide all branches in this folder from commit graph"
+              : "Show all branches in this folder in commit graph"
+          }
+          aria-label={folderGraphVisible ? "Hide folder from graph" : "Show folder in graph"}
+          aria-pressed={folderGraphVisible}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            graph.toggleGraphLocalFolder(node);
+          }}
+        >
+          {folderGraphVisible ? (
+            <IconEye className="text-success opacity-95" />
+          ) : (
+            <IconEyeOff className="text-success/45" />
+          )}
+        </button>
+        <span className="min-w-0 flex-1 py-2 pr-2 pl-1 font-mono text-[0.8125rem] wrap-break-word">
+          {label}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function LocalBranchRow({
   branch,
   currentBranchName,
   branchBusy,
+  depth = 0,
   onSelectLocalTip,
   onCheckoutLocal,
   onLocalBranchContextMenu,
@@ -224,6 +400,7 @@ function LocalBranchRow({
   branch: LocalBranchEntry;
   currentBranchName: string | null;
   branchBusy: string | null;
+  depth?: number;
   /** Single click: highlight branch tip in graph (does not check out). */
   onSelectLocalTip: (name: string) => void;
   /** Double click or context menu: check out. */
@@ -241,7 +418,12 @@ function LocalBranchRow({
   const graphVisible = graph.graphVisibleLocal(branch.name);
 
   return (
-    <li className={isCurrent ? "rounded-md bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""}>
+    <div
+      className={isCurrent ? "rounded-md bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""}
+      style={{
+        paddingLeft: `${depth * BRANCH_TREE_INDENT_PX}px`,
+      }}
+    >
       <div
         className="flex w-full min-w-0 items-center gap-0"
         onContextMenu={(e) => {
@@ -309,99 +491,67 @@ function LocalBranchRow({
           ) : null}
         </button>
       </div>
-    </li>
+    </div>
   );
 }
 
-function renderLocalBranchTrieChildren(
-  node: BranchTrieNode,
-  currentBranchName: string | null,
-  branchBusy: string | null,
-  onSelectLocalTip: (name: string) => void,
-  onCheckoutLocal: (name: string) => void,
-  onLocalBranchContextMenu: (branchName: string, clientX: number, clientY: number) => void,
-  graph: BranchGraphControls,
-): ReactNode {
-  const sorted = [...node.children.entries()].sort((a, b) =>
-    a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
+function RemoteBranchFolderRow({
+  label,
+  node,
+  depth,
+  graph,
+}: {
+  label: string;
+  node: RemoteTrieNode;
+  depth: number;
+  graph: BranchGraphControls;
+}) {
+  const folderGraphVisible = graph.graphFolderAnyVisibleRemote(node);
+  return (
+    <div
+      className="min-w-0"
+      style={{
+        paddingLeft: `${depth * BRANCH_TREE_INDENT_PX}px`,
+      }}
+    >
+      <div className="flex w-full min-w-0 items-center gap-0">
+        <span className="flex h-9 w-5 shrink-0 items-center justify-center opacity-40" aria-hidden>
+          <IconChevronRight className="h-3.5 w-3.5 rotate-90" />
+        </span>
+        <button
+          type="button"
+          className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
+          title={
+            folderGraphVisible
+              ? "Hide all remote branches in this folder from commit graph"
+              : "Show all remote branches in this folder in commit graph"
+          }
+          aria-label={folderGraphVisible ? "Hide folder from graph" : "Show folder in graph"}
+          aria-pressed={folderGraphVisible}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            graph.toggleGraphRemoteFolder(node);
+          }}
+        >
+          {folderGraphVisible ? (
+            <IconEye className="text-success opacity-95" />
+          ) : (
+            <IconEyeOff className="text-success/45" />
+          )}
+        </button>
+        <span className="min-w-0 flex-1 py-2 pr-2 pl-1 font-mono text-[0.8125rem] wrap-break-word">
+          {label}
+        </span>
+      </div>
+    </div>
   );
-  return sorted.map(([segment, child]) => {
-    const leafOnly = child.children.size === 0 && child.branchHere !== null;
-    if (leafOnly) {
-      const b = child.branchHere!;
-      return (
-        <LocalBranchRow
-          key={b.name}
-          branch={b}
-          currentBranchName={currentBranchName}
-          branchBusy={branchBusy}
-          onSelectLocalTip={onSelectLocalTip}
-          onCheckoutLocal={onCheckoutLocal}
-          onLocalBranchContextMenu={onLocalBranchContextMenu}
-          graph={graph}
-        />
-      );
-    }
-    const folderGraphVisible = graph.graphFolderAnyVisibleLocal(child);
-    return (
-      <li key={segment}>
-        <details open>
-          <summary className="grid min-w-0 cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-0 font-mono text-[0.8125rem]">
-            <button
-              type="button"
-              className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center self-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
-              title={
-                folderGraphVisible
-                  ? "Hide all branches in this folder from commit graph"
-                  : "Show all branches in this folder in commit graph"
-              }
-              aria-label={folderGraphVisible ? "Hide folder from graph" : "Show folder in graph"}
-              aria-pressed={folderGraphVisible}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                graph.toggleGraphLocalFolder(child);
-              }}
-            >
-              {folderGraphVisible ? (
-                <IconEye className="text-success opacity-95" />
-              ) : (
-                <IconEyeOff className="text-success/45" />
-              )}
-            </button>
-            <span className="min-w-0 py-2 pr-2 pl-1 wrap-break-word">{segment}</span>
-          </summary>
-          <ul>
-            {child.branchHere ? (
-              <LocalBranchRow
-                branch={child.branchHere}
-                currentBranchName={currentBranchName}
-                branchBusy={branchBusy}
-                onSelectLocalTip={onSelectLocalTip}
-                onCheckoutLocal={onCheckoutLocal}
-                onLocalBranchContextMenu={onLocalBranchContextMenu}
-                graph={graph}
-              />
-            ) : null}
-            {renderLocalBranchTrieChildren(
-              child,
-              currentBranchName,
-              branchBusy,
-              onSelectLocalTip,
-              onCheckoutLocal,
-              onLocalBranchContextMenu,
-              graph,
-            )}
-          </ul>
-        </details>
-      </li>
-    );
-  });
 }
 
 function RemoteBranchRow({
   fullRef,
   branchBusy,
+  depth = 0,
   onSelectRemoteTip,
   onCreateFromRemote,
   onRemoteBranchContextMenu,
@@ -409,6 +559,7 @@ function RemoteBranchRow({
 }: {
   fullRef: string;
   branchBusy: string | null;
+  depth?: number;
   onSelectRemoteTip: (remoteRef: string) => void;
   onCreateFromRemote: (remoteRef: string) => void;
   onRemoteBranchContextMenu: (remoteRef: string, clientX: number, clientY: number) => void;
@@ -421,7 +572,11 @@ function RemoteBranchRow({
   const graphVisible = graph.graphVisibleRemote(fullRef);
 
   return (
-    <li>
+    <div
+      style={{
+        paddingLeft: `${depth * BRANCH_TREE_INDENT_PX}px`,
+      }}
+    >
       <div
         className="flex w-full min-w-0 items-center gap-0"
         onContextMenu={(e) => {
@@ -467,90 +622,63 @@ function RemoteBranchRow({
           {busy ? "Creating…" : fullRef}
         </button>
       </div>
-    </li>
+    </div>
   );
 }
 
-function renderRemoteBranchTrieChildren(
-  node: RemoteTrieNode,
-  branchBusy: string | null,
-  onSelectRemoteTip: (remoteRef: string) => void,
-  onCreateFromRemote: (remoteRef: string) => void,
-  graph: BranchGraphControls,
-  onRemoteBranchContextMenu: (remoteRef: string, clientX: number, clientY: number) => void,
-): ReactNode {
-  const sorted = [...node.children.entries()].sort((a, b) =>
-    a[0].localeCompare(b[0], undefined, { sensitivity: "base" }),
+function TagRow({
+  tag,
+  branchBusy,
+  stashBusy,
+  pushBusy,
+  onTagClick,
+  openTagSidebarMenu,
+}: {
+  tag: TagEntry;
+  branchBusy: string | null;
+  stashBusy: string | null;
+  pushBusy: boolean;
+  onTagClick: (tag: TagEntry) => void;
+  openTagSidebarMenu: (tagName: string, clientX: number, clientY: number) => void | Promise<void>;
+}) {
+  const tagRowBusy = Boolean(branchBusy) || stashBusy !== null || pushBusy;
+  const shortTip = tag.tipHash.length >= 7 ? tag.tipHash.slice(0, 7) : tag.tipHash;
+  return (
+    <div className="min-w-0">
+      <div
+        role="button"
+        tabIndex={0}
+        className="flex w-full min-w-0 cursor-pointer flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
+        title={`${tag.name} → ${tag.tipHash}`}
+        onClick={() => {
+          if (tagRowBusy) return;
+          onTagClick(tag);
+        }}
+        onKeyDown={(e) => {
+          if (tagRowBusy) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onTagClick(tag);
+          }
+        }}
+        onContextMenu={(e) => {
+          if (tagRowBusy) return;
+          if (!nativeContextMenusAvailable()) return;
+          e.preventDefault();
+          void openTagSidebarMenu(tag.name, e.clientX, e.clientY);
+        }}
+      >
+        <div className="flex min-w-0 items-baseline justify-between gap-2">
+          <span className="min-w-0 flex-1 font-mono text-[0.8125rem] leading-snug wrap-break-word">
+            {tag.name}
+          </span>
+          <span className="shrink-0 font-mono text-[0.65rem] leading-none tracking-tight opacity-60">
+            {shortTip}
+          </span>
+        </div>
+      </div>
+    </div>
   );
-  return sorted.map(([segment, child]) => {
-    const leafOnly = child.children.size === 0 && child.refHere !== null;
-    if (leafOnly) {
-      const r = child.refHere!;
-      return (
-        <RemoteBranchRow
-          key={r}
-          fullRef={r}
-          branchBusy={branchBusy}
-          onSelectRemoteTip={onSelectRemoteTip}
-          onCreateFromRemote={onCreateFromRemote}
-          onRemoteBranchContextMenu={onRemoteBranchContextMenu}
-          graph={graph}
-        />
-      );
-    }
-    const folderGraphVisible = graph.graphFolderAnyVisibleRemote(child);
-    return (
-      <li key={segment}>
-        <details open>
-          <summary className="grid min-w-0 cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-0 font-mono text-[0.8125rem]">
-            <button
-              type="button"
-              className="btn inline-flex h-auto min-h-0 w-9 shrink-0 items-center justify-center self-center rounded-none px-0 py-2 opacity-90 btn-ghost btn-xs"
-              title={
-                folderGraphVisible
-                  ? "Hide all remote branches in this folder from commit graph"
-                  : "Show all remote branches in this folder in commit graph"
-              }
-              aria-label={folderGraphVisible ? "Hide folder from graph" : "Show folder in graph"}
-              aria-pressed={folderGraphVisible}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                graph.toggleGraphRemoteFolder(child);
-              }}
-            >
-              {folderGraphVisible ? (
-                <IconEye className="text-success opacity-95" />
-              ) : (
-                <IconEyeOff className="text-success/45" />
-              )}
-            </button>
-            <span className="min-w-0 py-2 pr-2 pl-1 wrap-break-word">{segment}</span>
-          </summary>
-          <ul>
-            {child.refHere ? (
-              <RemoteBranchRow
-                fullRef={child.refHere}
-                branchBusy={branchBusy}
-                onSelectRemoteTip={onSelectRemoteTip}
-                onCreateFromRemote={onCreateFromRemote}
-                onRemoteBranchContextMenu={onRemoteBranchContextMenu}
-                graph={graph}
-              />
-            ) : null}
-            {renderRemoteBranchTrieChildren(
-              child,
-              branchBusy,
-              onSelectRemoteTip,
-              onCreateFromRemote,
-              graph,
-              onRemoteBranchContextMenu,
-            )}
-          </ul>
-        </details>
-      </li>
-    );
-  });
 }
 
 function worktreePrimaryLabel(worktree: WorktreeEntry): string {
@@ -743,18 +871,29 @@ export const BranchSidebar = memo(function BranchSidebar({
   const worktreeFilterNorm = worktreeListFilter.trim().toLowerCase();
   const tagFilterNorm = tagListFilter.trim().toLowerCase();
   const stashFilterNorm = stashListFilter.trim().toLowerCase();
+  const showLocalBranchRows = canShowBranches && branchSidebarSections.localOpen;
+  const showRemoteBranchRows = canShowBranches && branchSidebarSections.remoteOpen;
+  const showWorktreeRows = canShowBranches && branchSidebarSections.worktreesOpen;
+  const showTagRows = canShowBranches && branchSidebarSections.tagsOpen;
+  const showStashRows = canShowBranches && branchSidebarSections.stashOpen;
+  const localBranchScrollRef = useRef<HTMLDivElement | null>(null);
+  const remoteBranchScrollRef = useRef<HTMLDivElement | null>(null);
+  const tagScrollRef = useRef<HTMLDivElement | null>(null);
 
   const filteredLocalBranches = useMemo(() => {
+    if (!showLocalBranchRows) return [];
     if (!localBranchFilterNorm) return localBranches;
     return localBranches.filter((b) => b.name.toLowerCase().includes(localBranchFilterNorm));
-  }, [localBranches, localBranchFilterNorm]);
+  }, [localBranches, localBranchFilterNorm, showLocalBranchRows]);
 
   const filteredRemoteBranches = useMemo(() => {
+    if (!showRemoteBranchRows) return [];
     if (!remoteBranchFilterNorm) return remoteBranches;
     return remoteBranches.filter((r) => r.name.toLowerCase().includes(remoteBranchFilterNorm));
-  }, [remoteBranches, remoteBranchFilterNorm]);
+  }, [remoteBranches, remoteBranchFilterNorm, showRemoteBranchRows]);
 
   const filteredWorktrees = useMemo(() => {
+    if (!showWorktreeRows) return [];
     const sorted = [...worktrees].sort((a, b) => {
       const aLabel = `${a.branch ?? ""}\0${a.path}`.toLowerCase();
       const bLabel = `${b.branch ?? ""}\0${b.path}`.toLowerCase();
@@ -766,30 +905,76 @@ export const BranchSidebar = memo(function BranchSidebar({
         `${worktree.branch ?? ""}\n${worktree.path}\n${worktree.headShort ?? ""}`.toLowerCase();
       return haystack.includes(worktreeFilterNorm);
     });
-  }, [worktrees, worktreeFilterNorm]);
+  }, [worktrees, worktreeFilterNorm, showWorktreeRows]);
 
   const filteredTags = useMemo(() => {
+    if (!showTagRows) return [];
     if (!tagFilterNorm) return tags;
     return tags.filter((t) => t.name.toLowerCase().includes(tagFilterNorm));
-  }, [tags, tagFilterNorm]);
+  }, [tags, tagFilterNorm, showTagRows]);
 
   const filteredStashes = useMemo(() => {
+    if (!showStashRows) return [];
     if (!stashFilterNorm) return stashes;
     return stashes.filter(
       (s) =>
         s.refName.toLowerCase().includes(stashFilterNorm) ||
         s.message.toLowerCase().includes(stashFilterNorm),
     );
-  }, [stashes, stashFilterNorm]);
+  }, [stashes, stashFilterNorm, showStashRows]);
 
   const localBranchTrieRoot = useMemo(
-    () => buildLocalBranchTrie(filteredLocalBranches),
-    [filteredLocalBranches],
+    () =>
+      showLocalBranchRows ? buildLocalBranchTrie(filteredLocalBranches) : emptyBranchTrieNode(),
+    [filteredLocalBranches, showLocalBranchRows],
   );
   const remoteBranchTrieRoot = useMemo(
-    () => buildRemoteBranchTrie(filteredRemoteBranches),
-    [filteredRemoteBranches],
+    () =>
+      showRemoteBranchRows ? buildRemoteBranchTrie(filteredRemoteBranches) : emptyRemoteTrieNode(),
+    [filteredRemoteBranches, showRemoteBranchRows],
   );
+  const localBranchRows = useMemo(
+    () => (showLocalBranchRows ? flattenLocalBranchRows(localBranchTrieRoot) : []),
+    [localBranchTrieRoot, showLocalBranchRows],
+  );
+  const remoteBranchRows = useMemo(
+    () => (showRemoteBranchRows ? flattenRemoteBranchRows(remoteBranchTrieRoot) : []),
+    [remoteBranchTrieRoot, showRemoteBranchRows],
+  );
+
+  const localBranchVirtualizer = useVirtualizer({
+    count: localBranchRows.length,
+    getScrollElement: () => localBranchScrollRef.current,
+    estimateSize: () => BRANCH_ROW_ESTIMATE_PX,
+    overscan: 14,
+    getItemKey: (index) => localBranchRows[index]?.key ?? index,
+  });
+  const remoteBranchVirtualizer = useVirtualizer({
+    count: remoteBranchRows.length,
+    getScrollElement: () => remoteBranchScrollRef.current,
+    estimateSize: () => BRANCH_ROW_ESTIMATE_PX,
+    overscan: 14,
+    getItemKey: (index) => remoteBranchRows[index]?.key ?? index,
+  });
+  const tagVirtualizer = useVirtualizer({
+    count: filteredTags.length,
+    getScrollElement: () => tagScrollRef.current,
+    estimateSize: () => TAG_ROW_ESTIMATE_PX,
+    overscan: 14,
+    getItemKey: (index) => filteredTags[index]?.name ?? index,
+  });
+
+  useEffect(() => {
+    localBranchScrollRef.current?.scrollTo({ top: 0 });
+  }, [repoPath, localBranchFilterNorm, showLocalBranchRows]);
+
+  useEffect(() => {
+    remoteBranchScrollRef.current?.scrollTo({ top: 0 });
+  }, [repoPath, remoteBranchFilterNorm, showRemoteBranchRows]);
+
+  useEffect(() => {
+    tagScrollRef.current?.scrollTo({ top: 0 });
+  }, [repoPath, tagFilterNorm, showTagRows]);
 
   const localBranchesEmptyHint =
     localBranches.length === 0 ? "No local branches" : "No branches match filter";
@@ -809,11 +994,12 @@ export const BranchSidebar = memo(function BranchSidebar({
           onOpenChange={(next) => {
             onBranchSidebarSectionsChange({ ...branchSidebarSections, localOpen: next });
           }}
-          empty={canShowBranches && filteredLocalBranches.length === 0}
+          empty={showLocalBranchRows && filteredLocalBranches.length === 0}
           emptyHint={localBranchesEmptyHint}
           isLastSection={false}
+          contentScrollRef={localBranchScrollRef}
           belowHeader={
-            canShowBranches ? (
+            showLocalBranchRows ? (
               <input
                 type="search"
                 className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
@@ -829,24 +1015,51 @@ export const BranchSidebar = memo(function BranchSidebar({
             ) : null
           }
         >
-          {canShowBranches ? (
-            <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-              {renderLocalBranchTrieChildren(
-                localBranchTrieRoot,
-                currentBranchName,
-                branchBusy,
-                onSelectLocalBranchTip,
-                onCheckoutLocal,
-                (name, clientX, clientY) => {
-                  runBranchSidebarContextMenu(
-                    { kind: "local", branchName: name },
-                    clientX,
-                    clientY,
-                  );
-                },
-                branchGraphControls,
-              )}
-            </ul>
+          {showLocalBranchRows ? (
+            <div
+              className="relative w-full"
+              style={{ height: localBranchVirtualizer.getTotalSize() }}
+            >
+              {localBranchVirtualizer.getVirtualItems().map((virtualRow) => {
+                const row = localBranchRows[virtualRow.index];
+                if (!row) return null;
+                return (
+                  <div
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={localBranchVirtualizer.measureElement}
+                    className="absolute top-0 left-0 w-full"
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  >
+                    {row.kind === "folder" ? (
+                      <LocalBranchFolderRow
+                        label={row.label}
+                        node={row.node}
+                        depth={row.depth}
+                        graph={branchGraphControls}
+                      />
+                    ) : (
+                      <LocalBranchRow
+                        branch={row.branch}
+                        depth={row.depth}
+                        currentBranchName={currentBranchName}
+                        branchBusy={branchBusy}
+                        onSelectLocalTip={onSelectLocalBranchTip}
+                        onCheckoutLocal={onCheckoutLocal}
+                        onLocalBranchContextMenu={(name, clientX, clientY) => {
+                          runBranchSidebarContextMenu(
+                            { kind: "local", branchName: name },
+                            clientX,
+                            clientY,
+                          );
+                        }}
+                        graph={branchGraphControls}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : null}
         </BranchPanel>
 
@@ -857,11 +1070,12 @@ export const BranchSidebar = memo(function BranchSidebar({
           onOpenChange={(next) => {
             onBranchSidebarSectionsChange({ ...branchSidebarSections, remoteOpen: next });
           }}
-          empty={canShowBranches && filteredRemoteBranches.length === 0}
+          empty={showRemoteBranchRows && filteredRemoteBranches.length === 0}
           emptyHint={remoteBranchesEmptyHint}
           isLastSection={false}
+          contentScrollRef={remoteBranchScrollRef}
           belowHeader={
-            canShowBranches ? (
+            showRemoteBranchRows ? (
               <input
                 type="search"
                 className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
@@ -877,19 +1091,50 @@ export const BranchSidebar = memo(function BranchSidebar({
             ) : null
           }
         >
-          {canShowBranches ? (
-            <ul className="menu w-full menu-sm rounded-md bg-transparent p-0">
-              {renderRemoteBranchTrieChildren(
-                remoteBranchTrieRoot,
-                branchBusy,
-                onSelectRemoteBranchTip,
-                onCreateFromRemote,
-                branchGraphControls,
-                (fullRef, clientX, clientY) => {
-                  runBranchSidebarContextMenu({ kind: "remote", fullRef }, clientX, clientY);
-                },
-              )}
-            </ul>
+          {showRemoteBranchRows ? (
+            <div
+              className="relative w-full"
+              style={{ height: remoteBranchVirtualizer.getTotalSize() }}
+            >
+              {remoteBranchVirtualizer.getVirtualItems().map((virtualRow) => {
+                const row = remoteBranchRows[virtualRow.index];
+                if (!row) return null;
+                return (
+                  <div
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={remoteBranchVirtualizer.measureElement}
+                    className="absolute top-0 left-0 w-full"
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  >
+                    {row.kind === "folder" ? (
+                      <RemoteBranchFolderRow
+                        label={row.label}
+                        node={row.node}
+                        depth={row.depth}
+                        graph={branchGraphControls}
+                      />
+                    ) : (
+                      <RemoteBranchRow
+                        fullRef={row.fullRef}
+                        depth={row.depth}
+                        branchBusy={branchBusy}
+                        onSelectRemoteTip={onSelectRemoteBranchTip}
+                        onCreateFromRemote={onCreateFromRemote}
+                        onRemoteBranchContextMenu={(fullRef, clientX, clientY) => {
+                          runBranchSidebarContextMenu(
+                            { kind: "remote", fullRef },
+                            clientX,
+                            clientY,
+                          );
+                        }}
+                        graph={branchGraphControls}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : null}
         </BranchPanel>
 
@@ -901,11 +1146,11 @@ export const BranchSidebar = memo(function BranchSidebar({
             onOpenChange={(next) => {
               onBranchSidebarSectionsChange({ ...branchSidebarSections, worktreesOpen: next });
             }}
-            empty={canShowBranches && filteredWorktrees.length === 0}
+            empty={showWorktreeRows && filteredWorktrees.length === 0}
             emptyHint={worktreesEmptyHint}
             isLastSection={false}
             belowHeader={
-              canShowBranches ? (
+              showWorktreeRows ? (
                 <input
                   type="search"
                   className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
@@ -921,7 +1166,7 @@ export const BranchSidebar = memo(function BranchSidebar({
               ) : null
             }
           >
-            {canShowBranches ? (
+            {showWorktreeRows ? (
               <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
                 {filteredWorktrees.map((worktree) => (
                   <WorktreeRow
@@ -944,11 +1189,12 @@ export const BranchSidebar = memo(function BranchSidebar({
           onOpenChange={(next) => {
             onBranchSidebarSectionsChange({ ...branchSidebarSections, tagsOpen: next });
           }}
-          empty={canShowBranches && filteredTags.length === 0}
+          empty={showTagRows && filteredTags.length === 0}
           emptyHint={tagsEmptyHint}
           isLastSection={false}
+          contentScrollRef={tagScrollRef}
           belowHeader={
-            canShowBranches ? (
+            showTagRows ? (
               <input
                 type="search"
                 className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
@@ -964,49 +1210,31 @@ export const BranchSidebar = memo(function BranchSidebar({
             ) : null
           }
         >
-          {canShowBranches ? (
-            <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
-              {filteredTags.map((t) => {
-                const tagRowBusy = Boolean(branchBusy) || stashBusy !== null || pushBusy;
-                const shortTip = t.tipHash.length >= 7 ? t.tipHash.slice(0, 7) : t.tipHash;
+          {showTagRows ? (
+            <div className="relative w-full" style={{ height: tagVirtualizer.getTotalSize() }}>
+              {tagVirtualizer.getVirtualItems().map((virtualRow) => {
+                const tag = filteredTags[virtualRow.index];
+                if (!tag) return null;
                 return (
-                  <li key={t.name} className="min-w-0">
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      className="flex w-full min-w-0 cursor-pointer flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
-                      title={`${t.name} → ${t.tipHash}`}
-                      onClick={() => {
-                        if (tagRowBusy) return;
-                        onTagClick(t);
-                      }}
-                      onKeyDown={(e) => {
-                        if (tagRowBusy) return;
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          onTagClick(t);
-                        }
-                      }}
-                      onContextMenu={(e) => {
-                        if (tagRowBusy) return;
-                        if (!nativeContextMenusAvailable()) return;
-                        e.preventDefault();
-                        void openTagSidebarMenu(t.name, e.clientX, e.clientY);
-                      }}
-                    >
-                      <div className="flex min-w-0 items-baseline justify-between gap-2">
-                        <span className="min-w-0 flex-1 font-mono text-[0.8125rem] leading-snug wrap-break-word">
-                          {t.name}
-                        </span>
-                        <span className="shrink-0 font-mono text-[0.65rem] leading-none tracking-tight opacity-60">
-                          {shortTip}
-                        </span>
-                      </div>
-                    </div>
-                  </li>
+                  <div
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={tagVirtualizer.measureElement}
+                    className="absolute top-0 left-0 w-full"
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  >
+                    <TagRow
+                      tag={tag}
+                      branchBusy={branchBusy}
+                      stashBusy={stashBusy}
+                      pushBusy={pushBusy}
+                      onTagClick={onTagClick}
+                      openTagSidebarMenu={openTagSidebarMenu}
+                    />
+                  </div>
                 );
               })}
-            </ul>
+            </div>
           ) : null}
         </BranchPanel>
 
@@ -1017,11 +1245,11 @@ export const BranchSidebar = memo(function BranchSidebar({
           onOpenChange={(next) => {
             onBranchSidebarSectionsChange({ ...branchSidebarSections, stashOpen: next });
           }}
-          empty={canShowBranches && filteredStashes.length === 0}
+          empty={showStashRows && filteredStashes.length === 0}
           emptyHint={stashesEmptyHint}
           isLastSection
           belowHeader={
-            canShowBranches ? (
+            showStashRows ? (
               <input
                 type="search"
                 className="input input-sm w-full rounded-none border-0 bg-transparent font-mono text-sm shadow-none ring-0 transition-colors outline-none focus-visible:bg-base-200/40"
@@ -1037,7 +1265,7 @@ export const BranchSidebar = memo(function BranchSidebar({
             ) : null
           }
         >
-          {canShowBranches ? (
+          {showStashRows ? (
             <ul className="m-0 w-full min-w-0 list-none rounded-md bg-transparent p-0">
               {filteredStashes.map((s) => {
                 const stashRowBusy = Boolean(branchBusy) || stashBusy !== null;

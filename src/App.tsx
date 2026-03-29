@@ -131,12 +131,27 @@ const COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX = 44;
  * many ms have passed since the last full branch list refresh (reduces subprocess churn).
  */
 const BRANCH_LIST_FULL_REFRESH_INTERVAL_MS = 45_000;
+/** Hide remote refs from the graph by default once the repo gets very large. */
+const LARGE_REMOTE_GRAPH_REF_THRESHOLD = 250;
 
 /** Remote name before `remote/branch` (e.g. `origin/main` → `origin`). */
 function remoteNameFromRemoteRef(fullRef: string): string | null {
   const i = fullRef.indexOf("/");
   if (i <= 0) return null;
   return fullRef.slice(0, i);
+}
+
+function graphLocalVisible(graphBranchVisible: Record<string, boolean>, name: string): boolean {
+  return graphBranchVisible[`local:${name}`] !== false;
+}
+
+function graphRemoteVisible(
+  graphBranchVisible: Record<string, boolean>,
+  name: string,
+  defaultVisible: boolean,
+): boolean {
+  const value = graphBranchVisible[`remote:${name}`];
+  return value ?? defaultVisible;
 }
 
 /** Close only when mousedown and mouseup both happen on the backdrop (not after text-selection drags). */
@@ -988,6 +1003,11 @@ export default function App({
   );
 
   useEffect(() => {
+    if (!repo?.path || repo.error) return;
+    void invoke("start_repo_watch", { path: repo.path }).catch(() => {});
+  }, [repo?.path, repo?.error]);
+
+  useEffect(() => {
     return () => {
       if (commitDiffImagePreview?.before) URL.revokeObjectURL(commitDiffImagePreview.before);
       if (commitDiffImagePreview?.after) URL.revokeObjectURL(commitDiffImagePreview.after);
@@ -1002,36 +1022,37 @@ export default function App({
   }, [diffImagePreview]);
 
   useEffect(() => {
+    const valid = new Set<string>();
+    for (const b of localBranches) valid.add(`local:${b.name}`);
+    for (const r of remoteBranches) valid.add(`remote:${r.name}`);
     setGraphBranchVisible((prev) => {
-      const next = { ...prev };
-      const valid = new Set<string>();
-      for (const b of localBranches) {
-        const k = `local:${b.name}`;
-        valid.add(k);
-        if (!(k in next)) next[k] = true;
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      for (const [key, value] of Object.entries(prev)) {
+        if (!valid.has(key)) {
+          changed = true;
+          continue;
+        }
+        next[key] = value;
       }
-      for (const r of remoteBranches) {
-        const k = `remote:${r.name}`;
-        valid.add(k);
-        if (!(k in next)) next[k] = true;
-      }
-      for (const key of Object.keys(next)) {
-        if (!valid.has(key)) delete next[key];
-      }
-      return next;
+      return changed ? next : prev;
     });
   }, [localBranches, remoteBranches]);
+
+  const remoteGraphDefaultsVisible = remoteBranches.length <= LARGE_REMOTE_GRAPH_REF_THRESHOLD;
 
   const graphRefs = useMemo(() => {
     const refs: string[] = [];
     for (const b of localBranches) {
-      if (graphBranchVisible[`local:${b.name}`] !== false) refs.push(b.name);
+      if (graphLocalVisible(graphBranchVisible, b.name)) refs.push(b.name);
     }
     for (const r of remoteBranches) {
-      if (graphBranchVisible[`remote:${r.name}`] !== false) refs.push(r.name);
+      if (graphRemoteVisible(graphBranchVisible, r.name, remoteGraphDefaultsVisible)) {
+        refs.push(r.name);
+      }
     }
     return refs;
-  }, [localBranches, remoteBranches, graphBranchVisible]);
+  }, [localBranches, remoteBranches, graphBranchVisible, remoteGraphDefaultsVisible]);
 
   const graphRefsKey = useMemo(() => graphRefs.join("\0"), [graphRefs]);
 
@@ -1101,69 +1122,90 @@ export default function App({
 
   const branchGraphControls: BranchGraphControls = useMemo(
     () => ({
-      graphVisibleLocal: (name) => graphBranchVisible[`local:${name}`] !== false,
+      graphVisibleLocal: (name) => graphLocalVisible(graphBranchVisible, name),
       toggleGraphLocal: (name) => {
         const k = `local:${name}`;
-        setGraphBranchVisible((prev) => ({ ...prev, [k]: !(prev[k] !== false) }));
+        setGraphBranchVisible((prev) => {
+          const nextVisible = !graphLocalVisible(prev, name);
+          const next = { ...prev };
+          if (nextVisible) delete next[k];
+          else next[k] = false;
+          return next;
+        });
       },
       graphFolderAnyVisibleLocal: (node) => {
         const names = collectLocalBranchNamesInSubtree(node);
-        return names.some((n) => graphBranchVisible[`local:${n}`] !== false);
+        return names.some((n) => graphLocalVisible(graphBranchVisible, n));
       },
       toggleGraphLocalFolder: (node) => {
         const names = collectLocalBranchNamesInSubtree(node);
         if (names.length === 0) return;
-        const anyVisible = names.some((n) => graphBranchVisible[`local:${n}`] !== false);
+        const anyVisible = names.some((n) => graphLocalVisible(graphBranchVisible, n));
         const nextVal = !anyVisible;
         setGraphBranchVisible((prev) => {
           const next = { ...prev };
           for (const n of names) {
-            next[`local:${n}`] = nextVal;
+            const k = `local:${n}`;
+            if (nextVal) delete next[k];
+            else next[k] = false;
           }
           return next;
         });
       },
-      graphVisibleRemote: (name) => graphBranchVisible[`remote:${name}`] !== false,
+      graphVisibleRemote: (name) =>
+        graphRemoteVisible(graphBranchVisible, name, remoteGraphDefaultsVisible),
       toggleGraphRemote: (name) => {
         const k = `remote:${name}`;
-        setGraphBranchVisible((prev) => ({ ...prev, [k]: !(prev[k] !== false) }));
+        setGraphBranchVisible((prev) => {
+          const nextVisible = !graphRemoteVisible(prev, name, remoteGraphDefaultsVisible);
+          const next = { ...prev };
+          if (nextVisible === remoteGraphDefaultsVisible) delete next[k];
+          else next[k] = nextVisible;
+          return next;
+        });
       },
       graphFolderAnyVisibleRemote: (node) => {
         const refs = collectRemoteRefsInSubtree(node);
-        return refs.some((r) => graphBranchVisible[`remote:${r}`] !== false);
+        return refs.some((r) =>
+          graphRemoteVisible(graphBranchVisible, r, remoteGraphDefaultsVisible),
+        );
       },
       toggleGraphRemoteFolder: (node) => {
         const refs = collectRemoteRefsInSubtree(node);
         if (refs.length === 0) return;
-        const anyVisible = refs.some((r) => graphBranchVisible[`remote:${r}`] !== false);
+        const anyVisible = refs.some((r) =>
+          graphRemoteVisible(graphBranchVisible, r, remoteGraphDefaultsVisible),
+        );
         const nextVal = !anyVisible;
         setGraphBranchVisible((prev) => {
           const next = { ...prev };
           for (const r of refs) {
-            next[`remote:${r}`] = nextVal;
+            const k = `remote:${r}`;
+            if (nextVal === remoteGraphDefaultsVisible) delete next[k];
+            else next[k] = nextVal;
           }
           return next;
         });
       },
     }),
-    [graphBranchVisible],
+    [graphBranchVisible, remoteGraphDefaultsVisible],
   );
 
   const graphBranchTips = useMemo((): BranchTip[] => {
     const tips: BranchTip[] = [];
     for (const b of localBranches) {
-      if (graphBranchVisible[`local:${b.name}`] !== false) {
+      if (graphLocalVisible(graphBranchVisible, b.name)) {
         tips.push({ name: b.name, tipHash: b.tipHash });
       }
     }
     for (const r of remoteBranches) {
-      if (graphBranchVisible[`remote:${r.name}`] !== false) {
+      if (graphRemoteVisible(graphBranchVisible, r.name, remoteGraphDefaultsVisible)) {
         tips.push({ name: r.name, tipHash: r.tipHash });
       }
     }
     tips.sort((a, b) => a.name.localeCompare(b.name));
     return tips;
-  }, [localBranches, remoteBranches, graphBranchVisible]);
+  }, [localBranches, remoteBranches, graphBranchVisible, remoteGraphDefaultsVisible]);
 
   const graphFilteredCommits = useMemo(
     () => filterGraphCommits(commits, graphAuthorFilter, graphDateFrom, graphDateTo),
@@ -1693,7 +1735,6 @@ export default function App({
         if (!snapshot.metadata?.error) {
           await invoke("set_last_repo_path", { path: target });
           if (pendingLoadRepoRef.current !== target) return;
-          void invoke("start_repo_watch", { path: target }).catch(() => {});
           lastFullBranchListRefreshAtRef.current = Date.now();
         } else {
           setCommits([]);
@@ -4648,6 +4689,7 @@ export default function App({
                                 remoteBranches={remoteBranches}
                                 tags={tags}
                                 graphBranchVisible={graphBranchVisible}
+                                remoteGraphDefaultVisible={remoteGraphDefaultsVisible}
                                 currentBranchName={currentBranchName}
                                 currentBranchTipHash={currentBranchTipHash}
                                 commitBrowseHash={commitBrowseHash}

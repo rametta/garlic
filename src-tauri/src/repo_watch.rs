@@ -21,11 +21,27 @@ impl Default for RepoWatchState {
     }
 }
 
-fn path_is_internal_git_artifact(root: &Path, path: &Path) -> bool {
-    path.strip_prefix(root)
-        .ok()
-        .and_then(|relative| relative.components().next())
-        .is_some_and(|component| component.as_os_str() == ".git")
+fn path_is_ignored_git_artifact(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let mut components = relative.components();
+    let Some(first) = components.next() else {
+        return false;
+    };
+    if first.as_os_str() != ".git" {
+        return false;
+    }
+    let Some(second) = components.next() else {
+        return false;
+    };
+    match second.as_os_str().to_str() {
+        // Object writes are extremely noisy during fetch/commit, and the corresponding ref/index
+        // updates we do care about arrive alongside them.
+        Some("objects" | "hooks" | "info" | "logs" | "lfs") => true,
+        Some(name) if name.ends_with(".lock") => true,
+        _ => false,
+    }
 }
 
 /// Stop any previous watch and watch `path` recursively (debounced).
@@ -59,7 +75,7 @@ pub fn start_repo_watch(app: AppHandle, path: String) -> Result<(), String> {
                     && ev
                         .paths
                         .iter()
-                        .all(|path| path_is_internal_git_artifact(&watch_root, path))
+                        .all(|path| path_is_ignored_git_artifact(&watch_root, path))
                 {
                     return;
                 }
