@@ -206,11 +206,20 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            let about_app = PredefinedMenuItem::about(app, None, None)?;
+            let quit_app = PredefinedMenuItem::quit(app, None)?;
             let garlic_menu = Submenu::with_items(
                 app,
                 "Garlic",
                 true,
-                &[&configure_openai_key, &reveal_settings_file],
+                &[
+                    &about_app,
+                    &PredefinedMenuItem::separator(app)?,
+                    &configure_openai_key,
+                    &reveal_settings_file,
+                    &PredefinedMenuItem::separator(app)?,
+                    &quit_app,
+                ],
             )?;
 
             let file_menu =
