@@ -271,6 +271,7 @@ export async function popupFileRowContextMenu(
         branchBusy: boolean;
         onHistory: () => void;
         onBlame: () => void;
+        onOpenInCursor: () => void;
       },
 ): Promise<void> {
   if (!isTauri()) return;
@@ -293,7 +294,7 @@ export async function popupFileRowContextMenu(
     },
   ];
 
-  if (args.source === "worktree") {
+  if (args.source === "worktree" || args.source === "commitBrowse") {
     items.push({
       id: "file_open_cursor",
       text: "Open in Cursor",
@@ -302,6 +303,9 @@ export async function popupFileRowContextMenu(
         args.onOpenInCursor();
       },
     });
+  }
+
+  if (args.source === "worktree") {
     items.push({
       id: "file_discard",
       text: args.discardLabel,

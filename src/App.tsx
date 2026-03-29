@@ -2516,6 +2516,16 @@ export default function App({
           branchBusy: Boolean(branchBusy),
           onHistory: () => void openFileHistory(path),
           onBlame: () => void openFileBlame(path),
+          onOpenInCursor: () => {
+            void (async () => {
+              if (!repo?.path || repo.error) return;
+              try {
+                await invoke("open_in_cursor", { path: repo.path, filePath: path });
+              } catch (e) {
+                setOperationError(invokeErrorMessage(e));
+              }
+            })();
+          },
         });
       }
     },
