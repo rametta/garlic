@@ -13,4 +13,3 @@ Download for Mac in [releases](https://github.com/rametta/garlic/releases).
 - Bring your own AI key for commit messages.
 
 ![demo of garlic](demo.gif)
-

@@ -820,6 +820,9 @@ export default function App({
   activeRepoPathRef.current = repo?.path ?? null;
   /** Latest `loadRepo` target; supersede in-flight loads when opening another path. */
   const pendingLoadRepoRef = useRef<string | null>(null);
+  /** Collapse bursts of filesystem watch events into one in-flight refresh plus one queued rerun. */
+  const repoMutationRefreshInFlightRef = useRef(false);
+  const repoMutationRefreshPendingRef = useRef(false);
   /** Bumps when clearing browse or starting a new commit selection — drops stale `selectCommit` completions. */
   const selectCommitSeqRef = useRef(0);
   const [loadError, setLoadError] = useState<string | null>(() => startup.loadError ?? null);
@@ -1795,8 +1798,9 @@ export default function App({
   }, []);
 
   const refreshAfterMutation = useCallback(
-    async (options?: { fromFocus?: boolean }) => {
+    async (options?: { fromFocus?: boolean; fromWatcher?: boolean }) => {
       const fromFocus = options?.fromFocus ?? false;
+      const fromWatcher = options?.fromWatcher ?? false;
       if (!repo?.path || repo.error) return;
       const pathAtStart = repo.path;
       const prevBranch = repo.branch;
@@ -1815,7 +1819,22 @@ export default function App({
 
           let files: WorkingTreeFile[] | null = null;
 
-          if (!fromFocus) {
+          if (fromWatcher && !branchContextChanged) {
+            try {
+              const worktree = await invoke<WorkingTreeFile[]>("list_working_tree_files", {
+                path: pathAtStart,
+              });
+              if (activeRepoPathRef.current !== pathAtStart) return;
+              setWorkingTreeFiles(worktree);
+              setListsError(null);
+              files = worktree;
+            } catch (e) {
+              if (activeRepoPathRef.current === pathAtStart) {
+                setListsError(invokeErrorMessage(e));
+              }
+              files = null;
+            }
+          } else if (!fromFocus) {
             lastFullBranchListRefreshAtRef.current = Date.now();
             files = await refreshLists(pathAtStart);
           } else {
@@ -2596,6 +2615,23 @@ export default function App({
   const handleCloneCompletePayloadListenerRef = useLatest(handleCloneCompletePayload);
   const openCloneRepoDialogListenerRef = useLatest(openCloneRepoDialog);
   const scheduleCloneProgressUiFlushListenerRef = useLatest(scheduleCloneProgressUiFlush);
+  const scheduleRepositoryMutationRefresh = useCallback(() => {
+    if (repoMutationRefreshInFlightRef.current) {
+      repoMutationRefreshPendingRef.current = true;
+      return;
+    }
+    repoMutationRefreshInFlightRef.current = true;
+    void (async () => {
+      try {
+        do {
+          repoMutationRefreshPendingRef.current = false;
+          await refreshAfterMutationListenerRef.current({ fromWatcher: true });
+        } while (repoMutationRefreshPendingRef.current);
+      } finally {
+        repoMutationRefreshInFlightRef.current = false;
+      }
+    })();
+  }, [refreshAfterMutationListenerRef]);
 
   useEffect(() => {
     const promise = Promise.all([
@@ -2632,7 +2668,7 @@ export default function App({
         document.documentElement.setAttribute("data-theme", resolveThemePreference(pref));
       }),
       listen("repository-mutated", () => {
-        void refreshAfterMutationListenerRef.current();
+        scheduleRepositoryMutationRefresh();
       }),
       listen<CommitSignatureResultPayload>("commit-signature-result", (e) => {
         const p = e.payload;
@@ -2748,7 +2784,7 @@ export default function App({
     openCloneRepoDialogListenerRef,
     openCreateBranchDialogListenerRef,
     openOpenAiSettingsDialogListenerRef,
-    refreshAfterMutationListenerRef,
+    scheduleRepositoryMutationRefresh,
     scheduleCloneProgressUiFlushListenerRef,
   ]);
 

@@ -1,7 +1,7 @@
 //! Debounced filesystem watch for the open repo; emits `repository-mutated` when files change.
 
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -19,6 +19,13 @@ impl Default for RepoWatchState {
     fn default() -> Self {
         Self(Mutex::new(None))
     }
+}
+
+fn path_is_internal_git_artifact(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .is_some_and(|component| component.as_os_str() == ".git")
 }
 
 /// Stop any previous watch and watch `path` recursively (debounced).
@@ -41,10 +48,19 @@ pub fn start_repo_watch(app: AppHandle, path: String) -> Result<(), String> {
     *g = None;
 
     let (tx, rx) = mpsc::channel();
+    let watch_root = root.clone();
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<Event, notify::Error>| {
             if let Ok(ev) = res {
                 if matches!(ev.kind, EventKind::Access(_)) {
+                    return;
+                }
+                if !ev.paths.is_empty()
+                    && ev
+                        .paths
+                        .iter()
+                        .all(|path| path_is_internal_git_artifact(&watch_root, path))
+                {
                     return;
                 }
                 let _ = tx.send(());
