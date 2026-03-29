@@ -1,8 +1,11 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App, { type RestoreLastRepo } from "./App";
+import App from "./App";
+import type { RestoreLastRepo } from "./gitTypes";
 import type { BranchSidebarSectionsState } from "./repoTypes";
+import { queryClient } from "./queryClient";
 import "./index.css";
 import { DEFAULT_OPENAI_MODEL } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
@@ -53,13 +56,15 @@ async function bootstrap() {
 
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-      <App
-        startup={data.repo}
-        themePreference={data.theme ?? "light"}
-        openaiApiKey={data.openaiApiKey ?? null}
-        openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}
-        branchSidebarSections={data.branchSidebarSections}
-      />
+      <QueryClientProvider client={queryClient}>
+        <App
+          startup={data.repo}
+          themePreference={data.theme ?? "light"}
+          openaiApiKey={data.openaiApiKey ?? null}
+          openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}
+          branchSidebarSections={data.branchSidebarSections}
+        />
+      </QueryClientProvider>
     </React.StrictMode>,
   );
 }

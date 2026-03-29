@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
 import { memo, useCallback, useState } from "react";
 import { DEFAULT_OPENAI_MODEL } from "../generateCommitMessage";
+import { useSetOpenAiSettingsMutation } from "../repoMutations";
 
 function invokeErrorMessage(error: unknown): string {
   if (typeof error === "string") return error;
@@ -30,15 +30,15 @@ export const OpenAiSettingsDialog = memo(function OpenAiSettingsDialog({
 }: OpenAiSettingsDialogProps) {
   const [keyDraft, setKeyDraft] = useState(apiKey);
   const [modelDraft, setModelDraft] = useState(model);
-  const [busy, setBusy] = useState(false);
+  const setOpenAiSettingsMutation = useSetOpenAiSettingsMutation();
+  const busy = setOpenAiSettingsMutation.isPending;
 
   const save = useCallback(async () => {
-    setBusy(true);
     onError(null);
     try {
       const trimmedKey = keyDraft.trim();
       const trimmedModel = modelDraft.trim();
-      await invoke("set_openai_settings", {
+      await setOpenAiSettingsMutation.mutateAsync({
         key: trimmedKey.length > 0 ? trimmedKey : null,
         model: trimmedModel.length > 0 ? trimmedModel : null,
       });
@@ -49,10 +49,8 @@ export const OpenAiSettingsDialog = memo(function OpenAiSettingsDialog({
       onClose();
     } catch (error) {
       onError(invokeErrorMessage(error));
-    } finally {
-      setBusy(false);
     }
-  }, [keyDraft, modelDraft, onClose, onError, onSaved]);
+  }, [keyDraft, modelDraft, onClose, onError, onSaved, setOpenAiSettingsMutation]);
 
   return createPortal(
     <div

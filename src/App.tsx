@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BranchSidebarSectionsState } from "./repoTypes";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -45,8 +46,6 @@ import {
 } from "./nativeContextMenu";
 import type {
   CommitEntry,
-  LocalBranchEntry,
-  RemoteBranchEntry,
   StashEntry,
   TagEntry,
   TagOriginStatus,
@@ -60,6 +59,54 @@ import {
   formatCommitsExportTxt,
   reachableCommitHashesFromHead,
 } from "./graphCommitFilters";
+import {
+  combineLineStats,
+  type LineStat,
+  type RepoMetadata,
+  repoSnapshotFromStartup,
+  type RestoreLastRepo,
+  type WorkingTreeFile,
+} from "./gitTypes";
+import {
+  useAmendLastCommitMutation,
+  useCheckoutLocalBranchMutation,
+  useCherryPickCommitMutation,
+  useCommitStagedMutation,
+  useCreateBranchAtCommitMutation,
+  useCreateBranchFromRemoteMutation,
+  useCreateLocalBranchMutation,
+  useCreateTagMutation,
+  useDeleteLocalBranchMutation,
+  useDeleteRemoteBranchMutation,
+  useDeleteRemoteTagMutation,
+  useDeleteTagMutation,
+  useDiscardPatchMutation,
+  useDiscardPathChangesMutation,
+  useMergeBranchMutation,
+  usePullLocalBranchMutation,
+  usePushTagToOriginMutation,
+  usePushToOriginMutation,
+  useRebaseCurrentBranchOntoMutation,
+  useRemoveWorktreeMutation,
+  useSetBranchSidebarSectionsMutation,
+  useSetRemoteUrlMutation,
+  useStagePatchMutation,
+  useStagePathsMutation,
+  useStashDropMutation,
+  useStashPopMutation,
+  useStashPushMutation,
+  useUnstagePatchMutation,
+  useUnstagePathsMutation,
+} from "./repoMutations";
+import {
+  emptyRepoSnapshot,
+  loadRepoLists,
+  loadRepoSnapshot,
+  repoQueryKeys,
+  setRepoSnapshot,
+  updateRepoSnapshot,
+  withRepoLists,
+} from "./repoQuery";
 
 export type {
   BranchSidebarSectionsState,
@@ -71,6 +118,7 @@ export type {
   TagOriginStatus,
   WorktreeEntry,
 } from "./repoTypes";
+export type { LineStat, RepoMetadata, RestoreLastRepo, WorkingTreeFile } from "./gitTypes";
 
 /** How long to wait after `window-focused` before starting refresh (avoids stacking work on focus). */
 const WINDOW_FOCUS_REFRESH_DELAY_MS = 250;
@@ -114,30 +162,6 @@ function useLatest<T>(value: T) {
     ref.current = value;
   }, [value]);
   return ref;
-}
-
-interface RemoteEntry {
-  name: string;
-  fetchUrl: string;
-}
-
-interface RepoMetadata {
-  path: string;
-  name: string;
-  gitRoot: string | null;
-  error: string | null;
-  branch: string | null;
-  /** Full `HEAD` OID; used to scope export to the checked-out branch. */
-  headHash?: string | null;
-  headShort: string | null;
-  headSubject: string | null;
-  headAuthor: string | null;
-  headDate: string | null;
-  detached: boolean;
-  remotes: RemoteEntry[];
-  workingTreeClean: boolean | null;
-  ahead: number | null;
-  behind: number | null;
 }
 
 interface GraphCommitsPage {
@@ -207,13 +231,6 @@ interface GitCommandStreamFinishedPayload {
   error?: string | null;
 }
 
-/** Line counts from `git diff --numstat` / `--cached` (or file read for untracked). */
-export interface LineStat {
-  additions: number;
-  deletions: number;
-  isBinary: boolean;
-}
-
 /** One file changed in a commit from `list_commit_files`. */
 export interface CommitFileEntry {
   path: string;
@@ -258,31 +275,6 @@ function blobPairToPreviewUrls(
     before: base64ToObjectUrl(pair.beforeBase64, mime),
     after: base64ToObjectUrl(pair.afterBase64, mime),
   };
-}
-
-/** One path in the working tree from `list_working_tree_files` / bootstrap. */
-export interface WorkingTreeFile {
-  path: string;
-  renameFrom?: string | null;
-  staged: boolean;
-  unstaged: boolean;
-  stagedStats?: LineStat;
-  unstagedStats?: LineStat;
-}
-
-/** Repo snapshot from `restore_app_bootstrap` (`repo` field). */
-export interface RestoreLastRepo {
-  loadError: string | null;
-  metadata: RepoMetadata | null;
-  localBranches: LocalBranchEntry[];
-  remoteBranches: RemoteBranchEntry[];
-  worktrees: WorktreeEntry[];
-  tags: TagEntry[];
-  stashes: StashEntry[];
-  commits: CommitEntry[];
-  graphCommitsHasMore: boolean;
-  workingTreeFiles: WorkingTreeFile[];
-  listsError: string | null;
 }
 
 /** Rules aligned with `git check-ref-format --branch` for short branch names. */
@@ -399,50 +391,6 @@ function DiffLineStatBadge({ stat }: { stat: LineStat }) {
       <span className="text-error">−{stat.deletions}</span>
     </span>
   );
-}
-
-function combineLineStats(a?: LineStat, b?: LineStat): LineStat | undefined {
-  if (!a) return b ? { ...b } : undefined;
-  if (!b) return { ...a };
-  if (a.isBinary || b.isBinary) {
-    return { additions: 0, deletions: 0, isBinary: true };
-  }
-  return {
-    additions: a.additions + b.additions,
-    deletions: a.deletions + b.deletions,
-    isBinary: false,
-  };
-}
-
-function applyOptimisticStageChange(
-  files: WorkingTreeFile[],
-  paths: readonly string[],
-  direction: "stage" | "unstage",
-): WorkingTreeFile[] {
-  const pathSet = new Set(paths);
-  return files.map((file) => {
-    if (!pathSet.has(file.path)) return file;
-    if (direction === "stage") {
-      return {
-        ...file,
-        staged: file.staged || file.unstaged,
-        unstaged: false,
-        stagedStats: file.unstaged
-          ? combineLineStats(file.stagedStats, file.unstagedStats)
-          : file.stagedStats,
-        unstagedStats: undefined,
-      };
-    }
-    return {
-      ...file,
-      staged: false,
-      unstaged: file.unstaged || file.staged,
-      stagedStats: undefined,
-      unstagedStats: file.staged
-        ? combineLineStats(file.unstagedStats, file.stagedStats)
-        : file.unstagedStats,
-    };
-  });
 }
 
 function StagePanelLineStats({
@@ -814,7 +762,30 @@ export default function App({
   const [branchSidebarSections, setBranchSidebarSections] = useState<BranchSidebarSectionsState>(
     () => ({ ...initialBranchSidebarSections }),
   );
-  const [repo, setRepo] = useState<RepoMetadata | null>(() => startup.metadata ?? null);
+  const queryClient = useQueryClient();
+  const [currentRepoPath, setCurrentRepoPath] = useState<string | null>(
+    () => startup.metadata?.path ?? null,
+  );
+  const startupRepoSnapshot = useMemo(() => repoSnapshotFromStartup(startup), [startup]);
+  const repoSnapshotQuery = useQuery({
+    queryKey: currentRepoPath
+      ? repoQueryKeys.snapshot(currentRepoPath)
+      : ["repo", "inactive", "snapshot"],
+    queryFn: () => loadRepoSnapshot(currentRepoPath!),
+    enabled: currentRepoPath !== null,
+    initialData:
+      currentRepoPath !== null && currentRepoPath === startup.metadata?.path
+        ? startupRepoSnapshot
+        : undefined,
+  });
+  const repoSnapshot = repoSnapshotQuery.data ?? emptyRepoSnapshot();
+  const repo = repoSnapshot.metadata;
+  const localBranches = repoSnapshot.localBranches;
+  const remoteBranches = repoSnapshot.remoteBranches;
+  const worktrees = repoSnapshot.worktrees;
+  const tags = repoSnapshot.tags;
+  const stashes = repoSnapshot.stashes;
+  const workingTreeFiles = repoSnapshot.workingTreeFiles;
   /** Guards async work: ignore results if `repo.path` changed while awaiting (e.g. refresh vs. open other repo). */
   const activeRepoPathRef = useRef<string | null>(null);
   activeRepoPathRef.current = repo?.path ?? null;
@@ -842,6 +813,13 @@ export default function App({
   const pendingCloneSessionRef = useRef<number | null>(null);
   /** `clone-complete` can arrive before `invoke` resolves; flush after session id is known. */
   const cloneCompleteQueuedRef = useRef<CloneDonePayload | null>(null);
+  const updateCurrentRepoSnapshot = useCallback(
+    (updater: Parameters<typeof updateRepoSnapshot>[2]) => {
+      if (!currentRepoPath) return;
+      updateRepoSnapshot(queryClient, currentRepoPath, updater);
+    },
+    [currentRepoPath, queryClient],
+  );
   const cloneLogLinesRef = useRef<string[]>([]);
   const cloneProgressMaxPercentRef = useRef<number | null>(null);
   const cloneProgressRafRef = useRef<number | null>(null);
@@ -858,15 +836,6 @@ export default function App({
   } | null>(null);
   const gitCommandStreamScrollRef = useRef<HTMLDivElement | null>(null);
   const gitStreamSessionRef = useRef<number | null>(null);
-  const [localBranches, setLocalBranches] = useState<LocalBranchEntry[]>(
-    () => startup.localBranches,
-  );
-  const [remoteBranches, setRemoteBranches] = useState<RemoteBranchEntry[]>(
-    () => startup.remoteBranches,
-  );
-  const [worktrees, setWorktrees] = useState<WorktreeEntry[]>(() => startup.worktrees);
-  const [tags, setTags] = useState<TagEntry[]>(() => startup.tags);
-  const [stashes, setStashes] = useState<StashEntry[]>(() => startup.stashes);
   const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
   const [graphCommitsHasMore, setGraphCommitsHasMore] = useState(() => startup.graphCommitsHasMore);
   const [loadingMoreGraphCommits, setLoadingMoreGraphCommits] = useState(false);
@@ -876,9 +845,6 @@ export default function App({
   const [graphAuthorFilter, setGraphAuthorFilter] = useState("");
   const [graphDateFrom, setGraphDateFrom] = useState("");
   const [graphDateTo, setGraphDateTo] = useState("");
-  const [workingTreeFiles, setWorkingTreeFiles] = useState<WorkingTreeFile[]>(
-    () => startup.workingTreeFiles,
-  );
   const [branchBusy, setBranchBusy] = useState<string | null>(null);
   /** `push` or `pop:<ref>` while a stash command runs. */
   const [stashBusy, setStashBusy] = useState<string | null>(null);
@@ -955,6 +921,35 @@ export default function App({
     () => initialOpenaiModel.trim() || DEFAULT_OPENAI_MODEL,
   );
   const [openaiSettingsOpen, setOpenaiSettingsOpen] = useState(false);
+  const stashPushMutation = useStashPushMutation();
+  const setBranchSidebarSectionsMutation = useSetBranchSidebarSectionsMutation();
+  const setRemoteUrlMutation = useSetRemoteUrlMutation();
+  const pullLocalBranchMutation = usePullLocalBranchMutation();
+  const deleteLocalBranchMutation = useDeleteLocalBranchMutation();
+  const deleteRemoteBranchMutation = useDeleteRemoteBranchMutation();
+  const rebaseCurrentBranchOntoMutation = useRebaseCurrentBranchOntoMutation();
+  const mergeBranchMutation = useMergeBranchMutation();
+  const removeWorktreeMutation = useRemoveWorktreeMutation();
+  const checkoutLocalBranchMutation = useCheckoutLocalBranchMutation();
+  const createBranchFromRemoteMutation = useCreateBranchFromRemoteMutation();
+  const cherryPickCommitMutation = useCherryPickCommitMutation();
+  const discardPathChangesMutation = useDiscardPathChangesMutation();
+  const pushTagToOriginMutation = usePushTagToOriginMutation();
+  const createBranchAtCommitMutation = useCreateBranchAtCommitMutation();
+  const createLocalBranchMutation = useCreateLocalBranchMutation();
+  const createTagMutation = useCreateTagMutation();
+  const stashPopMutation = useStashPopMutation();
+  const stashDropMutation = useStashDropMutation();
+  const deleteTagMutation = useDeleteTagMutation();
+  const deleteRemoteTagMutation = useDeleteRemoteTagMutation();
+  const stagePathsMutation = useStagePathsMutation();
+  const unstagePathsMutation = useUnstagePathsMutation();
+  const stagePatchMutation = useStagePatchMutation();
+  const unstagePatchMutation = useUnstagePatchMutation();
+  const discardPatchMutation = useDiscardPatchMutation();
+  const amendLastCommitMutation = useAmendLastCommitMutation();
+  const commitStagedMutation = useCommitStagedMutation();
+  const pushToOriginMutation = usePushToOriginMutation();
   const closeOpenAiSettingsDialog = useCallback(() => {
     setOpenaiSettingsOpen(false);
   }, []);
@@ -974,29 +969,21 @@ export default function App({
   const [newTagName, setNewTagName] = useState("");
   const [createTagMessage, setCreateTagMessage] = useState("");
   const [createTagFieldError, setCreateTagFieldError] = useState<string | null>(null);
-  const refreshLists = useCallback(async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
-    setListsError(null);
-    try {
-      const [locals, remotes, worktreeList, tagList, worktree, stashList] = await Promise.all([
-        invoke<LocalBranchEntry[]>("list_local_branches", { path: repoPath }),
-        invoke<RemoteBranchEntry[]>("list_remote_branches", { path: repoPath }),
-        invoke<WorktreeEntry[]>("list_worktrees", { path: repoPath }),
-        invoke<TagEntry[]>("list_tags", { path: repoPath }),
-        invoke<WorkingTreeFile[]>("list_working_tree_files", { path: repoPath }),
-        invoke<StashEntry[]>("list_stashes", { path: repoPath }),
-      ]);
-      setLocalBranches(locals);
-      setRemoteBranches(remotes);
-      setWorktrees(worktreeList);
-      setTags(tagList);
-      setWorkingTreeFiles(worktree);
-      setStashes(stashList);
-      return worktree;
-    } catch (e) {
-      setListsError(invokeErrorMessage(e));
-      return null;
-    }
-  }, []);
+  const refreshLists = useCallback(
+    async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
+      setListsError(null);
+      try {
+        const lists = await loadRepoLists(repoPath);
+        if (activeRepoPathRef.current !== repoPath) return null;
+        updateRepoSnapshot(queryClient, repoPath, (snapshot) => withRepoLists(snapshot, lists));
+        return lists.workingTreeFiles;
+      } catch (e) {
+        setListsError(invokeErrorMessage(e));
+        return null;
+      }
+    },
+    [queryClient],
+  );
 
   useEffect(() => {
     return () => {
@@ -1598,6 +1585,71 @@ export default function App({
     clearFileToolView();
   }, [clearFileToolView]);
 
+  const previousRepoContextRef = useRef<{
+    path: string | null;
+    branch: string | null;
+    detached: boolean;
+  }>({
+    path: repo?.path ?? null,
+    branch: repo?.branch ?? null,
+    detached: repo?.detached ?? false,
+  });
+
+  useEffect(() => {
+    const previous = previousRepoContextRef.current;
+    if (
+      repo?.path &&
+      previous.path === repo.path &&
+      (previous.branch !== repo.branch || previous.detached !== repo.detached)
+    ) {
+      clearCommitBrowse();
+    }
+
+    previousRepoContextRef.current = {
+      path: repo?.path ?? null,
+      branch: repo?.branch ?? null,
+      detached: repo?.detached ?? false,
+    };
+  }, [repo?.branch, repo?.detached, repo?.path, clearCommitBrowse]);
+
+  useEffect(() => {
+    if (!repo?.path || selectedDiffRepoPath !== repo.path || !selectedDiffPath) return;
+
+    const next = workingTreeFiles.find((file) => file.path === selectedDiffPath);
+    if (!next || (!next.staged && !next.unstaged)) {
+      setSelectedDiffPath(null);
+      setSelectedDiffSide(null);
+      setDiffStagedText(null);
+      setDiffUnstagedText(null);
+      setDiffError(null);
+      return;
+    }
+
+    const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
+    if (preferredSide === "unstaged" && next.unstaged) {
+      void loadDiffForFile(next, "unstaged");
+      return;
+    }
+    if (preferredSide === "staged" && next.staged) {
+      void loadDiffForFile(next, "staged");
+      return;
+    }
+    if (next.unstaged) {
+      void loadDiffForFile(next, "unstaged");
+      return;
+    }
+    if (next.staged) {
+      void loadDiffForFile(next, "staged");
+    }
+  }, [
+    repo?.path,
+    workingTreeFiles,
+    selectedDiffPath,
+    selectedDiffSide,
+    selectedDiffRepoPath,
+    loadDiffForFile,
+  ]);
+
   const loadRepo = useCallback(
     async (selected: string) => {
       const target = selected.trim();
@@ -1619,39 +1671,24 @@ export default function App({
       setDiffError(null);
       setDiffLoading(false);
       try {
-        const meta = await invoke<RepoMetadata>("get_repo_metadata", {
-          path: target,
-        });
+        const snapshot = await loadRepoSnapshot(target);
         if (pendingLoadRepoRef.current !== target) return;
-        setRepo(meta);
-        if (!meta.error) {
+        setRepoSnapshot(queryClient, target, snapshot);
+        setCurrentRepoPath(target);
+        if (!snapshot.metadata?.error) {
           await invoke("set_last_repo_path", { path: target });
-          if (pendingLoadRepoRef.current !== target) return;
-          await refreshLists(target);
           if (pendingLoadRepoRef.current !== target) return;
           void invoke("start_repo_watch", { path: target }).catch(() => {});
           lastFullBranchListRefreshAtRef.current = Date.now();
         } else {
-          setLocalBranches([]);
-          setRemoteBranches([]);
-          setWorktrees([]);
-          setTags([]);
-          setStashes([]);
           setCommits([]);
           setGraphCommitsHasMore(false);
-          setWorkingTreeFiles([]);
         }
       } catch (e) {
         if (pendingLoadRepoRef.current !== target) return;
-        setRepo(null);
-        setLocalBranches([]);
-        setRemoteBranches([]);
-        setWorktrees([]);
-        setTags([]);
-        setStashes([]);
+        setCurrentRepoPath(null);
         setCommits([]);
         setGraphCommitsHasMore(false);
-        setWorkingTreeFiles([]);
         setLoadError(invokeErrorMessage(e));
         void invoke("reset_main_window_title").catch(() => {});
       } finally {
@@ -1660,7 +1697,7 @@ export default function App({
         }
       }
     },
-    [refreshLists, clearCommitBrowse, clearWorktreeBrowse],
+    [clearCommitBrowse, clearWorktreeBrowse, queryClient],
   );
 
   /** Coalesce rapid `clone-progress` events to one React update per frame (avoids UI freeze). */
@@ -1811,7 +1848,10 @@ export default function App({
         });
         if (activeRepoPathRef.current !== pathAtStart) return;
         const branchContextChanged = meta.branch !== prevBranch || meta.detached !== prevDetached;
-        setRepo(meta);
+        updateRepoSnapshot(queryClient, pathAtStart, (snapshot) => ({
+          ...snapshot,
+          metadata: meta,
+        }));
         if (!meta.error) {
           if (branchContextChanged) {
             clearCommitBrowse();
@@ -1825,7 +1865,10 @@ export default function App({
                 path: pathAtStart,
               });
               if (activeRepoPathRef.current !== pathAtStart) return;
-              setWorkingTreeFiles(worktree);
+              updateRepoSnapshot(queryClient, pathAtStart, (snapshot) => ({
+                ...snapshot,
+                workingTreeFiles: worktree,
+              }));
               setListsError(null);
               files = worktree;
             } catch (e) {
@@ -1849,32 +1892,13 @@ export default function App({
               try {
                 // Focus refreshes still need to pick up external ref-only changes
                 // like new tags or branches created outside Garlic.
-                const [locals, remotes, worktreeList, tagList, worktree, stashList] =
-                  await Promise.all([
-                    invoke<LocalBranchEntry[]>("list_local_branches", {
-                      path: pathAtStart,
-                    }),
-                    invoke<RemoteBranchEntry[]>("list_remote_branches", {
-                      path: pathAtStart,
-                    }),
-                    invoke<WorktreeEntry[]>("list_worktrees", {
-                      path: pathAtStart,
-                    }),
-                    invoke<TagEntry[]>("list_tags", { path: pathAtStart }),
-                    invoke<WorkingTreeFile[]>("list_working_tree_files", {
-                      path: pathAtStart,
-                    }),
-                    invoke<StashEntry[]>("list_stashes", { path: pathAtStart }),
-                  ]);
+                const lists = await loadRepoLists(pathAtStart);
                 if (activeRepoPathRef.current !== pathAtStart) return;
-                setLocalBranches(locals);
-                setRemoteBranches(remotes);
-                setWorktrees(worktreeList);
-                setTags(tagList);
-                setWorkingTreeFiles(worktree);
-                setStashes(stashList);
+                updateRepoSnapshot(queryClient, pathAtStart, (snapshot) =>
+                  withRepoLists(snapshot, lists),
+                );
                 setListsError(null);
-                files = worktree;
+                files = lists.workingTreeFiles;
               } catch (e) {
                 if (activeRepoPathRef.current === pathAtStart) {
                   setListsError(invokeErrorMessage(e));
@@ -1928,6 +1952,7 @@ export default function App({
       selectedDiffSide,
       loadDiffForFile,
       clearCommitBrowse,
+      queryClient,
     ],
   );
 
@@ -1968,21 +1993,23 @@ export default function App({
     setStashBusy("push");
     setOperationError(null);
     try {
-      await invoke("stash_push", { path: repo.path, message: null });
-      await refreshAfterMutation();
+      await stashPushMutation.mutateAsync({ path: repo.path, message: null });
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
       setStashBusy(null);
     }
-  }, [repo, refreshAfterMutation]);
+  }, [repo, stashPushMutation]);
 
-  const persistBranchSidebarSections = useCallback((next: BranchSidebarSectionsState) => {
-    setBranchSidebarSections(next);
-    void invoke("set_branch_sidebar_sections", { sections: next }).catch((e: unknown) => {
-      console.error("set_branch_sidebar_sections failed", e);
-    });
-  }, []);
+  const persistBranchSidebarSections = useCallback(
+    (next: BranchSidebarSectionsState) => {
+      setBranchSidebarSections(next);
+      void setBranchSidebarSectionsMutation.mutateAsync({ sections: next }).catch((e: unknown) => {
+        console.error("set_branch_sidebar_sections failed", e);
+      });
+    },
+    [setBranchSidebarSectionsMutation],
+  );
 
   const openEditOriginUrlDialog = useCallback(async () => {
     if (!repo?.path || repo.error) return;
@@ -2016,19 +2043,18 @@ export default function App({
     setBranchBusy("remote-url");
     setOperationError(null);
     try {
-      await invoke("set_remote_url", {
+      await setRemoteUrlMutation.mutateAsync({
         path: repo.path,
         remoteName: "origin",
         url: trimmed,
       });
       closeEditOriginUrlDialog();
-      await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
       setBranchBusy(null);
     }
-  }, [repo, editOriginUrl, closeEditOriginUrlDialog, refreshAfterMutation]);
+  }, [repo, editOriginUrl, closeEditOriginUrlDialog, setRemoteUrlMutation]);
 
   const pullLocalBranch = useCallback(
     async (branchName: string) => {
@@ -2036,18 +2062,17 @@ export default function App({
       setBranchBusy(`pull:${branchName}`);
       setOperationError(null);
       try {
-        await invoke("pull_local_branch", {
+        await pullLocalBranchMutation.mutateAsync({
           path: repo.path,
           branch: branchName,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, pullLocalBranchMutation],
   );
 
   const deleteLocalBranch = useCallback(
@@ -2069,19 +2094,18 @@ export default function App({
       setBranchBusy(`delete:${branchName}`);
       setOperationError(null);
       try {
-        await invoke("delete_local_branch", {
+        await deleteLocalBranchMutation.mutateAsync({
           path: repo.path,
           branch: branchName,
           force,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, deleteLocalBranchMutation],
   );
 
   const deleteRemoteBranch = useCallback(
@@ -2101,18 +2125,17 @@ export default function App({
       setBranchBusy(`delete-remote:${fullRef}`);
       setOperationError(null);
       try {
-        await invoke("delete_remote_branch", {
+        await deleteRemoteBranchMutation.mutateAsync({
           path: repo.path,
           remoteRef: fullRef,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, deleteRemoteBranchMutation],
   );
 
   const rebaseCurrentBranchOnto = useCallback(
@@ -2128,19 +2151,18 @@ export default function App({
       setBranchBusy("rebase");
       setOperationError(null);
       try {
-        await invoke("rebase_current_branch_onto", {
+        await rebaseCurrentBranchOntoMutation.mutateAsync({
           path: repo.path,
           onto,
           interactive,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, rebaseCurrentBranchOntoMutation],
   );
 
   const mergeBranchIntoCurrent = useCallback(
@@ -2154,18 +2176,17 @@ export default function App({
       setBranchBusy(`merge:${onto}`);
       setOperationError(null);
       try {
-        await invoke("merge_branch", {
+        await mergeBranchMutation.mutateAsync({
           path: repo.path,
           branchOrRef: onto,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, mergeBranchMutation],
   );
 
   const removeLinkedWorktree = useCallback(
@@ -2182,7 +2203,7 @@ export default function App({
       setBranchBusy(`worktree-remove:${worktree.path}`);
       setOperationError(null);
       try {
-        await invoke("remove_worktree", {
+        await removeWorktreeMutation.mutateAsync({
           path: repo.path,
           worktreePath: worktree.path,
           force: hasLocalChanges,
@@ -2191,7 +2212,6 @@ export default function App({
           clearWorktreeBrowse();
           clearDiffSelection();
         }
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
@@ -2200,7 +2220,7 @@ export default function App({
     },
     [
       repo,
-      refreshAfterMutation,
+      removeWorktreeMutation,
       worktreeBrowseTarget?.path,
       clearWorktreeBrowse,
       clearDiffSelection,
@@ -2243,18 +2263,17 @@ export default function App({
       setBranchBusy(`local:${branch}`);
       setOperationError(null);
       try {
-        await invoke("checkout_local_branch", {
+        await checkoutLocalBranchMutation.mutateAsync({
           path: repo.path,
           branch,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, checkoutLocalBranchMutation],
   );
 
   const onCreateFromRemote = useCallback(
@@ -2263,18 +2282,17 @@ export default function App({
       setBranchBusy(`remote:${remoteRef}`);
       setOperationError(null);
       try {
-        await invoke("create_branch_from_remote", {
+        await createBranchFromRemoteMutation.mutateAsync({
           path: repo.path,
           remoteRef,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, createBranchFromRemoteMutation],
   );
 
   const runBranchSidebarContextMenu = useCallback(
@@ -2349,18 +2367,17 @@ export default function App({
       setBranchBusy("cherry-pick");
       setOperationError(null);
       try {
-        await invoke("cherry_pick_commit", {
+        await cherryPickCommitMutation.mutateAsync({
           path: repo.path,
           commitHash: hash,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, commits, refreshAfterMutation],
+    [repo, commits, cherryPickCommitMutation],
   );
 
   const rebaseCurrentBranchOntoCommit = useCallback(
@@ -2375,19 +2392,18 @@ export default function App({
       setBranchBusy("rebase");
       setOperationError(null);
       try {
-        await invoke("rebase_current_branch_onto", {
+        await rebaseCurrentBranchOntoMutation.mutateAsync({
           path: repo.path,
           onto: hash,
           interactive: false,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, commits, refreshAfterMutation],
+    [repo, commits, rebaseCurrentBranchOntoMutation],
   );
 
   const discardPathChanges = useCallback(
@@ -2403,19 +2419,18 @@ export default function App({
       setStageCommitBusy(true);
       setOperationError(null);
       try {
-        await invoke("discard_path_changes", {
+        await discardPathChangesMutation.mutateAsync({
           path: repo.path,
           filePath,
           fromUnstaged,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setStageCommitBusy(false);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, discardPathChangesMutation],
   );
 
   const openFileHistory = useCallback(
@@ -2583,15 +2598,14 @@ export default function App({
       setPushBusy(true);
       setOperationError(null);
       try {
-        await invoke("push_tag_to_origin", { path: repo.path, tag: tagName });
-        await refreshAfterMutation();
+        await pushTagToOriginMutation.mutateAsync({ path: repo.path, tag: tagName });
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setPushBusy(false);
       }
     },
-    [repo, refreshAfterMutation],
+    [repo, pushTagToOriginMutation],
   );
 
   const openGraphTagMenu = useCallback(
@@ -2818,19 +2832,18 @@ export default function App({
     setOperationError(null);
     try {
       if (createBranchStartCommit) {
-        await invoke("create_branch_at_commit", {
+        await createBranchAtCommitMutation.mutateAsync({
           path: repo.path,
           branch: trimmed,
           commit: createBranchStartCommit,
         });
       } else {
-        await invoke("create_local_branch", {
+        await createLocalBranchMutation.mutateAsync({
           path: repo.path,
           branch: trimmed,
         });
       }
       closeCreateBranchDialog();
-      await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -2856,14 +2869,13 @@ export default function App({
     setOperationError(null);
     try {
       const msg = createTagMessage.trim();
-      await invoke("create_tag", {
+      await createTagMutation.mutateAsync({
         path: repo.path,
         tag: trimmed,
         commit: createTagCommit,
         message: msg.length > 0 ? msg : null,
       });
       closeCreateTagDialog();
-      await refreshAfterMutation();
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -2881,8 +2893,7 @@ export default function App({
     setStashBusy(`pop:${stashRef}`);
     setOperationError(null);
     try {
-      await invoke("stash_pop", { path: repo.path, stashRef });
-      await refreshAfterMutation();
+      await stashPopMutation.mutateAsync({ path: repo.path, stashRef });
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -2900,8 +2911,7 @@ export default function App({
     setStashBusy(`drop:${stashRef}`);
     setOperationError(null);
     try {
-      await invoke("stash_drop", { path: repo.path, stashRef });
-      await refreshAfterMutation();
+      await stashDropMutation.mutateAsync({ path: repo.path, stashRef });
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -2927,8 +2937,7 @@ export default function App({
     setBranchBusy(`delete-tag:${tagName}`);
     setOperationError(null);
     try {
-      await invoke("delete_tag", { path: repo.path, tag: tagName });
-      await refreshAfterMutation();
+      await deleteTagMutation.mutateAsync({ path: repo.path, tag: tagName });
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -2946,8 +2955,7 @@ export default function App({
     setBranchBusy(`delete-remote-tag:${tagName}`);
     setOperationError(null);
     try {
-      await invoke("delete_remote_tag", { path: repo.path, tag: tagName });
-      await refreshAfterMutation();
+      await deleteRemoteTagMutation.mutateAsync({ path: repo.path, tag: tagName });
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -2987,7 +2995,6 @@ export default function App({
       for (const path of nextPaths) next.add(path);
       return next;
     });
-    setWorkingTreeFiles((prev) => applyOptimisticStageChange(prev, nextPaths, "stage"));
     if (
       selectedDiffRepoPath === repo.path &&
       selectedDiffPath !== null &&
@@ -3000,11 +3007,9 @@ export default function App({
       setDiffError(null);
     }
     try {
-      await invoke("stage_paths", { path: repo.path, paths: nextPaths });
-      await refreshAfterMutation();
+      await stagePathsMutation.mutateAsync({ path: repo.path, paths: nextPaths });
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
-      await refreshAfterMutation();
     } finally {
       setSyncingStagePaths((prev) => {
         const next = new Set(prev);
@@ -3024,7 +3029,6 @@ export default function App({
       for (const path of nextPaths) next.add(path);
       return next;
     });
-    setWorkingTreeFiles((prev) => applyOptimisticStageChange(prev, nextPaths, "unstage"));
     if (
       selectedDiffRepoPath === repo.path &&
       selectedDiffPath !== null &&
@@ -3037,11 +3041,9 @@ export default function App({
       setDiffError(null);
     }
     try {
-      await invoke("unstage_paths", { path: repo.path, paths: nextPaths });
-      await refreshAfterMutation();
+      await unstagePathsMutation.mutateAsync({ path: repo.path, paths: nextPaths });
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
-      await refreshAfterMutation();
     } finally {
       setSyncingStagePaths((prev) => {
         const next = new Set(prev);
@@ -3063,14 +3065,12 @@ export default function App({
       });
       try {
         if (mode === "stage") {
-          await invoke("stage_patch", { path: repo.path, patch });
+          await stagePatchMutation.mutateAsync({ path: repo.path, patch });
         } else {
-          await invoke("unstage_patch", { path: repo.path, patch });
+          await unstagePatchMutation.mutateAsync({ path: repo.path, patch });
         }
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
-        await refreshAfterMutation();
       } finally {
         setSyncingStagePaths((prev) => {
           const next = new Set(prev);
@@ -3079,7 +3079,7 @@ export default function App({
         });
       }
     },
-    [repo, syncingStagePaths, refreshAfterMutation],
+    [repo, syncingStagePaths, stagePatchMutation, unstagePatchMutation],
   );
 
   const runDiscardHunkPatch = useCallback(
@@ -3093,11 +3093,9 @@ export default function App({
         return next;
       });
       try {
-        await invoke("discard_patch", { path: repo.path, patch });
-        await refreshAfterMutation();
+        await discardPatchMutation.mutateAsync({ path: repo.path, patch });
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
-        await refreshAfterMutation();
       } finally {
         setSyncingStagePaths((prev) => {
           const next = new Set(prev);
@@ -3106,7 +3104,7 @@ export default function App({
         });
       }
     },
-    [repo, syncingStagePaths, refreshAfterMutation],
+    [discardPatchMutation, repo, syncingStagePaths],
   );
 
   const canShowBranches = Boolean(repo && !repo.error && !loading);
@@ -3350,14 +3348,13 @@ export default function App({
       setOperationError(null);
       try {
         if (amendLastCommit) {
-          await invoke("amend_last_commit", {
+          await amendLastCommitMutation.mutateAsync({
             path: repo.path,
             message: message.length > 0 ? message : null,
           });
         } else {
-          await invoke("commit_staged", { path: repo.path, message });
+          await commitStagedMutation.mutateAsync({ path: repo.path, message });
         }
-        await refreshAfterMutation();
         return true;
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
@@ -3366,7 +3363,7 @@ export default function App({
         setStageCommitBusy(false);
       }
     },
-    [hasStagedFiles, refreshAfterMutation, repo],
+    [amendLastCommitMutation, commitStagedMutation, hasStagedFiles, repo],
   );
   const pushCurrentBranchToOrigin = useCallback(
     async ({ skipHooks }: { skipHooks: boolean }) => {
@@ -3374,18 +3371,17 @@ export default function App({
       setPushBusy(true);
       setOperationError(null);
       try {
-        await invoke("push_to_origin", {
+        await pushToOriginMutation.mutateAsync({
           path: repo.path,
           skipHooks,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setPushBusy(false);
       }
     },
-    [refreshAfterMutation, repo],
+    [pushToOriginMutation, repo],
   );
   const submitCommitAndPush = useCallback(
     async ({ message, skipHooks }: { message: string; skipHooks: boolean }) => {
@@ -3394,23 +3390,21 @@ export default function App({
       setOperationError(null);
       let committed = false;
       try {
-        await invoke("commit_staged", { path: repo.path, message });
+        await commitStagedMutation.mutateAsync({ path: repo.path, message });
         committed = true;
-        await invoke("push_to_origin", {
+        await pushToOriginMutation.mutateAsync({
           path: repo.path,
           skipHooks,
         });
-        await refreshAfterMutation();
         return true;
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
-        void refreshAfterMutation();
         return committed;
       } finally {
         setCommitPushBusy(false);
       }
     },
-    [hasStagedFiles, refreshAfterMutation, repo],
+    [commitStagedMutation, hasStagedFiles, pushToOriginMutation, repo],
   );
 
   /** Branch/stash sidebar hidden; main column spans 9 — when viewing a commit, file diff, history, or blame. */
@@ -3941,7 +3935,12 @@ export default function App({
                             role="status"
                             className="alert text-sm alert-warning"
                             onDismiss={() => {
-                              setRepo((r) => (r ? { ...r, error: null } : null));
+                              updateCurrentRepoSnapshot((snapshot) => ({
+                                ...snapshot,
+                                metadata: snapshot.metadata
+                                  ? { ...snapshot.metadata, error: null }
+                                  : snapshot.metadata,
+                              }));
                             }}
                           >
                             <span>{repo.error}</span>
