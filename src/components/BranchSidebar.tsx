@@ -52,6 +52,25 @@ function IconEyeOff({ className }: { className?: string }) {
   );
 }
 
+function IconChevronRight({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
 function localBranchUpstreamLabel(ahead: number | null, behind: number | null): string | null {
   if (ahead === null || behind === null) return null;
   return `↑${ahead} ↓${behind}`;
@@ -85,9 +104,7 @@ function BranchPanel({
       } ${isLastSection ? "" : "border-b border-base-300"}`}
     >
       <div
-        className={`collapse-arrow collapse border-0 bg-transparent shadow-none ${
-          open ? "min-h-0 flex-1" : ""
-        }`}
+        className={`collapse border-0 bg-transparent shadow-none ${open ? "min-h-0 flex-1" : ""}`}
       >
         <input
           type="checkbox"
@@ -98,13 +115,18 @@ function BranchPanel({
           aria-label={`Show or hide ${title}`}
         />
         <div
-          className={`collapse-title block! min-h-0 min-w-0 px-3! py-2! pr-9! text-left! ${
+          className={`collapse-title block! min-h-0 min-w-0 px-3! py-2! text-left! ${
             open ? "border-b border-base-300/80" : ""
           }`}
         >
-          <h2 className="m-0 card-title text-xs font-semibold tracking-wide uppercase opacity-70">
-            {title} <span className="tabular-nums opacity-90">({entityCount})</span>
-          </h2>
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <h2 className="m-0 card-title min-w-0 text-xs font-semibold tracking-wide uppercase opacity-70">
+              {title} <span className="tabular-nums opacity-90">({entityCount})</span>
+            </h2>
+            <IconChevronRight
+              className={`h-4 w-4 shrink-0 opacity-60 transition-transform ${open ? "rotate-90" : ""}`}
+            />
+          </div>
         </div>
         <div className="collapse-content flex! min-h-0! flex-col gap-0 overflow-hidden! px-0! pb-0!">
           {belowHeader ? (

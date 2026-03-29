@@ -1,5 +1,24 @@
 import { memo, useEffect, useState, type RefObject } from "react";
 
+function IconChevronRight({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
 export interface GitCommandStreamState {
   sessionId: number;
   operation: string;
@@ -33,9 +52,7 @@ export const GitCommandPanel = memo(function GitCommandPanel({
     <div className="card shrink-0 border-base-300 bg-base-100 shadow-sm">
       <div className="card-body gap-0 p-0">
         <div
-          className={`collapse-arrow collapse border-0 bg-transparent shadow-none ${
-            open ? "collapse-open" : ""
-          }`}
+          className={`collapse border-0 bg-transparent shadow-none ${open ? "collapse-open" : ""}`}
         >
           <input
             type="checkbox"
@@ -45,19 +62,28 @@ export const GitCommandPanel = memo(function GitCommandPanel({
             }}
             aria-label="Show or hide git command output"
           />
-          <div className="collapse-title block! min-h-0 min-w-0 border-b border-base-300/80 px-3! py-2! pr-9! text-left!">
-            <h2 className="m-0 text-xs font-semibold tracking-wide uppercase opacity-70">
-              Git command
-            </h2>
-            <p className="mt-0.5 mb-0 text-xs text-base-content/60">
-              {gitCommandStream
-                ? gitCommandStream.finished
-                  ? gitCommandStream.success
-                    ? "Finished"
-                    : "Failed"
-                  : "Running…"
-                : "No recent command output"}
-            </p>
+          <div className="collapse-title block! min-h-0 min-w-0 border-b border-base-300/80 px-3! py-2! text-left!">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="m-0 text-xs font-semibold tracking-wide uppercase opacity-70">
+                  Git command
+                </h2>
+                <p className="mt-0.5 mb-0 text-xs text-base-content/60">
+                  {gitCommandStream
+                    ? gitCommandStream.finished
+                      ? gitCommandStream.success
+                        ? "Finished"
+                        : "Failed"
+                      : "Running…"
+                    : "No recent command output"}
+                </p>
+              </div>
+              <IconChevronRight
+                className={`mt-0.5 h-4 w-4 shrink-0 opacity-60 transition-transform ${
+                  open ? "rotate-90" : ""
+                }`}
+              />
+            </div>
           </div>
           <div className="collapse-content px-0! pt-0! pb-0!">
             <div className="space-y-2 p-3">
