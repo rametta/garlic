@@ -185,7 +185,7 @@ export const CommitComposer = memo(function CommitComposer({
 
   return (
     <section
-      className="flex min-h-0 min-w-0 flex-[1_1_0%] flex-col border-t border-base-300 bg-base-100"
+      className="flex min-h-0 min-w-0 flex-[1_1_0%] flex-col"
       aria-labelledby="sidebar-commit-heading"
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
@@ -257,7 +257,7 @@ export const CommitComposer = memo(function CommitComposer({
           <div className="form-control min-w-0">
             <input
               type="text"
-              className="input-bordered input input-sm w-full font-sans text-sm"
+              className="input input-sm w-full font-sans text-sm"
               placeholder={
                 amendLastCommit ? "Title: leave empty to keep the previous message" : "Title"
               }
@@ -270,7 +270,7 @@ export const CommitComposer = memo(function CommitComposer({
           </div>
           <div className="form-control flex min-h-0 min-w-0 flex-1 flex-col gap-1">
             <textarea
-              className="textarea-bordered textarea min-h-0 w-full flex-1 resize-none overflow-y-auto font-sans text-sm textarea-sm"
+              className="textarea min-h-0 w-full flex-1 resize-none overflow-y-auto font-sans text-sm textarea-sm"
               placeholder="Description"
               value={commitBody}
               disabled={controlsBusy}

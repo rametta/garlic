@@ -4500,7 +4500,7 @@ export default function App({
 
                           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                             {!listsError && worktreeBrowseTarget ? (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden px-4 pt-3 pb-4">
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-4 pt-3 pb-4">
                                 <div className="shrink-0 rounded-xl border border-base-300/80 bg-base-200/35 p-3">
                                   <div className="flex flex-wrap items-start justify-between gap-2">
                                     <button
@@ -4552,7 +4552,7 @@ export default function App({
                                     ) : null}
                                   </div>
                                 </div>
-                                <div className="flex min-h-0 min-w-0 flex-1 flex-row gap-3 overflow-hidden">
+                                <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
                                   <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                                     {!selectedDiffPath ||
                                     selectedDiffRepoPath !== worktreeBrowseTarget.path ? (
@@ -4562,7 +4562,7 @@ export default function App({
                                         </p>
                                       </div>
                                     ) : (
-                                      <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-2">
+                                      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                                         {diffLoading ? (
                                           <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
                                             <span className="loading loading-md loading-spinner text-primary" />
@@ -4620,8 +4620,8 @@ export default function App({
                                       </div>
                                     )}
                                   </div>
-                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-l border-base-300/80">
-                                    <div className="shrink-0 border-b border-base-300/80 pb-2">
+                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-t border-base-300/80">
+                                    <div className="shrink-0 border-b border-base-300/80 py-2">
                                       <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                         <span>Files</span>
                                         {!worktreeBrowseLoading ? (
@@ -4631,7 +4631,7 @@ export default function App({
                                         ) : null}
                                       </h2>
                                     </div>
-                                    <div className="flex min-h-0 flex-1 flex-col pt-2">
+                                    <div className="flex min-h-0 flex-1 flex-col">
                                       {worktreeBrowseLoading ? (
                                         <div className="flex flex-col items-center justify-center gap-2 py-8">
                                           <span className="loading loading-md loading-spinner text-primary" />
@@ -4657,7 +4657,7 @@ export default function App({
                                       ) : (
                                         <div
                                           ref={commitBrowseFileListScrollRef}
-                                          className="m-0 min-h-0 flex-1 overflow-y-auto py-1"
+                                          className="m-0 min-h-0 flex-1 overflow-y-auto"
                                         >
                                           <div
                                             className="relative w-full"
@@ -4784,7 +4784,7 @@ export default function App({
                                 }}
                               />
                             ) : !listsError && commitBrowseHash ? (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                                 <div className="shrink-0 p-3">
                                   <div className="flex flex-wrap items-start justify-between gap-2">
                                     <button
@@ -4953,7 +4953,7 @@ export default function App({
                                     </>
                                   ) : null}
                                 </div>
-                                <div className="flex min-h-0 min-w-0 flex-1 flex-row gap-3 overflow-hidden">
+                                <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
                                   <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                                     {!commitDiffPath ? (
                                       <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-2 py-10">
@@ -4962,7 +4962,7 @@ export default function App({
                                         </p>
                                       </div>
                                     ) : (
-                                      <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-2">
+                                      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                                         {commitDiffLoading ? (
                                           <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
                                             <span className="loading loading-md loading-spinner text-primary" />
@@ -4982,7 +4982,7 @@ export default function App({
                                             </span>
                                           </DismissibleAlert>
                                         ) : (
-                                          <div className="ml-4 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
+                                          <div className="flex-1 overflow-auto border-t border-base-300/80 bg-base-200/30 p-2">
                                             <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
                                               Patch
                                             </div>
@@ -4996,8 +4996,8 @@ export default function App({
                                       </div>
                                     )}
                                   </div>
-                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-l border-base-300/80">
-                                    <div className="shrink-0 border-b border-base-300/80 pb-2">
+                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-t border-base-300/80">
+                                    <div className="shrink-0 border-b border-base-300/80 py-2">
                                       <h2 className="m-0 ml-3 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                         <span>Files</span>
                                         {!commitBrowseLoading ? (
@@ -5007,7 +5007,7 @@ export default function App({
                                         ) : null}
                                       </h2>
                                     </div>
-                                    <div className="flex min-h-0 flex-1 flex-col pt-2">
+                                    <div className="flex min-h-0 flex-1 flex-col">
                                       {commitBrowseLoading ? (
                                         <div className="flex flex-col items-center justify-center gap-2 py-8">
                                           <span className="loading loading-md loading-spinner text-primary" />
@@ -5033,7 +5033,7 @@ export default function App({
                                       ) : (
                                         <div
                                           ref={commitBrowseFileListScrollRef}
-                                          className="m-0 min-h-0 flex-1 overflow-y-auto py-1"
+                                          className="m-0 min-h-0 flex-1 overflow-y-auto"
                                         >
                                           <ul
                                             className="list relative m-0 w-full list-none p-0"
@@ -5244,7 +5244,7 @@ export default function App({
           </section>
         </div>
 
-        <aside className="col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:col-span-3 lg:h-full lg:min-h-0">
+        <aside className="col-span-12 flex min-h-0 min-w-0 lg:col-span-3 lg:h-full lg:min-h-0">
           <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm">
             <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
               <section
