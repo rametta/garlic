@@ -60,7 +60,6 @@ import {
   filterGraphCommits,
   type GraphCommitExportOptions,
   formatCommitsExportTxt,
-  reachableCommitHashesFromHead,
 } from "./graphCommitFilters";
 import {
   combineLineStats,
@@ -649,8 +648,8 @@ const FileBlamePane = memo(function FileBlamePane({
   onDismissError: () => void;
 }) {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 p-3">
         <div className="min-w-0">
           <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
             Blame
@@ -674,7 +673,7 @@ const FileBlamePane = memo(function FileBlamePane({
             <span className="wrap-break-word">{error}</span>
           </DismissibleAlert>
         ) : (
-          <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
+          <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
             {text ?? ""}
           </pre>
         )}
@@ -701,8 +700,8 @@ const FileHistoryPane = memo(function FileHistoryPane({
   onPickCommit: (hash: string) => void;
 }) {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 p-3">
         <div className="min-w-0">
           <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
             File history
@@ -739,20 +738,19 @@ const FileHistoryPane = memo(function FileHistoryPane({
               <li key={commit.hash}>
                 <button
                   type="button"
-                  className="flex w-full flex-col gap-0.5 rounded-lg border border-base-300/50 bg-base-200/40 px-3 py-2 text-left transition-colors hover:border-base-300 hover:bg-base-300/35"
+                  className="flex w-full flex-col gap-0.5 border-y border-base-300/50 bg-base-200/40 px-3 py-2 text-left transition-colors hover:border-base-300 hover:bg-base-300/35"
                   onClick={() => {
                     onPickCommit(commit.hash);
                   }}
                 >
                   <span className="font-mono text-[0.65rem] text-base-content/70">
                     {commit.shortHash}
-                  </span>
-                  <span className="text-sm leading-snug text-base-content/95">
-                    {commit.subject}
-                  </span>
-                  <span className="text-[0.65rem] text-base-content/55">
                     {formatAuthorDisplay(commit.author)} ·{" "}
                     {formatRelativeShort(commit.date) ?? formatDate(commit.date) ?? "—"}
+                  </span>
+
+                  <span className="text-sm leading-snug text-base-content/95">
+                    {commit.subject}
                   </span>
                 </button>
               </li>
@@ -1280,10 +1278,6 @@ export default function App({
     () => new Map(graphDisplayCommits.map((commit, index) => [commit.hash, index] as const)),
     [graphDisplayCommits],
   );
-  const graphCommitsReachableFromHead = useMemo(
-    () => reachableCommitHashesFromHead(commits, repo?.headHash ?? null),
-    [commits, repo?.headHash],
-  );
   const graphHeadFirstParentOrder = useMemo(() => {
     const ordered: string[] = [];
     if (!repo?.headHash) return ordered;
@@ -1386,16 +1380,12 @@ export default function App({
     };
   }, [commits, graphHeadFirstParentIndexByHash, repo?.detached, selectedGraphCommitHashes]);
 
-  const graphExportCommits = useMemo(
-    () => graphFilteredCommits.filter((c) => graphCommitsReachableFromHead.has(c.hash)),
-    [graphFilteredCommits, graphCommitsReachableFromHead],
-  );
   const graphExportListCommits = useMemo(
     () =>
       graphExportIncludeMergeCommits
-        ? graphExportCommits
-        : graphExportCommits.filter((commit) => commit.parentHashes.length < 2),
-    [graphExportCommits, graphExportIncludeMergeCommits],
+        ? graphDisplayCommits
+        : graphDisplayCommits.filter((commit) => commit.parentHashes.length < 2),
+    [graphDisplayCommits, graphExportIncludeMergeCommits],
   );
 
   const clearFileToolView = useCallback(() => {
