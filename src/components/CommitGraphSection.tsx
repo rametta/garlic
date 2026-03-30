@@ -222,9 +222,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
         </span>
       ))}
       {visibleLocalTips.length > 0 && visibleRemoteTips.length > 0 ? (
-        <span className="shrink-0 text-[0.55rem] text-base-content/45" aria-hidden>
-          ·
-        </span>
+        <span className="shrink-0 text-[0.55rem] text-base-content/45" aria-hidden />
       ) : null}
       {visibleRemoteTips.map((r) => (
         <span
