@@ -225,30 +225,6 @@ interface CommitSignatureResultPayload {
   verified: boolean | null;
 }
 
-/** Hook-heavy git subprocess (`run_git_streaming`): command line + live stdout/stderr. */
-interface GitCommandStreamStartedPayload {
-  sessionId: number;
-  repoPath: string;
-  operation: string;
-  commandLine: string;
-}
-
-interface GitCommandStreamLinePayload {
-  sessionId: number;
-  repoPath: string;
-  operation: string;
-  stream: string;
-  line: string;
-}
-
-interface GitCommandStreamFinishedPayload {
-  sessionId: number;
-  repoPath: string;
-  operation: string;
-  success: boolean;
-  error?: string | null;
-}
-
 /** One file changed in a commit from `list_commit_files`. */
 export interface CommitFileEntry {
   path: string;
@@ -886,20 +862,6 @@ export default function App({
   const cloneProgressMaxPercentRef = useRef<number | null>(null);
   const cloneProgressRafRef = useRef<number | null>(null);
   const cloneLogScrollRef = useRef<HTMLDivElement | null>(null);
-  /** Live output from `run_git_streaming` (commit, push, hooks, etc.). */
-  const [gitCommandStream, setGitCommandStream] = useState<{
-    sessionId: number;
-    operation: string;
-    commandLine: string;
-    lines: { stream: string; text: string }[];
-    finished: boolean;
-    success: boolean | null;
-    error: string | null;
-  } | null>(null);
-  const gitCommandStreamScrollRef = useRef<HTMLDivElement | null>(null);
-  const gitStreamSessionRef = useRef<number | null>(null);
-  const gitCommandStreamPendingLinesRef = useRef<{ stream: string; text: string }[]>([]);
-  const gitCommandStreamFlushRafRef = useRef<number | null>(null);
   const [commits, setCommits] = useState<CommitEntry[]>(() => startup.commits);
   const [graphCommitsHasMore, setGraphCommitsHasMore] = useState(() => startup.graphCommitsHasMore);
   const [loadingMoreGraphCommits, setLoadingMoreGraphCommits] = useState(false);
@@ -2019,45 +1981,6 @@ export default function App({
     if (el) el.scrollTop = el.scrollHeight;
   }, [cloneLogLines, cloneProgress]);
 
-  useEffect(() => {
-    setGitCommandStream(null);
-    gitStreamSessionRef.current = null;
-    gitCommandStreamPendingLinesRef.current = [];
-    if (gitCommandStreamFlushRafRef.current !== null) {
-      cancelAnimationFrame(gitCommandStreamFlushRafRef.current);
-      gitCommandStreamFlushRafRef.current = null;
-    }
-  }, [repo?.path]);
-
-  useLayoutEffect(() => {
-    if (!gitCommandStream) return;
-    const el = gitCommandStreamScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [gitCommandStream]);
-
-  const flushPendingGitCommandStreamLines = useCallback(() => {
-    gitCommandStreamFlushRafRef.current = null;
-    const pendingLines = gitCommandStreamPendingLinesRef.current;
-    if (pendingLines.length === 0) return;
-    gitCommandStreamPendingLinesRef.current = [];
-    setGitCommandStream((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        lines: [...prev.lines, ...pendingLines].slice(-400),
-      };
-    });
-  }, []);
-
-  useEffect(
-    () => () => {
-      if (gitCommandStreamFlushRafRef.current !== null) {
-        cancelAnimationFrame(gitCommandStreamFlushRafRef.current);
-      }
-    },
-    [],
-  );
-
   const openCloneRepoDialog = useCallback(() => {
     setCloneRepoUrlDraft("https://github.com/");
     setOperationError(null);
@@ -3151,57 +3074,6 @@ export default function App({
         }
         handleCloneCompletePayloadListenerRef.current(p);
       }),
-      listen<GitCommandStreamStartedPayload>("git-command-stream-started", (e) => {
-        const p = e.payload;
-        if (activeRepoPathRef.current !== p.repoPath) return;
-        gitCommandStreamPendingLinesRef.current = [];
-        if (gitCommandStreamFlushRafRef.current !== null) {
-          cancelAnimationFrame(gitCommandStreamFlushRafRef.current);
-          gitCommandStreamFlushRafRef.current = null;
-        }
-        gitStreamSessionRef.current = p.sessionId;
-        setGitCommandStream({
-          sessionId: p.sessionId,
-          operation: p.operation,
-          commandLine: p.commandLine,
-          lines: [],
-          finished: false,
-          success: null,
-          error: null,
-        });
-      }),
-      listen<GitCommandStreamLinePayload>("git-command-stream-line", (e) => {
-        const p = e.payload;
-        if (activeRepoPathRef.current !== p.repoPath) return;
-        if (gitStreamSessionRef.current !== p.sessionId) return;
-        gitCommandStreamPendingLinesRef.current.push({ stream: p.stream, text: p.line });
-        if (gitCommandStreamFlushRafRef.current !== null) return;
-        gitCommandStreamFlushRafRef.current = requestAnimationFrame(() => {
-          flushPendingGitCommandStreamLines();
-        });
-      }),
-      listen<GitCommandStreamFinishedPayload>("git-command-stream-finished", (e) => {
-        const p = e.payload;
-        if (activeRepoPathRef.current !== p.repoPath) return;
-        if (gitStreamSessionRef.current !== p.sessionId) return;
-        if (gitCommandStreamFlushRafRef.current !== null) {
-          cancelAnimationFrame(gitCommandStreamFlushRafRef.current);
-          gitCommandStreamFlushRafRef.current = null;
-        }
-        const pendingLines = gitCommandStreamPendingLinesRef.current;
-        gitCommandStreamPendingLinesRef.current = [];
-        setGitCommandStream((prev) => {
-          if (!prev || prev.sessionId !== p.sessionId) return prev;
-          return {
-            ...prev,
-            lines:
-              pendingLines.length > 0 ? [...prev.lines, ...pendingLines].slice(-400) : prev.lines,
-            finished: true,
-            success: p.success,
-            error: p.error ?? null,
-          };
-        });
-      }),
     ]);
 
     return () => {
@@ -3225,7 +3097,6 @@ export default function App({
     openOpenAiSettingsDialogListenerRef,
     scheduleRepositoryMutationRefresh,
     scheduleCloneProgressUiFlushListenerRef,
-    flushPendingGitCommandStreamLines,
   ]);
 
   useEffect(() => {
@@ -3820,10 +3691,6 @@ export default function App({
     if (!preferredWipFile) return;
     void loadDiffForFile(preferredWipFile, preferredWipFile.unstaged ? "unstaged" : "staged");
   }, [loadDiffForFile, preferredWipFile]);
-  const clearGitCommandStream = useCallback(() => {
-    setGitCommandStream(null);
-    gitStreamSessionRef.current = null;
-  }, []);
   const handleCheckoutLocal = useCallback(
     (branchName: string) => {
       void onCheckoutLocal(branchName);
@@ -4443,12 +4310,7 @@ export default function App({
             openGraphStashMenu={openGraphStashMenu}
             openTagSidebarMenu={openTagSidebarMenu}
           />
-          <GitCommandPanel
-            repoPath={repo?.path ?? null}
-            gitCommandStream={gitCommandStream}
-            scrollRef={gitCommandStreamScrollRef}
-            onClear={clearGitCommandStream}
-          />
+          <GitCommandPanel repoPath={repo?.path ?? null} />
         </aside>
 
         <div

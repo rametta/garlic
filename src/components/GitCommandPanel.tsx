@@ -1,5 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { memo, useEffect, useMemo, useState, type RefObject } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { clearGitCommandStream, useGitCommandStream } from "../gitCommandStreamStore";
 
 const GITLAB_MERGE_REQUEST_URL_RE = /\bhttps?:\/\/[^\s)]+\/-\/merge_requests\/\d+\b/;
 
@@ -30,30 +31,14 @@ function IconChevronRight({ className }: { className?: string }) {
   );
 }
 
-export interface GitCommandStreamState {
-  sessionId: number;
-  operation: string;
-  commandLine: string;
-  lines: { stream: string; text: string }[];
-  finished: boolean;
-  success: boolean | null;
-  error: string | null;
-}
-
 export interface GitCommandPanelProps {
   repoPath: string | null;
-  gitCommandStream: GitCommandStreamState | null;
-  scrollRef: RefObject<HTMLDivElement | null>;
-  onClear: () => void;
 }
 
-export const GitCommandPanel = memo(function GitCommandPanel({
-  repoPath,
-  gitCommandStream,
-  scrollRef,
-  onClear,
-}: GitCommandPanelProps) {
+export const GitCommandPanel = memo(function GitCommandPanel({ repoPath }: GitCommandPanelProps) {
   const [open, setOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const gitCommandStream = useGitCommandStream(repoPath);
   const mergeRequestUrl = useMemo(
     () => (gitCommandStream ? extractMergeRequestUrl(gitCommandStream.lines) : null),
     [gitCommandStream],
@@ -68,6 +53,12 @@ export const GitCommandPanel = memo(function GitCommandPanel({
       setOpen(true);
     }
   }, [mergeRequestUrl]);
+
+  useLayoutEffect(() => {
+    if (!gitCommandStream) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [gitCommandStream]);
 
   return (
     <div className="card shrink-0 border-base-300 bg-base-100 shadow-sm">
@@ -138,7 +129,9 @@ export const GitCommandPanel = memo(function GitCommandPanel({
                       <button
                         type="button"
                         className="btn shrink-0 btn-ghost btn-xs"
-                        onClick={onClear}
+                        onClick={() => {
+                          clearGitCommandStream(repoPath);
+                        }}
                       >
                         Clear
                       </button>
