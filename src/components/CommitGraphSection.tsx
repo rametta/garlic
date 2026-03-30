@@ -36,7 +36,11 @@ export interface CommitGraphSectionProps {
   graphCommitsHasMore: boolean;
   loadingMoreGraphCommits: boolean;
   loadMoreGraphCommits: () => void;
-  onRowCommitSelect: (hash: string) => void;
+  selectedCommitHashes: ReadonlySet<string>;
+  onRowCommitSelect: (
+    hash: string,
+    options: { toggleSelection: boolean; rangeSelection: boolean },
+  ) => void;
   openGraphBranchLocalMenu: (branchName: string, clientX: number, clientY: number) => void;
   openGraphBranchRemoteMenu: (fullRef: string, clientX: number, clientY: number) => void;
   openGraphStashMenu: (stashRef: string, clientX: number, clientY: number) => void;
@@ -146,11 +150,13 @@ function computeRowLaneMeta(
 
 function getGraphRowBackgroundClass(args: {
   isBrowsing: boolean;
+  isSelected: boolean;
   isGraphFocus: boolean;
   isHeadBranchTipRow: boolean;
   isActiveBranchCommitRow: boolean;
 }): string {
   if (args.isBrowsing) return "bg-primary/20";
+  if (args.isSelected) return "bg-secondary/12";
   if (args.isGraphFocus) return "bg-accent/15";
   if (args.isHeadBranchTipRow) return "bg-primary/15";
   if (args.isActiveBranchCommitRow) return "bg-primary/8";
@@ -165,6 +171,7 @@ type VirtualRowProps = {
   laneMeta: RowLaneMeta;
   currentBranchLabelVisibleInRows: boolean;
   commitBrowseHash: string | null;
+  isSelected: boolean;
   graphFocusHash: string | null;
   currentBranchTipHash: string | null;
   currentBranchName: string | null;
@@ -174,7 +181,10 @@ type VirtualRowProps = {
   pushBusy: boolean;
   stashBusy: string | null;
   commitsSectionTitle: string;
-  onRowCommitSelect: (hash: string) => void;
+  onRowCommitSelect: (
+    hash: string,
+    options: { toggleSelection: boolean; rangeSelection: boolean },
+  ) => void;
   openGraphBranchLocalMenu: (branchName: string, clientX: number, clientY: number) => void;
   openGraphBranchRemoteMenu: (fullRef: string, clientX: number, clientY: number) => void;
   openGraphStashMenu: (stashRef: string, clientX: number, clientY: number) => void;
@@ -190,6 +200,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   laneMeta,
   currentBranchLabelVisibleInRows,
   commitBrowseHash,
+  isSelected,
   graphFocusHash,
   currentBranchTipHash,
   currentBranchName,
@@ -318,6 +329,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   const rowRule = idx < commitsLength - 1 ? "border-b border-base-300/40" : "";
   const rowBackgroundClass = getGraphRowBackgroundClass({
     isBrowsing,
+    isSelected,
     isGraphFocus,
     isHeadBranchTipRow,
     isActiveBranchCommitRow,
@@ -338,16 +350,21 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
         className={`grid h-full min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left text-[0.6875rem] leading-tight transition-colors ${rowRule} ${
           isBrowsing
             ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
-            : isGraphFocus
-              ? "bg-accent/15 ring-1 ring-accent/30 ring-inset"
-              : isHeadBranchTipRow
-                ? "bg-primary/15 hover:bg-primary/24 hover:ring-1 hover:ring-primary/22 hover:ring-inset"
-                : isActiveBranchCommitRow
-                  ? "bg-primary/8 hover:bg-primary/14 hover:ring-1 hover:ring-primary/16 hover:ring-inset"
-                  : "hover:bg-base-300/70 hover:ring-1 hover:ring-base-content/10 hover:ring-inset"
+            : isSelected
+              ? "bg-secondary/12 ring-1 ring-secondary/18 ring-inset hover:bg-secondary/18"
+              : isGraphFocus
+                ? "bg-accent/15 ring-1 ring-accent/30 ring-inset"
+                : isHeadBranchTipRow
+                  ? "bg-primary/15 hover:bg-primary/24 hover:ring-1 hover:ring-primary/22 hover:ring-inset"
+                  : isActiveBranchCommitRow
+                    ? "bg-primary/8 hover:bg-primary/14 hover:ring-1 hover:ring-primary/16 hover:ring-inset"
+                    : "hover:bg-base-300/70 hover:ring-1 hover:ring-base-content/10 hover:ring-inset"
         }`}
-        onClick={() => {
-          onRowCommitSelect(c.hash);
+        onClick={(e) => {
+          onRowCommitSelect(c.hash, {
+            toggleSelection: e.metaKey || e.ctrlKey,
+            rangeSelection: e.shiftKey,
+          });
         }}
         onContextMenu={(e) => {
           if (!nativeContextMenusAvailable()) return;
@@ -468,6 +485,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   graphCommitsHasMore,
   loadingMoreGraphCommits,
   loadMoreGraphCommits,
+  selectedCommitHashes,
   onRowCommitSelect,
   openGraphBranchLocalMenu,
   openGraphBranchRemoteMenu,
@@ -826,6 +844,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                   const isBrowsing = commitBrowseHash === c.hash;
                   const isGraphFocus =
                     graphFocusHash !== null && c.hash === graphFocusHash && !isBrowsing;
+                  const isSelected = selectedCommitHashes.has(c.hash);
                   const isHeadBranchTipRow =
                     currentBranchTipHash !== null && c.hash === currentBranchTipHash;
                   const isActiveBranchCommitRow =
@@ -834,6 +853,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                     activeFirstParentHashes.has(c.hash);
                   const rowBackgroundClass = getGraphRowBackgroundClass({
                     isBrowsing,
+                    isSelected,
                     isGraphFocus,
                     isHeadBranchTipRow,
                     isActiveBranchCommitRow,
@@ -959,6 +979,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                       laneMeta={rowLaneMetas[commitIdx]}
                       currentBranchLabelVisibleInRows={currentBranchLabelVisibleInRows}
                       commitBrowseHash={commitBrowseHash}
+                      isSelected={selectedCommitHashes.has(c.hash)}
                       graphFocusHash={graphFocusHash}
                       currentBranchTipHash={currentBranchTipHash}
                       currentBranchName={currentBranchName}

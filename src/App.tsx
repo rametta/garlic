@@ -97,6 +97,7 @@ import {
   useStashDropMutation,
   useStashPopMutation,
   useStashPushMutation,
+  useSquashCommitsMutation,
   useUnstagePatchMutation,
   useUnstagePathsMutation,
 } from "./repoMutations";
@@ -337,6 +338,18 @@ function tagNameValidationError(name: string): string | null {
   const err = branchNameValidationError(name);
   if (err === null) return null;
   return err.replace(/Branch names/g, "Tag names");
+}
+
+function buildDefaultSquashCommitMessage(commitsNewestFirst: CommitEntry[]): string {
+  const newest = commitsNewestFirst[0];
+  if (!newest) return "";
+  if (commitsNewestFirst.length === 1) return newest.subject;
+  return [
+    newest.subject,
+    "",
+    "Squashed commits:",
+    ...[...commitsNewestFirst].reverse().map((commit) => `- ${commit.shortHash} ${commit.subject}`),
+  ].join("\n");
 }
 
 /** Tauri `invoke` may reject with a string or a non-Error object; normalize for display. */
@@ -948,6 +961,8 @@ export default function App({
   /** Skip local Git hooks (e.g. pre-push) for push actions. */
   const [graphFocusHash, setGraphFocusHash] = useState<string | null>(null);
   const [graphScrollNonce, setGraphScrollNonce] = useState(0);
+  const [selectedGraphCommitHashes, setSelectedGraphCommitHashes] = useState<string[]>([]);
+  const [graphSelectionAnchorHash, setGraphSelectionAnchorHash] = useState<string | null>(null);
   const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null);
   const [fileHistoryCommits, setFileHistoryCommits] = useState<CommitEntry[]>([]);
   const [fileHistoryLoading, setFileHistoryLoading] = useState(false);
@@ -960,6 +975,9 @@ export default function App({
     ? worktreeBrowseFiles.length
     : commitBrowseFiles.length;
   const [createBranchDialogOpen, setCreateBranchDialogOpen] = useState(false);
+  const [squashDialogOpen, setSquashDialogOpen] = useState(false);
+  const [squashCommitMessage, setSquashCommitMessage] = useState("");
+  const [squashCommitFieldError, setSquashCommitFieldError] = useState<string | null>(null);
   const commitBrowseFileListScrollRef = useRef<HTMLDivElement>(null);
   const commitBrowseFileVirtualizer = useVirtualizer({
     count: inspectorFileCount,
@@ -988,6 +1006,7 @@ export default function App({
   const createBranchFromRemoteMutation = useCreateBranchFromRemoteMutation();
   const cherryPickCommitMutation = useCherryPickCommitMutation();
   const dropCommitMutation = useDropCommitMutation();
+  const squashCommitsMutation = useSquashCommitsMutation();
   const discardPathChangesMutation = useDiscardPathChangesMutation();
   const pushTagToOriginMutation = usePushTagToOriginMutation();
   const createBranchAtCommitMutation = useCreateBranchAtCommitMutation();
@@ -1271,23 +1290,123 @@ export default function App({
     graphDateFrom.trim().length > 0 ||
     graphDateTo.trim().length > 0;
 
+  const selectedGraphCommitHashSet = useMemo(
+    () => new Set(selectedGraphCommitHashes),
+    [selectedGraphCommitHashes],
+  );
+  const selectedGraphCommitEntries = useMemo(
+    () => graphDisplayCommits.filter((commit) => selectedGraphCommitHashSet.has(commit.hash)),
+    [graphDisplayCommits, selectedGraphCommitHashSet],
+  );
+  const graphDisplayIndexByHash = useMemo(
+    () => new Map(graphDisplayCommits.map((commit, index) => [commit.hash, index] as const)),
+    [graphDisplayCommits],
+  );
   const graphCommitsReachableFromHead = useMemo(
     () => reachableCommitHashesFromHead(commits, repo?.headHash ?? null),
     [commits, repo?.headHash],
   );
-  const graphHeadFirstParentHashes = useMemo(() => {
-    const hashes = new Set<string>();
-    if (!repo?.headHash) return hashes;
+  const graphHeadFirstParentOrder = useMemo(() => {
+    const ordered: string[] = [];
+    if (!repo?.headHash) return ordered;
     const byHash = new Map(commits.map((commit) => [commit.hash, commit] as const));
     let next: string | undefined = repo.headHash;
     while (next) {
-      hashes.add(next);
+      ordered.push(next);
       const commit = byHash.get(next);
       if (!commit) break;
       next = commit.parentHashes[0];
     }
-    return hashes;
+    return ordered;
   }, [commits, repo?.headHash]);
+  const graphHeadFirstParentIndexByHash = useMemo(
+    () => new Map(graphHeadFirstParentOrder.map((hash, index) => [hash, index] as const)),
+    [graphHeadFirstParentOrder],
+  );
+  const graphHeadFirstParentHashes = useMemo(() => {
+    const hashes = new Set<string>();
+    for (const hash of graphHeadFirstParentOrder) {
+      hashes.add(hash);
+    }
+    return hashes;
+  }, [graphHeadFirstParentOrder]);
+
+  const selectedGraphSquashState = useMemo(() => {
+    const empty = {
+      canSquash: false,
+      reason:
+        selectedGraphCommitHashes.length === 0 ? null : "Select at least two commits to squash.",
+      orderedEntries: [] as CommitEntry[],
+      defaultMessage: "",
+    };
+    if (selectedGraphCommitHashes.length === 0) return empty;
+    if (repo?.detached) {
+      return {
+        ...empty,
+        reason: "Squashing commits requires the current branch to be checked out.",
+      };
+    }
+    const byHash = new Map(commits.map((commit) => [commit.hash, commit] as const));
+    const ordered: { index: number; commit: CommitEntry }[] = [];
+    for (const hash of selectedGraphCommitHashes) {
+      const commit = byHash.get(hash);
+      if (!commit) {
+        return {
+          ...empty,
+          reason: "Some selected commits are no longer loaded in the graph.",
+        };
+      }
+      if (commit.stashRef?.trim()) {
+        return {
+          ...empty,
+          reason: "Stash entries cannot be squashed.",
+        };
+      }
+      if (commit.parentHashes.length === 0) {
+        return {
+          ...empty,
+          reason: "Squashing the root commit is not supported yet.",
+        };
+      }
+      if (commit.parentHashes.length > 1) {
+        return {
+          ...empty,
+          reason: "Merge commits cannot be squashed yet.",
+        };
+      }
+      const index = graphHeadFirstParentIndexByHash.get(hash);
+      if (index === undefined) {
+        return {
+          ...empty,
+          reason: "Only commits on the current branch's primary history can be squashed.",
+        };
+      }
+      ordered.push({ index, commit });
+    }
+    ordered.sort((a, b) => a.index - b.index);
+    for (let i = 1; i < ordered.length; i += 1) {
+      if (ordered[i]?.index !== ordered[i - 1]?.index + 1) {
+        return {
+          ...empty,
+          orderedEntries: ordered.map((entry) => entry.commit),
+          reason: "Selected commits must be consecutive on the current branch's primary history.",
+        };
+      }
+    }
+    if (ordered.length < 2) {
+      return {
+        ...empty,
+        orderedEntries: ordered.map((entry) => entry.commit),
+      };
+    }
+    const orderedEntries = ordered.map((entry) => entry.commit);
+    return {
+      canSquash: true,
+      reason: null,
+      orderedEntries,
+      defaultMessage: buildDefaultSquashCommitMessage(orderedEntries),
+    };
+  }, [commits, graphHeadFirstParentIndexByHash, repo?.detached, selectedGraphCommitHashes]);
 
   const graphExportCommits = useMemo(
     () => graphFilteredCommits.filter((c) => graphCommitsReachableFromHead.has(c.hash)),
@@ -1388,6 +1507,15 @@ export default function App({
       clearCommitBrowse();
     }
   }, [graphFilteredCommits, commitBrowseHash, clearCommitBrowse]);
+
+  useEffect(() => {
+    const visibleHashes = new Set(graphDisplayCommits.map((commit) => commit.hash));
+    setSelectedGraphCommitHashes((prev) => {
+      const next = prev.filter((hash) => visibleHashes.has(hash));
+      return next.length === prev.length ? prev : next;
+    });
+    setGraphSelectionAnchorHash((prev) => (prev && visibleHashes.has(prev) ? prev : null));
+  }, [graphDisplayCommits]);
 
   useEffect(() => {
     if (!worktreeBrowseTarget) return;
@@ -2001,6 +2129,31 @@ export default function App({
     setCreateTagCommit(null);
   }, []);
 
+  const clearGraphCommitSelection = useCallback(() => {
+    setSelectedGraphCommitHashes([]);
+    setGraphSelectionAnchorHash(null);
+  }, []);
+
+  const closeSquashDialog = useCallback(() => {
+    setSquashDialogOpen(false);
+    setSquashCommitMessage("");
+    setSquashCommitFieldError(null);
+  }, []);
+
+  const openSquashDialog = useCallback(() => {
+    if (!selectedGraphSquashState.canSquash) return;
+    setOperationError(null);
+    setSquashCommitMessage(selectedGraphSquashState.defaultMessage);
+    setSquashCommitFieldError(null);
+    setSquashDialogOpen(true);
+  }, [selectedGraphSquashState]);
+
+  useEffect(() => {
+    if (!squashDialogOpen) return;
+    if (selectedGraphSquashState.canSquash) return;
+    closeSquashDialog();
+  }, [closeSquashDialog, selectedGraphSquashState.canSquash, squashDialogOpen]);
+
   const refreshAfterMutation = useCallback(
     async (options?: { fromFocus?: boolean; fromWatcher?: boolean }) => {
       const fromFocus = options?.fromFocus ?? false;
@@ -2208,6 +2361,7 @@ export default function App({
 
   const cloneRepoDialogBackdropClose = useDialogBackdropClose(closeCloneRepoDialog);
   const createBranchDialogBackdropClose = useDialogBackdropClose(closeCreateBranchDialog);
+  const squashDialogBackdropClose = useDialogBackdropClose(closeSquashDialog);
   const createTagDialogBackdropClose = useDialogBackdropClose(closeCreateTagDialog);
   const editOriginUrlDialogBackdropClose = useDialogBackdropClose(closeEditOriginUrlDialog);
 
@@ -2234,20 +2388,31 @@ export default function App({
   const pullLocalBranch = useCallback(
     async (branchName: string) => {
       if (!repo?.path || repo.error) return;
+      const pathAtStart = repo.path;
+      const shouldFocusCurrentHead = !repo.detached && repo.branch === branchName;
       setBranchBusy(`pull:${branchName}`);
       setOperationError(null);
       try {
         await pullLocalBranchMutation.mutateAsync({
-          path: repo.path,
+          path: pathAtStart,
           branch: branchName,
         });
+        if (shouldFocusCurrentHead) {
+          const meta = await invoke<RepoMetadata>("get_repo_metadata", {
+            path: pathAtStart,
+          });
+          const headHash = meta.headHash?.trim() || null;
+          if (activeRepoPathRef.current === pathAtStart && !meta.error && headHash) {
+            focusGraphOnCommitHash(headHash);
+          }
+        }
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, pullLocalBranchMutation],
+    [repo, pullLocalBranchMutation, focusGraphOnCommitHash],
   );
 
   const deleteLocalBranch = useCallback(
@@ -2797,7 +2962,10 @@ export default function App({
           Boolean(branchBusy) ||
           Boolean(repo?.detached) ||
           Boolean(repo?.headHash && repo.headHash === hash),
-        onBrowse: () => void selectCommit(hash),
+        onBrowse: () => {
+          clearGraphCommitSelection();
+          void selectCommit(hash);
+        },
         onCherryPick: () => void cherryPickCommit(hash),
         onDropCommit: () => void dropCommit(hash),
         onRebaseCurrentOnto: () => void rebaseCurrentBranchOntoCommit(hash),
@@ -2825,6 +2993,7 @@ export default function App({
       repo,
       commits,
       graphHeadFirstParentHashes,
+      clearGraphCommitSelection,
       selectCommit,
       cherryPickCommit,
       dropCommit,
@@ -3156,6 +3325,32 @@ export default function App({
       setBranchBusy(null);
       if (startedPush) setPushBusy(false);
       setCreateTagSubmitAction(null);
+    }
+  }
+
+  async function submitSquashSelectedCommits() {
+    const trimmed = squashCommitMessage.trim();
+    if (!repo?.path || repo.error) return;
+    if (!selectedGraphSquashState.canSquash) return;
+    if (!trimmed) {
+      setSquashCommitFieldError("Enter a commit message.");
+      return;
+    }
+    setSquashCommitFieldError(null);
+    setBranchBusy("squash");
+    setOperationError(null);
+    try {
+      await squashCommitsMutation.mutateAsync({
+        path: repo.path,
+        commitHashes: selectedGraphSquashState.orderedEntries.map((commit) => commit.hash),
+        message: trimmed,
+      });
+      clearGraphCommitSelection();
+      closeSquashDialog();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setBranchBusy(null);
     }
   }
 
@@ -3580,10 +3775,43 @@ export default function App({
     void loadMoreGraphCommits();
   }, [loadMoreGraphCommits]);
   const handleGraphRowCommitSelect = useCallback(
-    (hash: string) => {
+    (hash: string, options: { toggleSelection: boolean; rangeSelection: boolean }) => {
+      if (options.rangeSelection) {
+        const anchorHash = graphSelectionAnchorHash ?? hash;
+        const anchorIndex = graphDisplayIndexByHash.get(anchorHash);
+        const targetIndex = graphDisplayIndexByHash.get(hash);
+        if (anchorIndex === undefined || targetIndex === undefined) {
+          setSelectedGraphCommitHashes([hash]);
+          setGraphSelectionAnchorHash(hash);
+          return;
+        }
+        const start = Math.min(anchorIndex, targetIndex);
+        const end = Math.max(anchorIndex, targetIndex);
+        const nextSelection = graphDisplayCommits
+          .slice(start, end + 1)
+          .map((commit) => commit.hash);
+        setSelectedGraphCommitHashes(nextSelection);
+        setGraphSelectionAnchorHash(anchorHash);
+        return;
+      }
+      if (options.toggleSelection) {
+        setSelectedGraphCommitHashes((prev) =>
+          prev.includes(hash) ? prev.filter((entry) => entry !== hash) : [...prev, hash],
+        );
+        setGraphSelectionAnchorHash(hash);
+        return;
+      }
+      clearGraphCommitSelection();
+      setGraphSelectionAnchorHash(hash);
       void selectCommit(hash);
     },
-    [selectCommit],
+    [
+      clearGraphCommitSelection,
+      graphDisplayCommits,
+      graphDisplayIndexByHash,
+      graphSelectionAnchorHash,
+      selectCommit,
+    ],
   );
   const handleExportGraphCommits = useCallback(() => {
     void exportFilteredCommitsList();
@@ -3897,6 +4125,101 @@ export default function App({
                       <span className="loading loading-sm loading-spinner" />
                     ) : (
                       "Create"
+                    )}
+                  </button>
+                </div>
+              </div>
+            </dialog>
+          ) : null}
+
+          {squashDialogOpen ? (
+            <dialog
+              open
+              className="modal"
+              onCancel={(e) => {
+                e.preventDefault();
+                closeSquashDialog();
+              }}
+              onMouseDown={squashDialogBackdropClose.onMouseDown}
+              onMouseUp={squashDialogBackdropClose.onMouseUp}
+            >
+              <div
+                className="modal-box max-w-2xl"
+                onClick={(e) => {
+                  e.stopPropagation();
+                }}
+              >
+                <h3 className="m-0 text-lg font-bold">Squash selected commits</h3>
+                <p className="mt-1 mb-0 text-sm text-base-content/70">
+                  Combines the selected commits into one commit and rewrites this branch&apos;s
+                  history.
+                </p>
+                <div className="mt-4 rounded-box border border-base-300/80 bg-base-200/50">
+                  <div className="border-b border-base-300/80 px-3 py-2 text-[0.65rem] font-semibold tracking-wide text-base-content/55 uppercase">
+                    Selected commits
+                  </div>
+                  <div className="max-h-40 overflow-y-auto px-3 py-2">
+                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                      {[...selectedGraphSquashState.orderedEntries].reverse().map((commit) => (
+                        <li
+                          key={commit.hash}
+                          className="flex items-start gap-2 rounded-md px-2 py-1.5 text-sm text-base-content/80"
+                        >
+                          <code className="shrink-0 text-[0.72rem] text-base-content/55">
+                            {commit.shortHash}
+                          </code>
+                          <span className="min-w-0 truncate">{commit.subject}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                <label className="form-control mt-4 block w-full">
+                  <span className="label-text mb-1">New commit message</span>
+                  <textarea
+                    autoFocus
+                    className="textarea-bordered textarea min-h-40 w-full font-mono text-sm"
+                    value={squashCommitMessage}
+                    disabled={branchBusy === "squash"}
+                    onChange={(e) => {
+                      setSquashCommitMessage(e.target.value);
+                      if (squashCommitFieldError) setSquashCommitFieldError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                        e.preventDefault();
+                        void submitSquashSelectedCommits();
+                      }
+                    }}
+                  />
+                  {squashCommitFieldError ? (
+                    <span className="label-text-alt mt-1 block w-full text-error">
+                      {squashCommitFieldError}
+                    </span>
+                  ) : null}
+                </label>
+                <div className="modal-action">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={branchBusy === "squash"}
+                    onClick={closeSquashDialog}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={branchBusy === "squash" || !selectedGraphSquashState.canSquash}
+                    onClick={() => void submitSquashSelectedCommits()}
+                  >
+                    {branchBusy === "squash" ? (
+                      <>
+                        <span className="loading loading-sm loading-spinner" />
+                        Squashing...
+                      </>
+                    ) : (
+                      "Squash commits"
                     )}
                   </button>
                 </div>
@@ -4884,60 +5207,98 @@ export default function App({
                                 </div>
                               </div>
                             ) : (
-                              <CommitGraphSection
-                                commits={graphDisplayCommits}
-                                commitGraphLayout={commitGraphLayout!}
-                                localBranches={localBranches}
-                                remoteBranches={remoteBranches}
-                                tags={tags}
-                                graphBranchVisible={graphBranchVisible}
-                                remoteGraphDefaultVisible={remoteGraphDefaultsVisible}
-                                currentBranchName={currentBranchName}
-                                currentBranchTipHash={currentBranchTipHash}
-                                activeFirstParentHashes={graphHeadFirstParentHashes}
-                                highlightActiveBranchRows={highlightActiveBranchRows}
-                                commitBrowseHash={commitBrowseHash}
-                                graphFocusHash={graphFocusHash}
-                                graphScrollNonce={graphScrollNonce}
-                                branchBusy={branchBusy}
-                                stashBusy={stashBusy}
-                                commitsSectionTitle={commitsSectionTitle}
-                                emptyMessage={
-                                  commits.length === 0
-                                    ? "No commits to show"
-                                    : "No commits match the current filters"
-                                }
-                                graphCommitsHasMore={graphCommitsHasMore}
-                                loadingMoreGraphCommits={loadingMoreGraphCommits}
-                                loadMoreGraphCommits={handleLoadMoreGraphCommits}
-                                onRowCommitSelect={handleGraphRowCommitSelect}
-                                openGraphBranchLocalMenu={openGraphBranchLocalMenu}
-                                openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
-                                openGraphStashMenu={openGraphStashMenu}
-                                openGraphCommitMenu={openGraphCommitMenu}
-                                openGraphTagMenu={openGraphTagMenu}
-                                pushBusy={pushBusy}
-                                graphAuthorFilter={graphAuthorFilter}
-                                onGraphAuthorFilterChange={setGraphAuthorFilter}
-                                graphDateFrom={graphDateFrom}
-                                graphDateTo={graphDateTo}
-                                onGraphDateFromChange={setGraphDateFrom}
-                                onGraphDateToChange={setGraphDateTo}
-                                graphExportIncludeHash={graphExportIncludeHash}
-                                onGraphExportIncludeHashChange={setGraphExportIncludeHash}
-                                graphExportIncludeMergeCommits={graphExportIncludeMergeCommits}
-                                onGraphExportIncludeMergeCommitsChange={
-                                  setGraphExportIncludeMergeCommits
-                                }
-                                graphExportIncludeAuthor={graphExportIncludeAuthor}
-                                onGraphExportIncludeAuthorChange={setGraphExportIncludeAuthor}
-                                graphFiltersActive={graphCommitFiltersActive}
-                                onClearGraphFilters={clearGraphFilters}
-                                onExportGraphCommits={handleExportGraphCommits}
-                                exportGraphCommitsDisabled={graphExportListCommits.length === 0}
-                                wipChangedFileCount={wipChangedFileCount}
-                                onWipSelect={handleSelectWipRow}
-                              />
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                                {selectedGraphCommitEntries.length > 0 ? (
+                                  <div className="mx-3 mt-2 mb-0 flex flex-wrap items-center gap-2 rounded-box border border-base-300/80 bg-base-200/60 px-3 py-2 text-xs text-base-content/75">
+                                    <span className="font-medium text-base-content/85">
+                                      {selectedGraphCommitEntries.length} commit
+                                      {selectedGraphCommitEntries.length === 1 ? "" : "s"} selected
+                                    </span>
+                                    <span className="text-base-content/55">
+                                      Use Cmd/Ctrl-click or Shift-click to adjust the selection.
+                                    </span>
+                                    {selectedGraphSquashState.reason ? (
+                                      <span className="text-warning">
+                                        {selectedGraphSquashState.reason}
+                                      </span>
+                                    ) : null}
+                                    <div className="ml-auto flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        onClick={clearGraphCommitSelection}
+                                      >
+                                        Clear
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-xs btn-primary"
+                                        disabled={
+                                          Boolean(branchBusy) || !selectedGraphSquashState.canSquash
+                                        }
+                                        onClick={openSquashDialog}
+                                      >
+                                        Squash selected...
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : null}
+                                <CommitGraphSection
+                                  commits={graphDisplayCommits}
+                                  commitGraphLayout={commitGraphLayout!}
+                                  localBranches={localBranches}
+                                  remoteBranches={remoteBranches}
+                                  tags={tags}
+                                  graphBranchVisible={graphBranchVisible}
+                                  remoteGraphDefaultVisible={remoteGraphDefaultsVisible}
+                                  currentBranchName={currentBranchName}
+                                  currentBranchTipHash={currentBranchTipHash}
+                                  activeFirstParentHashes={graphHeadFirstParentHashes}
+                                  highlightActiveBranchRows={highlightActiveBranchRows}
+                                  commitBrowseHash={commitBrowseHash}
+                                  graphFocusHash={graphFocusHash}
+                                  graphScrollNonce={graphScrollNonce}
+                                  branchBusy={branchBusy}
+                                  stashBusy={stashBusy}
+                                  commitsSectionTitle={commitsSectionTitle}
+                                  emptyMessage={
+                                    commits.length === 0
+                                      ? "No commits to show"
+                                      : "No commits match the current filters"
+                                  }
+                                  graphCommitsHasMore={graphCommitsHasMore}
+                                  loadingMoreGraphCommits={loadingMoreGraphCommits}
+                                  loadMoreGraphCommits={handleLoadMoreGraphCommits}
+                                  selectedCommitHashes={selectedGraphCommitHashSet}
+                                  onRowCommitSelect={handleGraphRowCommitSelect}
+                                  openGraphBranchLocalMenu={openGraphBranchLocalMenu}
+                                  openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
+                                  openGraphStashMenu={openGraphStashMenu}
+                                  openGraphCommitMenu={openGraphCommitMenu}
+                                  openGraphTagMenu={openGraphTagMenu}
+                                  pushBusy={pushBusy}
+                                  graphAuthorFilter={graphAuthorFilter}
+                                  onGraphAuthorFilterChange={setGraphAuthorFilter}
+                                  graphDateFrom={graphDateFrom}
+                                  graphDateTo={graphDateTo}
+                                  onGraphDateFromChange={setGraphDateFrom}
+                                  onGraphDateToChange={setGraphDateTo}
+                                  graphExportIncludeHash={graphExportIncludeHash}
+                                  onGraphExportIncludeHashChange={setGraphExportIncludeHash}
+                                  graphExportIncludeMergeCommits={graphExportIncludeMergeCommits}
+                                  onGraphExportIncludeMergeCommitsChange={
+                                    setGraphExportIncludeMergeCommits
+                                  }
+                                  graphExportIncludeAuthor={graphExportIncludeAuthor}
+                                  onGraphExportIncludeAuthorChange={setGraphExportIncludeAuthor}
+                                  graphFiltersActive={graphCommitFiltersActive}
+                                  onClearGraphFilters={clearGraphFilters}
+                                  onExportGraphCommits={handleExportGraphCommits}
+                                  exportGraphCommitsDisabled={graphExportListCommits.length === 0}
+                                  wipChangedFileCount={wipChangedFileCount}
+                                  onWipSelect={handleSelectWipRow}
+                                />
+                              </div>
                             )}
                           </div>
                         </div>

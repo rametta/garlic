@@ -112,6 +112,7 @@ pub fn run() {
             git::set_remote_url,
             git::rebase_current_branch_onto,
             git::drop_commit,
+            git::squash_commits,
             git::list_working_tree_files,
             git::list_worktrees,
             git::remove_worktree,

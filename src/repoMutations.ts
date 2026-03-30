@@ -357,6 +357,13 @@ export function useDropCommitMutation() {
   });
 }
 
+export function useSquashCommitsMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string; commitHashes: string[]; message: string }) =>
+      invokeRepoMutation("squash_commits", variables),
+  });
+}
+
 export function useDiscardPathChangesMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: {

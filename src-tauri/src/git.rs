@@ -697,6 +697,64 @@ fn git_output_raw(workdir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(out)
 }
 
+fn git_output_with_input_and_env(
+    workdir: &Path,
+    args: &[&str],
+    stdin_text: Option<&str>,
+    extra_envs: &[(&str, &str)],
+) -> Result<String, String> {
+    let mut cmd = git_cmd(workdir);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if stdin_text.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
+    if !extra_envs.is_empty() {
+        cmd.envs(extra_envs.iter().copied());
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("Could not run git: {e}"))?;
+    if let Some(input) = stdin_text {
+        let stdin_error = {
+            let mut stdin = child.stdin.take();
+            if let Some(stdin) = stdin.as_mut() {
+                if let Err(e) = stdin.write_all(input.as_bytes()) {
+                    Some(format!("Could not write command input to git: {e}"))
+                } else if !input.ends_with('\n') {
+                    match stdin.write_all(b"\n") {
+                        Ok(_) => None,
+                        Err(e) => Some(format!("Could not finalize command input for git: {e}")),
+                    }
+                } else {
+                    None
+                }
+            } else {
+                Some("git: no stdin".to_string())
+            }
+        };
+        if let Some(msg) = stdin_error {
+            let _ = child.kill();
+            let _ = child.wait();
+            write_git_audit_line(workdir, args, false, &msg);
+            return Err(msg);
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Could not wait for git: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("git {} failed", args.join(" "))
+        } else {
+            stderr.clone()
+        };
+        write_git_audit_line(workdir, args, false, &msg);
+        return Err(msg);
+    }
+    let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    write_git_audit_line(workdir, args, true, "");
+    Ok(out)
+}
+
 fn run_git_apply_patch_streaming(
     app: &AppHandle,
     repo_path_str: &str,
@@ -1990,6 +2048,162 @@ pub fn drop_commit(app: AppHandle, path: String, commit_hash: String) -> Result<
         &path_buf,
         &["rebase", "--onto", parent_hash, &resolved_hash],
         "drop commit",
+    )?;
+    Ok(())
+}
+
+/// Squash a contiguous selection of non-merge commits on the current branch's first-parent
+/// history into one commit, then replay any newer descendants on top of the squashed commit.
+#[tauri::command]
+pub fn squash_commits(
+    app: AppHandle,
+    path: String,
+    commit_hashes: Vec<String>,
+    message: String,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let trimmed_message = message.trim();
+    if trimmed_message.is_empty() {
+        return Err("Commit message cannot be empty.".to_string());
+    }
+
+    git_output(&path_buf, &["symbolic-ref", "--quiet", "--short", "HEAD"]).map_err(|_| {
+        "Squashing commits requires the current branch to be checked out.".to_string()
+    })?;
+
+    let tracked_status = git_output(
+        &path_buf,
+        &["status", "--porcelain", "--untracked-files=no"],
+    )?;
+    if !tracked_status.is_empty() {
+        return Err("Squashing commits requires a clean index and working tree.".to_string());
+    }
+
+    let mut resolved_hashes: Vec<String> = Vec::new();
+    for raw_hash in commit_hashes {
+        let trimmed_hash = raw_hash.trim();
+        if trimmed_hash.is_empty() {
+            continue;
+        }
+        let verify_spec = format!("{trimmed_hash}^{{commit}}");
+        let resolved_hash = git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+        if !resolved_hashes
+            .iter()
+            .any(|existing| existing == &resolved_hash)
+        {
+            resolved_hashes.push(resolved_hash);
+        }
+    }
+    if resolved_hashes.len() < 2 {
+        return Err("Select at least two commits to squash.".to_string());
+    }
+
+    let first_parent_history = git_output(&path_buf, &["rev-list", "--first-parent", "HEAD"])?;
+    let first_parent_hashes: Vec<&str> = first_parent_history
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let Some(head_hash) = first_parent_hashes.first().map(|line| (*line).to_string()) else {
+        return Err("Could not read the current branch history.".to_string());
+    };
+    let mut first_parent_index_by_hash: HashMap<&str, usize> = HashMap::new();
+    for (index, hash) in first_parent_hashes.iter().enumerate() {
+        first_parent_index_by_hash.insert(*hash, index);
+    }
+
+    let mut selected_in_history: Vec<(usize, String)> = Vec::new();
+    for resolved_hash in resolved_hashes {
+        let Some(index) = first_parent_index_by_hash.get(resolved_hash.as_str()) else {
+            return Err(
+                "Only commits on the current branch's primary history can be squashed.".to_string(),
+            );
+        };
+        selected_in_history.push((*index, resolved_hash));
+    }
+    selected_in_history.sort_by_key(|(index, _)| *index);
+
+    for window in selected_in_history.windows(2) {
+        if window[1].0 != window[0].0 + 1 {
+            return Err(
+                "Selected commits must be consecutive on the current branch's primary history."
+                    .to_string(),
+            );
+        }
+    }
+
+    for (_, hash) in &selected_in_history {
+        let parents_line = git_output(&path_buf, &["rev-list", "--parents", "-n", "1", hash])?;
+        let mut parts = parents_line.split_whitespace();
+        let _ = parts.next();
+        let parents: Vec<&str> = parts.collect();
+        if parents.is_empty() {
+            return Err("Squashing the root commit is not supported yet.".to_string());
+        }
+        if parents.len() > 1 {
+            return Err("Squashing merge commits is not supported yet.".to_string());
+        }
+    }
+
+    let newest_hash = selected_in_history
+        .first()
+        .map(|(_, hash)| hash.clone())
+        .ok_or_else(|| "Select at least two commits to squash.".to_string())?;
+    let oldest_hash = selected_in_history
+        .last()
+        .map(|(_, hash)| hash.clone())
+        .ok_or_else(|| "Select at least two commits to squash.".to_string())?;
+    let base_parent_hash = git_output(
+        &path_buf,
+        &["rev-parse", "--verify", &format!("{oldest_hash}^")],
+    )?;
+    let squashed_tree_hash = git_output(
+        &path_buf,
+        &["rev-parse", "--verify", &format!("{newest_hash}^{{tree}}")],
+    )?;
+
+    let author_line = git_output(
+        &path_buf,
+        &["show", "-s", "--format=%an%x00%ae%x00%aI", &oldest_hash],
+    )?;
+    let mut author_parts = author_line.split('\0');
+    let author_name = author_parts.next().unwrap_or_default().trim().to_string();
+    let author_email = author_parts.next().unwrap_or_default().trim().to_string();
+    let author_date = author_parts.next().unwrap_or_default().trim().to_string();
+    if author_name.is_empty() || author_email.is_empty() || author_date.is_empty() {
+        return Err("Failed to determine the squashed commit author.".to_string());
+    }
+
+    let author_env = [
+        ("GIT_AUTHOR_NAME", author_name.as_str()),
+        ("GIT_AUTHOR_EMAIL", author_email.as_str()),
+        ("GIT_AUTHOR_DATE", author_date.as_str()),
+    ];
+    let squashed_hash = git_output_with_input_and_env(
+        &path_buf,
+        &["commit-tree", &squashed_tree_hash, "-p", &base_parent_hash],
+        Some(trimmed_message),
+        &author_env,
+    )?;
+
+    if newest_hash == head_hash {
+        run_git_streaming(
+            &app,
+            &path,
+            &path_buf,
+            &["reset", "--soft", &squashed_hash],
+            "squash commits",
+        )?;
+        return Ok(());
+    }
+
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["rebase", "--onto", &squashed_hash, &newest_hash],
+        "squash commits",
     )?;
     Ok(())
 }
