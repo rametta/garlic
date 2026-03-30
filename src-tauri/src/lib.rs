@@ -25,6 +25,11 @@ struct ThemeMenuState {
     checks: Vec<CheckMenuItem<Wry>>,
 }
 
+#[derive(Clone)]
+struct ViewMenuState {
+    highlight_active_branch_rows: CheckMenuItem<Wry>,
+}
+
 fn format_recent_menu_label(path: &str) -> String {
     const MAX: usize = 72;
     let path = path.trim();
@@ -265,6 +270,17 @@ pub fn run() {
                 &[&repo_metadata, &new_branch, &stash_push_menu, &force_push],
             )?;
 
+            let highlight_active_branch_rows = CheckMenuItem::with_id(
+                app,
+                "view_highlight_active_branch_rows",
+                "Highlight Active Branch Rows",
+                true,
+                settings::persisted_highlight_active_branch_rows(&app.handle()),
+                None::<&str>,
+            )?;
+            let view_menu =
+                Submenu::with_items(app, "View", true, &[&highlight_active_branch_rows])?;
+
             let current = settings::persisted_theme_preference(&app.handle());
             let mut checks = Vec::new();
             let auto_item = CheckMenuItem::with_id(
@@ -294,6 +310,9 @@ pub fn run() {
                 theme_submenu.append(item)?;
             }
             app.manage(ThemeMenuState { checks });
+            app.manage(ViewMenuState {
+                highlight_active_branch_rows,
+            });
             app.manage(RecentMenuState {
                 items: recent_items,
             });
@@ -301,7 +320,7 @@ pub fn run() {
 
             let menu = Menu::with_items(
                 app,
-                &[&garlic_menu, &file_menu, &edit_menu, &repo_menu, &theme_submenu],
+                &[&garlic_menu, &file_menu, &edit_menu, &repo_menu, &view_menu, &theme_submenu],
             )?;
             menu.set_as_app_menu()?;
             Ok(())
@@ -455,6 +474,20 @@ pub fn run() {
                             }
                         }
                     });
+                return;
+            }
+            if menu_id_is(&event, "view_highlight_active_branch_rows") {
+                let next = !settings::persisted_highlight_active_branch_rows(app);
+                if settings::set_highlight_active_branch_rows(app, next).is_err() {
+                    return;
+                }
+                if let Some(state) = app.try_state::<ViewMenuState>() {
+                    let _ = state.highlight_active_branch_rows.set_checked(next);
+                }
+                let _ = app.emit(
+                    "graph-active-branch-row-background-changed",
+                    serde_json::json!({ "enabled": next }),
+                );
                 return;
             }
             let id = event.id().as_ref();

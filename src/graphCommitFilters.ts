@@ -1,6 +1,12 @@
 import { formatShortDateOnly } from "./appFormat";
 import type { CommitEntry } from "./repoTypes";
 
+export interface GraphCommitExportOptions {
+  includeHash: boolean;
+  includeAuthor: boolean;
+  includeMergeCommits: boolean;
+}
+
 function localDayBounds(ymd: string): { start: Date; end: Date } | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
   if (!m) return null;
@@ -81,35 +87,40 @@ export function formatCommitsExportTxt(
   authorQuery: string,
   dateFromYmd: string,
   dateToYmd: string,
+  options: GraphCommitExportOptions,
 ): string {
   const lines: string[] = [];
-  lines.push(`# Garlic commit export`);
-  lines.push(`# Repository: ${repoLabel}`);
-  lines.push(`# Checked-out: ${checkoutLabel}`);
-  lines.push(`# Count: ${commits.length}`);
+  lines.push(`- Repository: ${repoLabel}`);
+  lines.push(`- Checked-out: ${checkoutLabel}`);
+  lines.push(`- Count: ${commits.length}`);
   const parts: string[] = [];
   if (authorQuery.trim()) parts.push(`author contains "${authorQuery.trim()}"`);
   if (dateFromYmd.trim()) parts.push(`from ${dateFromYmd.trim()}`);
   if (dateToYmd.trim()) parts.push(`to ${dateToYmd.trim()}`);
-  lines.push(parts.length > 0 ? `# Filters: ${parts.join(", ")}` : `# Filters: (none)`);
-  lines.push("");
+  lines.push(parts.length > 0 ? `- Filters: ${parts.join(", ")}` : `- Filters: (none)`);
+  lines.push(`- Include hash: ${options.includeHash ? "yes" : "no"}`);
+  lines.push(`- Include author: ${options.includeAuthor ? "yes" : "no"}`);
+  lines.push(`- Include merge commits: ${options.includeMergeCommits ? "yes" : "no"}`);
   for (const c of commits) {
-    const when = formatShortDateOnly(c.date);
-    lines.push(`${c.shortHash}\t${when}\t${c.author}\t${c.subject}`);
+    const fields: string[] = [];
+    if (options.includeHash) fields.push(c.shortHash);
+    fields.push(formatShortDateOnly(c.date));
+    if (options.includeAuthor) fields.push(c.author);
+    fields.push(c.subject);
+    lines.push(`- ${fields.join(" | ")}`);
   }
-  lines.push("");
-  return lines.join("\n");
+  return `${lines.join("\n")}\n`;
 }
 
 const MAX_EXPORT_FILENAME_STEM = 180;
 
-function slugAuthorForFilename(raw: string): string {
+function slugFilenamePart(raw: string, maxLength: number): string {
   return raw
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 48)
+    .slice(0, maxLength)
     .replace(/-+$/g, "");
 }
 
@@ -117,12 +128,14 @@ function slugAuthorForFilename(raw: string): string {
  * Default save name for a graph commit export, derived from active filters (safe for common filesystems).
  */
 export function buildGraphExportDefaultFilename(
+  repoLabel: string,
   authorQuery: string,
   dateFromYmd: string,
   dateToYmd: string,
 ): string {
-  const parts: string[] = ["garlic-commits"];
-  const author = slugAuthorForFilename(authorQuery);
+  const repoStem = slugFilenamePart(repoLabel, 64) || "repo";
+  const parts: string[] = [`${repoStem}-commits`];
+  const author = slugFilenamePart(authorQuery, 48);
   if (author.length > 0) {
     parts.push(`by-${author}`);
   }
@@ -134,9 +147,6 @@ export function buildGraphExportDefaultFilename(
     parts.push(`from-${from}`);
   } else if (to.length > 0) {
     parts.push(`to-${to}`);
-  }
-  if (parts.length === 1) {
-    parts.push("no-filters");
   }
   let stem = parts.join("_");
   if (stem.length > MAX_EXPORT_FILENAME_STEM) {

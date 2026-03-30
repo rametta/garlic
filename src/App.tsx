@@ -56,6 +56,7 @@ import { resolveThemePreference } from "./theme";
 import {
   buildGraphExportDefaultFilename,
   filterGraphCommits,
+  type GraphCommitExportOptions,
   formatCommitsExportTxt,
   reachableCommitHashesFromHead,
 } from "./graphCommitFilters";
@@ -421,6 +422,30 @@ function StagePanelLineStats({
   return <DiffLineStatBadge stat={s} />;
 }
 
+function worktreeFileMutationPaths(file: Pick<WorkingTreeFile, "path" | "renameFrom">): string[] {
+  const renameFrom = file.renameFrom?.trim();
+  return renameFrom && renameFrom !== file.path ? [file.path, renameFrom] : [file.path];
+}
+
+function worktreeFilesMutationPaths(
+  files: readonly Pick<WorkingTreeFile, "path" | "renameFrom">[],
+): string[] {
+  const paths = new Set<string>();
+  for (const file of files) {
+    for (const path of worktreeFileMutationPaths(file)) {
+      paths.add(path);
+    }
+  }
+  return [...paths];
+}
+
+function worktreeFileBusy(
+  syncingStagePaths: ReadonlySet<string>,
+  file: Pick<WorkingTreeFile, "path" | "renameFrom">,
+): boolean {
+  return worktreeFileMutationPaths(file).some((path) => syncingStagePaths.has(path));
+}
+
 const StagePanelFileRow = memo(function StagePanelFileRow({
   f,
   selected,
@@ -440,7 +465,7 @@ const StagePanelFileRow = memo(function StagePanelFileRow({
   onUnstage: () => void;
   /** Right-click: history / blame / discard (worktree). */
   onFileContextMenu?: (
-    path: string,
+    file: WorkingTreeFile,
     variant: "staged" | "unstaged",
     clientX: number,
     clientY: number,
@@ -475,7 +500,7 @@ const StagePanelFileRow = memo(function StagePanelFileRow({
               if (!nativeContextMenusAvailable()) return;
               e.preventDefault();
               e.stopPropagation();
-              onFileContextMenu(f.path, variant, e.clientX, e.clientY);
+              onFileContextMenu(f, variant, e.clientX, e.clientY);
             }
           : undefined
       }
@@ -763,6 +788,7 @@ export default function App({
   openaiApiKey: initialOpenaiApiKey,
   openaiModel: initialOpenaiModel,
   branchSidebarSections: initialBranchSidebarSections,
+  highlightActiveBranchRows: initialHighlightActiveBranchRows,
 }: {
   startup: RestoreLastRepo;
   /** Persisted value: `auto` or a DaisyUI theme name. */
@@ -773,10 +799,15 @@ export default function App({
   openaiModel: string;
   /** Which branch-sidebar panels are expanded (persisted in settings). */
   branchSidebarSections: BranchSidebarSectionsState;
+  /** Whether active-branch commits get a tinted row background in the graph. */
+  highlightActiveBranchRows: boolean;
 }) {
   const [themePreference, setThemePreference] = useState(initialThemePreference);
   const [branchSidebarSections, setBranchSidebarSections] = useState<BranchSidebarSectionsState>(
     () => ({ ...initialBranchSidebarSections }),
+  );
+  const [highlightActiveBranchRows, setHighlightActiveBranchRows] = useState(
+    initialHighlightActiveBranchRows,
   );
   const queryClient = useQueryClient();
   const [currentRepoPath, setCurrentRepoPath] = useState<string | null>(
@@ -863,6 +894,9 @@ export default function App({
   const [graphAuthorFilter, setGraphAuthorFilter] = useState("");
   const [graphDateFrom, setGraphDateFrom] = useState("");
   const [graphDateTo, setGraphDateTo] = useState("");
+  const [graphExportIncludeHash, setGraphExportIncludeHash] = useState(true);
+  const [graphExportIncludeMergeCommits, setGraphExportIncludeMergeCommits] = useState(true);
+  const [graphExportIncludeAuthor, setGraphExportIncludeAuthor] = useState(true);
   const [branchBusy, setBranchBusy] = useState<string | null>(null);
   /** `push` or `pop:<ref>` while a stash command runs. */
   const [stashBusy, setStashBusy] = useState<string | null>(null);
@@ -1257,6 +1291,13 @@ export default function App({
     () => graphFilteredCommits.filter((c) => graphCommitsReachableFromHead.has(c.hash)),
     [graphFilteredCommits, graphCommitsReachableFromHead],
   );
+  const graphExportListCommits = useMemo(
+    () =>
+      graphExportIncludeMergeCommits
+        ? graphExportCommits
+        : graphExportCommits.filter((commit) => commit.parentHashes.length < 2),
+    [graphExportCommits, graphExportIncludeMergeCommits],
+  );
 
   const clearFileToolView = useCallback(() => {
     setFileHistoryPath(null);
@@ -1363,11 +1404,22 @@ export default function App({
 
   const exportFilteredCommitsList = useCallback(async () => {
     if (!repo?.path || repo.error) return;
-    if (graphExportCommits.length === 0) return;
+    if (graphExportListCommits.length === 0) return;
     setOperationError(null);
     try {
+      const repoExportLabel = repo.name.trim() || repo.path;
+      const exportOptions: GraphCommitExportOptions = {
+        includeHash: graphExportIncludeHash,
+        includeAuthor: graphExportIncludeAuthor,
+        includeMergeCommits: graphExportIncludeMergeCommits,
+      };
       const path = await save({
-        defaultPath: buildGraphExportDefaultFilename(graphAuthorFilter, graphDateFrom, graphDateTo),
+        defaultPath: buildGraphExportDefaultFilename(
+          repoExportLabel,
+          graphAuthorFilter,
+          graphDateFrom,
+          graphDateTo,
+        ),
         filters: [{ name: "Text", extensions: ["txt"] }],
       });
       if (path == null) return;
@@ -1377,18 +1429,28 @@ export default function App({
           : "Detached HEAD"
         : (repo.branch ?? "—");
       const text = formatCommitsExportTxt(
-        graphExportCommits,
-        repo.name.trim() || repo.path,
+        graphExportListCommits,
+        repoExportLabel,
         checkoutExportLabel,
         graphAuthorFilter,
         graphDateFrom,
         graphDateTo,
+        exportOptions,
       );
       await invoke("write_export_text_file", { path, contents: text });
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     }
-  }, [repo, graphExportCommits, graphAuthorFilter, graphDateFrom, graphDateTo]);
+  }, [
+    repo,
+    graphExportListCommits,
+    graphAuthorFilter,
+    graphDateFrom,
+    graphDateTo,
+    graphExportIncludeHash,
+    graphExportIncludeAuthor,
+    graphExportIncludeMergeCommits,
+  ]);
 
   const loadDiffForFile = useCallback(
     async (
@@ -1421,6 +1483,7 @@ export default function App({
           const unstaged = await invoke<string>("get_unstaged_diff", {
             path: pathAtStart,
             filePath: f.path,
+            renameFrom: f.renameFrom ?? null,
           });
           if (!isCurrentDiffRequest()) return;
           setDiffUnstagedText(unstaged);
@@ -1429,6 +1492,7 @@ export default function App({
               const pair = await invoke<FileBlobPair>("get_unstaged_file_blob_pair", {
                 path: pathAtStart,
                 filePath: f.path,
+                renameFrom: f.renameFrom ?? null,
               });
               if (!isCurrentDiffRequest()) return;
               setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
@@ -1442,6 +1506,7 @@ export default function App({
           const staged = await invoke<string>("get_staged_diff", {
             path: pathAtStart,
             filePath: f.path,
+            renameFrom: f.renameFrom ?? null,
           });
           if (!isCurrentDiffRequest()) return;
           setDiffStagedText(staged);
@@ -1450,6 +1515,7 @@ export default function App({
               const pair = await invoke<FileBlobPair>("get_staged_file_blob_pair", {
                 path: pathAtStart,
                 filePath: f.path,
+                renameFrom: f.renameFrom ?? null,
               });
               if (!isCurrentDiffRequest()) return;
               setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
@@ -2511,7 +2577,7 @@ export default function App({
   );
 
   const discardPathChanges = useCallback(
-    async (filePath: string, fromUnstaged: boolean) => {
+    async (filePath: string, fromUnstaged: boolean, renameFrom?: string | null) => {
       if (!repo?.path || repo.error) return;
       const ok = await ask(
         fromUnstaged
@@ -2527,6 +2593,7 @@ export default function App({
           path: repo.path,
           filePath,
           fromUnstaged,
+          renameFrom: renameFrom ?? null,
         });
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
@@ -2589,7 +2656,13 @@ export default function App({
       path: string,
       clientX: number,
       clientY: number,
-      opts?: { source: "worktree"; variant: "staged" | "unstaged" } | { source: "commitBrowse" },
+      opts?:
+        | {
+            source: "worktree";
+            variant: "staged" | "unstaged";
+            renameFrom?: string | null;
+          }
+        | { source: "commitBrowse" },
     ) => {
       const source = opts ?? { source: "commitBrowse" as const };
       if (source.source === "worktree") {
@@ -2612,7 +2685,8 @@ export default function App({
               }
             })();
           },
-          onDiscard: () => void discardPathChanges(path, source.variant === "unstaged"),
+          onDiscard: () =>
+            void discardPathChanges(path, source.variant === "unstaged", source.renameFrom),
         });
       } else {
         void popupFileRowContextMenu(clientX, clientY, {
@@ -2810,6 +2884,9 @@ export default function App({
         const pref = e.payload.theme;
         setThemePreference(pref);
         document.documentElement.setAttribute("data-theme", resolveThemePreference(pref));
+      }),
+      listen<{ enabled: boolean }>("graph-active-branch-row-background-changed", (e) => {
+        setHighlightActiveBranchRows(Boolean(e.payload.enabled));
       }),
       listen("repository-mutated", () => {
         scheduleRepositoryMutationRefresh();
@@ -3277,8 +3354,8 @@ export default function App({
     [workingTreeFiles],
   );
   const hasStagedFiles = stagedFiles.length > 0;
-  const unstagedPaths = useMemo(() => unstagedFiles.map((file) => file.path), [unstagedFiles]);
-  const stagedPaths = useMemo(() => stagedFiles.map((file) => file.path), [stagedFiles]);
+  const unstagedPaths = useMemo(() => worktreeFilesMutationPaths(unstagedFiles), [unstagedFiles]);
+  const stagedPaths = useMemo(() => worktreeFilesMutationPaths(stagedFiles), [stagedFiles]);
   const wipChangedFileCount = useMemo(() => {
     const paths = new Set<string>();
     for (const f of workingTreeFiles) {
@@ -4757,6 +4834,8 @@ export default function App({
                                 remoteGraphDefaultVisible={remoteGraphDefaultsVisible}
                                 currentBranchName={currentBranchName}
                                 currentBranchTipHash={currentBranchTipHash}
+                                activeFirstParentHashes={graphHeadFirstParentHashes}
+                                highlightActiveBranchRows={highlightActiveBranchRows}
                                 commitBrowseHash={commitBrowseHash}
                                 graphFocusHash={graphFocusHash}
                                 graphScrollNonce={graphScrollNonce}
@@ -4784,10 +4863,18 @@ export default function App({
                                 graphDateTo={graphDateTo}
                                 onGraphDateFromChange={setGraphDateFrom}
                                 onGraphDateToChange={setGraphDateTo}
+                                graphExportIncludeHash={graphExportIncludeHash}
+                                onGraphExportIncludeHashChange={setGraphExportIncludeHash}
+                                graphExportIncludeMergeCommits={graphExportIncludeMergeCommits}
+                                onGraphExportIncludeMergeCommitsChange={
+                                  setGraphExportIncludeMergeCommits
+                                }
+                                graphExportIncludeAuthor={graphExportIncludeAuthor}
+                                onGraphExportIncludeAuthorChange={setGraphExportIncludeAuthor}
                                 graphFiltersActive={graphCommitFiltersActive}
                                 onClearGraphFilters={clearGraphFilters}
                                 onExportGraphCommits={handleExportGraphCommits}
-                                exportGraphCommitsDisabled={graphExportCommits.length === 0}
+                                exportGraphCommitsDisabled={graphExportListCommits.length === 0}
                                 wipChangedFileCount={wipChangedFileCount}
                                 onWipSelect={handleSelectWipRow}
                               />
@@ -4878,14 +4965,22 @@ export default function App({
                           f={f}
                           variant="unstaged"
                           selected={selectedDiffPath === f.path && selectedDiffSide === "unstaged"}
-                          busy={stageCommitBusy || commitPushBusy || syncingStagePaths.has(f.path)}
+                          busy={
+                            stageCommitBusy ||
+                            commitPushBusy ||
+                            worktreeFileBusy(syncingStagePaths, f)
+                          }
                           onSelect={() => void loadDiffForFile(f, "unstaged")}
-                          onStage={() => void onStagePaths([f.path])}
-                          onUnstage={() => void onUnstagePaths([f.path])}
+                          onStage={() => void onStagePaths(worktreeFileMutationPaths(f))}
+                          onUnstage={() => void onUnstagePaths(worktreeFileMutationPaths(f))}
                           onFileContextMenu={
                             canShowBranches
-                              ? (path, variant, x, y) => {
-                                  openFileRowMenu(path, x, y, { source: "worktree", variant });
+                              ? (file, variant, x, y) => {
+                                  openFileRowMenu(file.path, x, y, {
+                                    source: "worktree",
+                                    variant,
+                                    renameFrom: file.renameFrom ?? null,
+                                  });
                                 }
                               : undefined
                           }
@@ -4935,14 +5030,22 @@ export default function App({
                           f={f}
                           variant="staged"
                           selected={selectedDiffPath === f.path && selectedDiffSide === "staged"}
-                          busy={stageCommitBusy || commitPushBusy || syncingStagePaths.has(f.path)}
+                          busy={
+                            stageCommitBusy ||
+                            commitPushBusy ||
+                            worktreeFileBusy(syncingStagePaths, f)
+                          }
                           onSelect={() => void loadDiffForFile(f, "staged")}
-                          onStage={() => void onStagePaths([f.path])}
-                          onUnstage={() => void onUnstagePaths([f.path])}
+                          onStage={() => void onStagePaths(worktreeFileMutationPaths(f))}
+                          onUnstage={() => void onUnstagePaths(worktreeFileMutationPaths(f))}
                           onFileContextMenu={
                             canShowBranches
-                              ? (path, variant, x, y) => {
-                                  openFileRowMenu(path, x, y, { source: "worktree", variant });
+                              ? (file, variant, x, y) => {
+                                  openFileRowMenu(file.path, x, y, {
+                                    source: "worktree",
+                                    variant,
+                                    renameFrom: file.renameFrom ?? null,
+                                  });
                                 }
                               : undefined
                           }

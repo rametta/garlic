@@ -98,6 +98,8 @@ struct AppSettings {
     openai_model: Option<String>,
     #[serde(default)]
     branch_sidebar_sections: BranchSidebarSections,
+    #[serde(default = "default_false")]
+    highlight_active_branch_rows: bool,
 }
 
 fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -291,6 +293,7 @@ pub struct AppBootstrap {
     /// Resolved model id (defaults to `gpt-5.4-mini` when unset).
     pub openai_model: String,
     pub branch_sidebar_sections: BranchSidebarSections,
+    pub highlight_active_branch_rows: bool,
 }
 
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
@@ -310,6 +313,7 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
         openai_api_key,
         openai_model,
         branch_sidebar_sections: settings.branch_sidebar_sections.clone(),
+        highlight_active_branch_rows: settings.highlight_active_branch_rows,
     })
 }
 
@@ -358,6 +362,13 @@ pub fn recent_repo_paths(app: &AppHandle) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Persisted graph-row highlight preference for the native View menu.
+pub fn persisted_highlight_active_branch_rows(app: &AppHandle) -> bool {
+    load_settings(app)
+        .map(|s| s.highlight_active_branch_rows)
+        .unwrap_or(false)
+}
+
 /// Persists which branch-sidebar sections are expanded.
 #[tauri::command]
 pub fn set_branch_sidebar_sections(
@@ -367,6 +378,13 @@ pub fn set_branch_sidebar_sections(
     let mut s = load_settings(&app)?;
     s.branch_sidebar_sections = sections;
     save_settings(&app, &s)
+}
+
+/// Persists whether the commit graph should tint rows on the checked-out branch path.
+pub fn set_highlight_active_branch_rows(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let mut s = load_settings(app)?;
+    s.highlight_active_branch_rows = enabled;
+    save_settings(app, &s)
 }
 
 /// Persists theme preference: `auto` (follow OS light/dark) or a DaisyUI `data-theme` name.

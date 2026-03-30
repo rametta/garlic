@@ -359,8 +359,12 @@ export function useDropCommitMutation() {
 
 export function useDiscardPathChangesMutation() {
   return useRepoCommandMutation({
-    mutationFn: (variables: { path: string; filePath: string; fromUnstaged: boolean }) =>
-      invokeRepoMutation("discard_path_changes", variables),
+    mutationFn: (variables: {
+      path: string;
+      filePath: string;
+      fromUnstaged: boolean;
+      renameFrom?: string | null;
+    }) => invokeRepoMutation("discard_path_changes", variables),
     optimisticUpdate: (snapshot, variables) =>
       withWorkingTreeFiles(
         snapshot,

@@ -19,6 +19,8 @@ export interface CommitGraphSectionProps {
   remoteGraphDefaultVisible: boolean;
   currentBranchName: string | null;
   currentBranchTipHash: string | null;
+  activeFirstParentHashes: ReadonlySet<string>;
+  highlightActiveBranchRows: boolean;
   commitBrowseHash: string | null;
   /** Highlights a commit row without opening browse (e.g. branch tip or stash). */
   graphFocusHash: string | null;
@@ -46,6 +48,12 @@ export interface CommitGraphSectionProps {
   graphDateTo: string;
   onGraphDateFromChange: (value: string) => void;
   onGraphDateToChange: (value: string) => void;
+  graphExportIncludeHash: boolean;
+  onGraphExportIncludeHashChange: (value: boolean) => void;
+  graphExportIncludeMergeCommits: boolean;
+  onGraphExportIncludeMergeCommitsChange: (value: boolean) => void;
+  graphExportIncludeAuthor: boolean;
+  onGraphExportIncludeAuthorChange: (value: boolean) => void;
   graphFiltersActive: boolean;
   onClearGraphFilters: () => void;
   onExportGraphCommits: () => void;
@@ -137,6 +145,19 @@ function computeRowLaneMeta(layout: CommitGraphLayout, tips: TipsAtHash | undefi
   };
 }
 
+function getGraphRowBackgroundClass(args: {
+  isBrowsing: boolean;
+  isGraphFocus: boolean;
+  isHeadBranchTipRow: boolean;
+  isActiveBranchCommitRow: boolean;
+}): string {
+  if (args.isBrowsing) return "bg-primary/20";
+  if (args.isGraphFocus) return "bg-accent/15";
+  if (args.isHeadBranchTipRow) return "bg-primary/15";
+  if (args.isActiveBranchCommitRow) return "bg-primary/8";
+  return "";
+}
+
 type VirtualRowProps = {
   c: CommitEntry;
   idx: number;
@@ -147,6 +168,8 @@ type VirtualRowProps = {
   graphFocusHash: string | null;
   currentBranchTipHash: string | null;
   currentBranchName: string | null;
+  activeFirstParentHashes: ReadonlySet<string>;
+  highlightActiveBranchRows: boolean;
   branchBusy: string | null;
   pushBusy: boolean;
   stashBusy: string | null;
@@ -169,6 +192,8 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   graphFocusHash,
   currentBranchTipHash,
   currentBranchName,
+  activeFirstParentHashes,
+  highlightActiveBranchRows,
   branchBusy,
   pushBusy,
   stashBusy,
@@ -209,7 +234,9 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
       {visibleLocalTips.map((b) => (
         <span
           key={`l:${b.name}`}
-          className="max-w-full min-w-0 cursor-context-menu truncate font-medium"
+          className={`max-w-full min-w-0 cursor-context-menu truncate font-medium ${
+            b.name === currentBranchName ? "rounded-sm bg-primary/14 px-1 text-primary" : ""
+          }`}
           onContextMenu={(e) => {
             if (branchBusy) return;
             if (!nativeContextMenusAvailable()) return;
@@ -276,6 +303,8 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   const isBrowsing = commitBrowseHash === c.hash;
   const isGraphFocus = graphFocusHash !== null && c.hash === graphFocusHash && !isBrowsing;
   const isHeadBranchTipRow = currentBranchTipHash !== null && c.hash === currentBranchTipHash;
+  const isActiveBranchCommitRow =
+    highlightActiveBranchRows && currentBranchName !== null && activeFirstParentHashes.has(c.hash);
   const rel = formatRelativeShort(c.date);
   const fullTitle = [
     stashRef ? `${stashRef} — ${c.shortHash} — ${c.subject}` : `${c.shortHash} — ${c.subject}`,
@@ -286,13 +315,17 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
     .filter(Boolean)
     .join("\n");
   const rowRule = idx < commitsLength - 1 ? "border-b border-base-300/40" : "";
+  const rowBackgroundClass = getGraphRowBackgroundClass({
+    isBrowsing,
+    isGraphFocus,
+    isHeadBranchTipRow,
+    isActiveBranchCommitRow,
+  });
 
   return (
     <>
       <div
-        className={`flex min-h-0 min-w-0 shrink-0 items-center px-0.5 ${rowRule} ${
-          isHeadBranchTipRow ? "bg-primary/12" : ""
-        }`}
+        className={`flex min-h-0 min-w-0 shrink-0 items-center px-0.5 ${rowRule} ${rowBackgroundClass}`}
         style={{ width: BRANCH_COL, maxWidth: BRANCH_COL }}
       >
         {branchCell}
@@ -307,8 +340,10 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
             : isGraphFocus
               ? "bg-accent/15 ring-1 ring-accent/30 ring-inset"
               : isHeadBranchTipRow
-                ? "bg-primary/12 hover:bg-primary/26 hover:ring-1 hover:ring-primary/20 hover:ring-inset"
-                : "hover:bg-base-300/70 hover:ring-1 hover:ring-base-content/10 hover:ring-inset"
+                ? "bg-primary/15 hover:bg-primary/24 hover:ring-1 hover:ring-primary/22 hover:ring-inset"
+                : isActiveBranchCommitRow
+                  ? "bg-primary/8 hover:bg-primary/14 hover:ring-1 hover:ring-primary/16 hover:ring-inset"
+                  : "hover:bg-base-300/70 hover:ring-1 hover:ring-base-content/10 hover:ring-inset"
         }`}
         onClick={() => {
           onRowCommitSelect(c.hash);
@@ -419,6 +454,8 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   remoteGraphDefaultVisible,
   currentBranchName,
   currentBranchTipHash,
+  activeFirstParentHashes,
+  highlightActiveBranchRows,
   commitBrowseHash,
   graphFocusHash,
   graphScrollNonce,
@@ -442,6 +479,12 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   graphDateTo,
   onGraphDateFromChange,
   onGraphDateToChange,
+  graphExportIncludeHash,
+  onGraphExportIncludeHashChange,
+  graphExportIncludeMergeCommits,
+  onGraphExportIncludeMergeCommitsChange,
+  graphExportIncludeAuthor,
+  onGraphExportIncludeAuthorChange,
   graphFiltersActive,
   onClearGraphFilters,
   onExportGraphCommits,
@@ -470,7 +513,8 @@ export const CommitGraphSection = memo(function CommitGraphSection({
     };
   }, [authorFilterOpen, whenFilterOpen]);
 
-  const commitHashes = useMemo(() => new Set(commits.map((commit) => commit.hash)), [commits]);
+  const commitRowHashes = useMemo(() => commits.map((commit) => commit.hash), [commits]);
+  const commitHashes = useMemo(() => new Set(commitRowHashes), [commitRowHashes]);
 
   const tipsByHash = useMemo(
     () =>
@@ -661,9 +705,49 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                 }}
               />
             </label>
+            <div className="mt-3 flex flex-col gap-1.5">
+              <span className="label-text text-[0.65rem] font-medium uppercase opacity-70">
+                Export
+              </span>
+              <label className="label cursor-pointer justify-start gap-2 py-0">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-xs"
+                  checked={graphExportIncludeHash}
+                  onChange={(e) => {
+                    onGraphExportIncludeHashChange(e.target.checked);
+                  }}
+                />
+                <span className="label-text text-[0.7rem] leading-tight">Include hash</span>
+              </label>
+              <label className="label cursor-pointer justify-start gap-2 py-0">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-xs"
+                  checked={graphExportIncludeMergeCommits}
+                  onChange={(e) => {
+                    onGraphExportIncludeMergeCommitsChange(e.target.checked);
+                  }}
+                />
+                <span className="label-text text-[0.7rem] leading-tight">
+                  Include merge commits
+                </span>
+              </label>
+              <label className="label cursor-pointer justify-start gap-2 py-0">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-xs"
+                  checked={graphExportIncludeAuthor}
+                  onChange={(e) => {
+                    onGraphExportIncludeAuthorChange(e.target.checked);
+                  }}
+                />
+                <span className="label-text text-[0.7rem] leading-tight">Include author</span>
+              </label>
+            </div>
             <button
               type="button"
-              className="btn mt-3 w-full btn-outline btn-xs"
+              className="btn mt-2 w-full btn-outline btn-xs"
               disabled={exportGraphCommitsDisabled}
               onClick={() => {
                 onExportGraphCommits();
@@ -728,12 +812,25 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                   const commitIdx = v.index - wipOffset;
                   const c = commits[commitIdx];
                   if (!c) return null;
+                  const isBrowsing = commitBrowseHash === c.hash;
+                  const isGraphFocus =
+                    graphFocusHash !== null && c.hash === graphFocusHash && !isBrowsing;
+                  const isHeadBranchTipRow =
+                    currentBranchTipHash !== null && c.hash === currentBranchTipHash;
+                  const isActiveBranchCommitRow =
+                    highlightActiveBranchRows &&
+                    currentBranchName !== null &&
+                    activeFirstParentHashes.has(c.hash);
+                  const rowBackgroundClass = getGraphRowBackgroundClass({
+                    isBrowsing,
+                    isGraphFocus,
+                    isHeadBranchTipRow,
+                    isActiveBranchCommitRow,
+                  });
                   return (
                     <div
                       key={`graph-bg-${c.hash}`}
-                      className={`absolute right-0 left-0 z-0 ${
-                        currentBranchTipHash === c.hash ? "bg-primary/12" : ""
-                      }`}
+                      className={`absolute right-0 left-0 z-0 ${rowBackgroundClass}`}
                       style={{ top: v.start, height: v.size }}
                       aria-hidden
                     />
@@ -742,7 +839,9 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                 <div className="relative z-1">
                   <CommitGraphColumn
                     layout={commitGraphLayout}
-                    commitCount={commits.length}
+                    commitHashes={commitRowHashes}
+                    activeFirstParentHashes={activeFirstParentHashes}
+                    currentBranchTipHash={currentBranchTipHash}
                     wipRowAbove={showWipRow}
                   />
                 </div>
@@ -851,6 +950,8 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                       graphFocusHash={graphFocusHash}
                       currentBranchTipHash={currentBranchTipHash}
                       currentBranchName={currentBranchName}
+                      activeFirstParentHashes={activeFirstParentHashes}
+                      highlightActiveBranchRows={highlightActiveBranchRows}
                       branchBusy={branchBusy}
                       pushBusy={pushBusy}
                       stashBusy={stashBusy}

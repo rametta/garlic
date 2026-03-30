@@ -27,7 +27,14 @@ export interface CommitGraphLayout {
   /** Stroke color per lane index. */
   laneColors: string[];
   /** SVG path `d` for each edge (parent is older = lower on screen = larger row index). */
-  edgePaths: { d: string; color: string; dashed?: boolean }[];
+  edgePaths: {
+    d: string;
+    color: string;
+    fromHash: string;
+    toHash: string;
+    firstParent: boolean;
+    dashed?: boolean;
+  }[];
 }
 
 function branchLaneHue(index: number): string {
@@ -316,7 +323,7 @@ export function computeCommitGraphLayout(
   const cx = (lane: number) => pad + lane * laneW + laneW / 2;
   const cy = (row: number) => row * rowH + rowH / 2;
 
-  const edgePaths: { d: string; color: string; dashed?: boolean }[] = [];
+  const edgePaths: CommitGraphLayout["edgePaths"] = [];
 
   for (let i = 0; i < commits.length; i++) {
     const c = commits[i];
@@ -334,7 +341,14 @@ export function computeCommitGraphLayout(
         pi === 0
           ? laneColors[(lanes[i] ?? 0) % laneColors.length]
           : laneColors[(lanes[j] ?? 0) % laneColors.length];
-      edgePaths.push({ d, color, dashed: stashRows[i] });
+      edgePaths.push({
+        d,
+        color,
+        fromHash: c.hash,
+        toHash: p,
+        firstParent: pi === 0,
+        dashed: stashRows[i],
+      });
       pi += 1;
     }
   }

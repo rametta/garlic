@@ -16,6 +16,7 @@ export interface AppBootstrap {
   openaiApiKey: string | null;
   openaiModel: string;
   branchSidebarSections: BranchSidebarSectionsState;
+  highlightActiveBranchRows: boolean;
 }
 
 export const emptyAppBootstrap: AppBootstrap = {
@@ -42,6 +43,7 @@ export const emptyAppBootstrap: AppBootstrap = {
     tagsOpen: true,
     stashOpen: false,
   },
+  highlightActiveBranchRows: false,
 };
 
 async function bootstrap() {
@@ -63,6 +65,7 @@ async function bootstrap() {
           openaiApiKey={data.openaiApiKey ?? null}
           openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}
           branchSidebarSections={data.branchSidebarSections}
+          highlightActiveBranchRows={data.highlightActiveBranchRows}
         />
       </QueryClientProvider>
     </React.StrictMode>,

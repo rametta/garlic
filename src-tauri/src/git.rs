@@ -2087,7 +2087,13 @@ fn summarize_worktree_status(workdir: &Path) -> Result<WorktreeStatusSummary, St
     ensure_git_repo(workdir)?;
     let porcelain = git_output_raw(
         workdir,
-        &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--find-renames",
+            "-z",
+        ],
     )?;
     let mut map: HashMap<String, WtAcc> = HashMap::new();
     for acc in parse_porcelain_v1_z(&porcelain) {
@@ -2166,7 +2172,13 @@ pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, Str
     ensure_git_repo(&path_buf)?;
     let porcelain = git_output_raw(
         &path_buf,
-        &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--find-renames",
+            "-z",
+        ],
     )?;
     let mut map: HashMap<String, WtAcc> = HashMap::new();
     for acc in parse_porcelain_v1_z(&porcelain) {
@@ -2185,8 +2197,9 @@ pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, Str
 
     let (staged_map, unstaged_map) = std::thread::scope(|s| {
         let p = &path_buf;
-        let h4 = s.spawn(|| numstat_line_stats(p, &["diff", "--cached", "--numstat"]));
-        let h5 = s.spawn(|| numstat_line_stats(p, &["diff", "--numstat"]));
+        let h4 =
+            s.spawn(|| numstat_line_stats(p, &["diff", "--cached", "--find-renames", "--numstat"]));
+        let h5 = s.spawn(|| numstat_line_stats(p, &["diff", "--find-renames", "--numstat"]));
         let staged_map = h4.join().unwrap()?;
         let unstaged_map = h5.join().unwrap()?;
         Ok::<_, String>((staged_map, unstaged_map))
@@ -2396,6 +2409,7 @@ pub fn discard_path_changes(
     path: String,
     file_path: String,
     from_unstaged: bool,
+    rename_from: Option<String>,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
@@ -2403,24 +2417,48 @@ pub fn discard_path_changes(
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
     }
+    let rename_from = rename_from
+        .as_deref()
+        .map(str::trim)
+        .filter(|from| !from.is_empty() && *from != rel);
     if from_unstaged {
+        if let Some(from) = rename_from {
+            if git_path_known_to_git(&path_buf, from) {
+                git_output(&path_buf, &["restore", "--worktree", "--", from])?;
+            }
+        }
         if git_path_known_to_git(&path_buf, rel) {
             git_output(&path_buf, &["restore", "--worktree", "--", rel])?;
         } else {
             git_output(&path_buf, &["clean", "-f", "--", rel])?;
         }
     } else {
-        git_output(
-            &path_buf,
-            &[
-                "restore",
-                "--source=HEAD",
-                "--staged",
-                "--worktree",
-                "--",
-                rel,
-            ],
-        )?;
+        if let Some(from) = rename_from {
+            git_output(
+                &path_buf,
+                &[
+                    "restore",
+                    "--source=HEAD",
+                    "--staged",
+                    "--worktree",
+                    "--",
+                    from,
+                    rel,
+                ],
+            )?;
+        } else {
+            git_output(
+                &path_buf,
+                &[
+                    "restore",
+                    "--source=HEAD",
+                    "--staged",
+                    "--worktree",
+                    "--",
+                    rel,
+                ],
+            )?;
+        }
     }
     Ok(())
 }
@@ -2550,12 +2588,29 @@ pub fn get_file_blame(path: String, file_path: String) -> Result<String, String>
 
 /// Staged diff for a path (`git diff --cached -- <path>`).
 #[tauri::command]
-pub fn get_staged_diff(path: String, file_path: String) -> Result<String, String> {
+pub fn get_staged_diff(
+    path: String,
+    file_path: String,
+    rename_from: Option<String>,
+) -> Result<String, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let rel = file_path.trim();
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
+    }
+    let rename_from = rename_from
+        .as_deref()
+        .map(str::trim)
+        .filter(|from| !from.is_empty() && *from != rel);
+    if let Some(from) = rename_from {
+        let out = git_output(
+            &path_buf,
+            &["diff", "--cached", "--find-renames", "-U1", "--", from, rel],
+        );
+        if matches!(out, Ok(ref s) if !s.trim().is_empty()) {
+            return out;
+        }
     }
     git_output(&path_buf, &["diff", "--cached", "-U1", "--", rel])
 }
@@ -2570,12 +2625,29 @@ pub fn get_staged_diff_all(path: String) -> Result<String, String> {
 
 /// Unstaged diff for a path (`git diff -- <path>`), or full file vs empty for untracked paths.
 #[tauri::command]
-pub fn get_unstaged_diff(path: String, file_path: String) -> Result<String, String> {
+pub fn get_unstaged_diff(
+    path: String,
+    file_path: String,
+    rename_from: Option<String>,
+) -> Result<String, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let rel = file_path.trim();
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
+    }
+    let rename_from = rename_from
+        .as_deref()
+        .map(str::trim)
+        .filter(|from| !from.is_empty() && *from != rel);
+    if let Some(from) = rename_from {
+        let rename_out = git_output(
+            &path_buf,
+            &["diff", "--find-renames", "-U1", "--", from, rel],
+        );
+        if matches!(rename_out, Ok(ref s) if !s.trim().is_empty()) {
+            return rename_out;
+        }
     }
     let out = git_output(&path_buf, &["diff", "-U1", "--", rel]);
     match out {
@@ -2824,14 +2896,23 @@ pub fn get_commit_file_blob_pair(
 
 /// Staged diff: `HEAD` vs index (`:`).
 #[tauri::command]
-pub fn get_staged_file_blob_pair(path: String, file_path: String) -> Result<FileBlobPair, String> {
+pub fn get_staged_file_blob_pair(
+    path: String,
+    file_path: String,
+    rename_from: Option<String>,
+) -> Result<FileBlobPair, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let rel = file_path.trim();
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
     }
-    let before = git_show_blob_bytes(&path_buf, &format!("HEAD:{rel}"))?;
+    let before_rel = rename_from
+        .as_deref()
+        .map(str::trim)
+        .filter(|from| !from.is_empty() && *from != rel)
+        .unwrap_or(rel);
+    let before = git_show_blob_bytes(&path_buf, &format!("HEAD:{before_rel}"))?;
     let after = git_show_blob_bytes(&path_buf, &format!(":{rel}"))?;
     Ok(FileBlobPair {
         before_base64: opt_bytes_to_b64(before),
@@ -2853,6 +2934,7 @@ fn read_working_tree_bytes(workdir: &Path, rel: &str) -> Result<Option<Vec<u8>>,
 pub fn get_unstaged_file_blob_pair(
     path: String,
     file_path: String,
+    rename_from: Option<String>,
 ) -> Result<FileBlobPair, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
@@ -2860,7 +2942,12 @@ pub fn get_unstaged_file_blob_pair(
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
     }
-    let before = git_show_blob_bytes(&path_buf, &format!(":{rel}"))?;
+    let before_rel = rename_from
+        .as_deref()
+        .map(str::trim)
+        .filter(|from| !from.is_empty() && *from != rel)
+        .unwrap_or(rel);
+    let before = git_show_blob_bytes(&path_buf, &format!(":{before_rel}"))?;
     let after = read_working_tree_bytes(&path_buf, rel)?;
     Ok(FileBlobPair {
         before_base64: opt_bytes_to_b64(before),
@@ -3187,5 +3274,15 @@ mod tests {
         assert_eq!(entries[0].path, "new name.txt");
         assert_eq!(entries[0].rename_from.as_deref(), Some("old name.txt"));
         assert!(entries[0].staged);
+    }
+
+    #[test]
+    fn porcelain_v1_z_parses_unstaged_rename_pairs() {
+        let entries = parse_porcelain_v1_z(" R new name.txt\0old name.txt\0");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "new name.txt");
+        assert_eq!(entries[0].rename_from.as_deref(), Some("old name.txt"));
+        assert!(entries[0].unstaged);
+        assert!(!entries[0].staged);
     }
 }
