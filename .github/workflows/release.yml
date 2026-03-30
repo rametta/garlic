@@ -20,6 +20,8 @@
 #   APPLE_API_ISSUER               App Store Connect API issuer ID
 #   APPLE_API_KEY                  API Key ID (short id from the key row, not the .p8 contents)
 #   APP_STORE_CONNECT_PRIVATE_KEY  full contents of the downloaded .p8 private key
+#   TAURI_SIGNING_PRIVATE_KEY      full contents of the Tauri updater private key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  optional updater private-key password
 #
 # Caches: Bun download cache (bun.lock) + Rust deps/target (src-tauri/Cargo.lock) via rust-cache.
 
@@ -132,6 +134,8 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_BUNDLER_DMG_IGNORE_CI: false
         with:
           tagName: ${{ github.ref_name }}

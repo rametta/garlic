@@ -91,6 +91,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             window_title::reset_main_window_title,
             git::get_repo_metadata,
@@ -158,6 +159,7 @@ pub fn run() {
             repo_watch::start_repo_watch,
         ])
         .setup(|app| {
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             app.manage(active_repo::ActiveRepoPath::default());
             app.manage(repo_watch::RepoWatchState::default());
             if let Ok(dir) = app.path().app_config_dir() {
@@ -206,6 +208,13 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            let check_for_updates = MenuItem::with_id(
+                app,
+                "check_for_updates",
+                "Check for Updates…",
+                true,
+                None::<&str>,
+            )?;
             let reveal_settings_file = MenuItem::with_id(
                 app,
                 "reveal_settings_file",
@@ -221,6 +230,8 @@ pub fn run() {
                 true,
                 &[
                     &about_app,
+                    &PredefinedMenuItem::separator(app)?,
+                    &check_for_updates,
                     &PredefinedMenuItem::separator(app)?,
                     &configure_openai_key,
                     &reveal_settings_file,
@@ -345,6 +356,13 @@ pub fn run() {
                 let handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let _ = handle.emit("open-openai-settings", ());
+                });
+                return;
+            }
+            if menu_id_is(&event, "check_for_updates") {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = handle.emit("check-for-updates-request", ());
                 });
                 return;
             }

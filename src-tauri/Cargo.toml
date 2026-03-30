@@ -26,4 +26,6 @@ serde_json = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 notify = "7"
+tauri-plugin-updater = "2.10.0"
+tauri-plugin-process = "2.3.1"
 

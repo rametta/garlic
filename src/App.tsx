@@ -14,7 +14,9 @@ import type { BranchSidebarSectionsState } from "./repoTypes";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import { formatAuthorDisplay, formatDate, formatRelativeShort } from "./appFormat";
 import { collectLocalBranchNamesInSubtree, collectRemoteRefsInSubtree } from "./branchTrie";
 import { BranchSidebar, type BranchGraphControls } from "./components/BranchSidebar";
@@ -821,6 +823,8 @@ export default function App({
   /** Collapse bursts of filesystem watch events into one in-flight refresh plus one queued rerun. */
   const repoMutationRefreshInFlightRef = useRef(false);
   const repoMutationRefreshPendingRef = useRef(false);
+  /** Prevents overlapping updater checks from repeated native menu clicks. */
+  const updateCheckInFlightRef = useRef(false);
   /** Bumps when clearing browse or starting a new commit selection — drops stale `selectCommit` completions. */
   const selectCommitSeqRef = useRef(0);
   /** Bumps when working-tree diff selection changes — drops stale diff completions. */
@@ -3019,10 +3023,46 @@ export default function App({
     })();
   }, [refreshAfterMutationListenerRef]);
 
+  const runCheckForUpdates = useCallback(async () => {
+    if (updateCheckInFlightRef.current) return;
+    updateCheckInFlightRef.current = true;
+    try {
+      const update = await check();
+      if (!update) {
+        await message("You already have the latest Garlic release installed.", {
+          title: "Garlic",
+          kind: "info",
+        });
+        return;
+      }
+      const notes = update.body?.trim();
+      const ok = await ask(
+        notes
+          ? `Garlic ${update.version} is available.\n\nRelease notes:\n${notes}\n\nDownload and install it now? Garlic will restart automatically when the update is ready.`
+          : `Garlic ${update.version} is available.\n\nDownload and install it now? Garlic will restart automatically when the update is ready.`,
+        { title: "Update Available", kind: "info" },
+      );
+      if (!ok) return;
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch (e) {
+      await message(invokeErrorMessage(e), {
+        title: "Unable to check for updates",
+        kind: "error",
+      });
+    } finally {
+      updateCheckInFlightRef.current = false;
+    }
+  }, []);
+  const runCheckForUpdatesListenerRef = useLatest(runCheckForUpdates);
+
   useEffect(() => {
     const promise = Promise.all([
       listen("open-openai-settings", () => {
         openOpenAiSettingsDialogListenerRef.current();
+      }),
+      listen("check-for-updates-request", () => {
+        void runCheckForUpdatesListenerRef.current();
       }),
       listen("open-repo-request", () => {
         void (async () => {
@@ -3135,6 +3175,7 @@ export default function App({
     openCloneRepoDialogListenerRef,
     openCreateBranchDialogListenerRef,
     openOpenAiSettingsDialogListenerRef,
+    runCheckForUpdatesListenerRef,
     scheduleRepositoryMutationRefresh,
     scheduleCloneProgressUiFlushListenerRef,
   ]);
