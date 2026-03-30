@@ -4349,7 +4349,7 @@ export default function App({
                                       </div>
                                     )}
                                   </div>
-                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-l border-base-300/80 pl-2">
+                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-l border-base-300/80">
                                     <div className="shrink-0 border-b border-base-300/80 pb-2">
                                       <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                         <span>Files</span>
@@ -4386,7 +4386,7 @@ export default function App({
                                       ) : (
                                         <div
                                           ref={commitBrowseFileListScrollRef}
-                                          className="m-0 min-h-0 flex-1 overflow-y-auto py-1 pr-0.5"
+                                          className="m-0 min-h-0 flex-1 overflow-y-auto py-1"
                                         >
                                           <div
                                             className="relative w-full"
@@ -4419,7 +4419,7 @@ export default function App({
                                                   >
                                                     <button
                                                       type="button"
-                                                      className={`flex min-h-10 w-full items-center gap-2 rounded-lg border px-2 py-2 text-left text-[0.8125rem] leading-snug transition-colors ${
+                                                      className={`flex min-h-10 w-full items-center gap-2 rounded-lg border px-0 py-2 text-left text-[0.8125rem] leading-snug transition-colors ${
                                                         selected
                                                           ? "border-primary/50 bg-primary/10 ring-1 ring-primary/25"
                                                           : "border-base-300/40 bg-base-200/50 hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
@@ -4723,7 +4723,7 @@ export default function App({
                                       </div>
                                     )}
                                   </div>
-                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-l border-base-300/80 pl-2">
+                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-l border-base-300/80">
                                     <div className="shrink-0 border-b border-base-300/80 pb-2">
                                       <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                         <span>Files</span>
@@ -4760,7 +4760,7 @@ export default function App({
                                       ) : (
                                         <div
                                           ref={commitBrowseFileListScrollRef}
-                                          className="m-0 min-h-0 flex-1 overflow-y-auto py-1 pr-0.5"
+                                          className="m-0 min-h-0 flex-1 overflow-y-auto py-1"
                                         >
                                           <div
                                             className="relative w-full"
@@ -4786,7 +4786,7 @@ export default function App({
                                                   >
                                                     <button
                                                       type="button"
-                                                      className={`flex min-h-10 w-full items-center gap-2 rounded-lg border px-2 py-2 text-left text-[0.8125rem] leading-snug transition-colors ${
+                                                      className={`flex min-h-10 w-full items-center gap-2 rounded-lg border px-0 py-2 text-left text-[0.8125rem] leading-snug transition-colors ${
                                                         selected
                                                           ? "border-primary/50 bg-primary/10 ring-1 ring-primary/25"
                                                           : "border-base-300/40 bg-base-200/50 hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"

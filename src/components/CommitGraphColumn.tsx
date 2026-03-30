@@ -34,7 +34,8 @@ export function CommitGraphColumn({
   const cx = (lane: number) => pad + lane * laneW + laneW / 2;
   const cy = (row: number) => row * rowH + rowH / 2;
   const wipLane = commitCount > 0 ? (layout.lanes[0] ?? 0) : 0;
-  const wipColor = layout.laneColors[wipLane % layout.laneColors.length];
+  const wipColor =
+    layout.rowColors[0] ?? layout.laneColors[wipLane % layout.laneColors.length] ?? "currentColor";
 
   return (
     <svg
@@ -113,7 +114,10 @@ export function CommitGraphColumn({
         ))}
         {layout.lanes.map((lane, row) => {
           const hash = commitHashes[row];
-          const nodeColor = layout.laneColors[lane % layout.laneColors.length];
+          const nodeColor =
+            layout.rowColors[row] ??
+            layout.laneColors[lane % layout.laneColors.length] ??
+            "currentColor";
           const isActiveBranchCommit =
             showActiveBranch && hash ? activeFirstParentHashes.has(hash) : false;
           const isActiveTip = hash !== undefined && hash === currentBranchTipHash;

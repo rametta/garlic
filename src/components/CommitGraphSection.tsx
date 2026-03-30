@@ -122,7 +122,11 @@ type RowLaneMeta = {
   visibleTags: TagEntry[];
 };
 
-function computeRowLaneMeta(layout: CommitGraphLayout, tips: TipsAtHash | undefined): RowLaneMeta {
+function computeRowLaneMeta(
+  layout: CommitGraphLayout,
+  rowIndex: number,
+  tips: TipsAtHash | undefined,
+): RowLaneMeta {
   if (!tips) {
     return {
       laneColor: undefined,
@@ -131,12 +135,7 @@ function computeRowLaneMeta(layout: CommitGraphLayout, tips: TipsAtHash | undefi
       visibleTags: [],
     };
   }
-  const sortedNames = layout.branchNamesSorted;
-  const tipsHereNames = [...tips.locals.map((b) => b.name), ...tips.remotes.map((r) => r.name)];
-  const firstTipName = sortedNames.find((n) => tipsHereNames.includes(n));
-  const laneIdx = firstTipName ? sortedNames.indexOf(firstTipName) : -1;
-  const laneColor =
-    laneIdx >= 0 ? layout.laneColors[laneIdx % layout.laneColors.length] : undefined;
+  const laneColor = layout.rowColors[rowIndex];
   return {
     laneColor,
     visibleLocalTips: tips.locals,
@@ -164,6 +163,7 @@ type VirtualRowProps = {
   commitsLength: number;
   graphWidthPx: number;
   laneMeta: RowLaneMeta;
+  currentBranchLabelVisibleInRows: boolean;
   commitBrowseHash: string | null;
   graphFocusHash: string | null;
   currentBranchTipHash: string | null;
@@ -188,6 +188,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   commitsLength,
   graphWidthPx,
   laneMeta,
+  currentBranchLabelVisibleInRows,
   commitBrowseHash,
   graphFocusHash,
   currentBranchTipHash,
@@ -281,7 +282,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
     >
       <span className="badge shrink-0 font-mono badge-xs badge-warning">{stashRef}</span>
     </span>
-  ) : idx === 0 ? (
+  ) : idx === 0 && !currentBranchLabelVisibleInRows ? (
     <span
       className="flex min-w-0 cursor-context-menu items-center gap-0.5 truncate text-[0.65rem] leading-tight text-base-content/85"
       title={commitsSectionTitle}
@@ -537,8 +538,18 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   );
 
   const rowLaneMetas = useMemo(() => {
-    return commits.map((c) => computeRowLaneMeta(commitGraphLayout, tipsByHash.get(c.hash)));
+    return commits.map((c, idx) =>
+      computeRowLaneMeta(commitGraphLayout, idx, tipsByHash.get(c.hash)),
+    );
   }, [commits, commitGraphLayout, tipsByHash]);
+  const currentBranchLabelVisibleInRows = useMemo(() => {
+    if (!currentBranchName) return false;
+    return commits.some((commit) =>
+      (tipsByHash.get(commit.hash)?.locals ?? []).some(
+        (branch) => branch.name === currentBranchName,
+      ),
+    );
+  }, [commits, currentBranchName, tipsByHash]);
 
   const showWipRow = wipChangedFileCount > 0;
   const wipOffset = showWipRow ? 1 : 0;
@@ -946,6 +957,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                       commitsLength={commits.length}
                       graphWidthPx={graphWidthPx}
                       laneMeta={rowLaneMetas[commitIdx]}
+                      currentBranchLabelVisibleInRows={currentBranchLabelVisibleInRows}
                       commitBrowseHash={commitBrowseHash}
                       graphFocusHash={graphFocusHash}
                       currentBranchTipHash={currentBranchTipHash}

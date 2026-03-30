@@ -20,6 +20,8 @@ export interface CommitGraphLayout {
   graphWidthPx: number;
   /** Lane index per row (same order as `commits`, newest first). */
   lanes: number[];
+  /** Stroke/fill color per row's logical branch segment (same order as `commits`). */
+  rowColors: string[];
   /** True for rows that render a stash WIP commit (`stash@{n}`). */
   stashRows: boolean[];
   /** Local branch names (sorted) for labels; not 1:1 with lane indices when lanes > branches. */
@@ -214,14 +216,25 @@ function logicalLaneRowIntervals(
 
   for (let i = 0; i < commits.length; i++) {
     const c = commits[i];
-    for (const ph of c.parentHashes) {
+    for (let pi = 0; pi < c.parentHashes.length; pi++) {
+      const ph = c.parentHashes[pi];
       const j = indexByHash.get(ph);
       if (j === undefined || j <= i) continue; // parent must be older (lower in list)
-      const mid = Math.floor((i + j) / 2);
       const li = logicalLanes[i] ?? 0;
       const lj = logicalLanes[j] ?? 0;
-      extend(li, i, mid);
-      extend(lj, mid, j);
+      if (li === lj) {
+        extend(li, i, j);
+        continue;
+      }
+      if (pi === 0) {
+        const childSpanEnd = Math.max(i, j - 1);
+        extend(li, i, childSpanEnd);
+        extend(lj, childSpanEnd, j);
+      } else {
+        const parentSpanStart = Math.min(j, i + 1);
+        extend(li, i, parentSpanStart);
+        extend(lj, parentSpanStart, j);
+      }
     }
   }
 
@@ -302,6 +315,12 @@ export function computeCommitGraphLayout(
     commits.length === 0 ? new Map<string, number>() : assignLanesFromDag(commits, mainlineHashes);
 
   const logicalLanes: number[] = commits.map((c) => laneByHash.get(c.hash) ?? 0);
+  const logicalLaneCount =
+    logicalLanes.length > 0 ? Math.max(...logicalLanes.map((lane) => lane + 1)) : 1;
+  const logicalLaneColors = Array.from({ length: logicalLaneCount }, (_, i) => branchLaneHue(i));
+  const rowColors = logicalLanes.map(
+    (lane) => logicalLaneColors[lane % logicalLaneColors.length] ?? branchLaneHue(0),
+  );
   const stashRows = commits.map((c) => Boolean(c.stashRef?.trim()));
   const indexByHash = new Map(commits.map((c, i) => [c.hash, i] as const));
 
@@ -322,6 +341,8 @@ export function computeCommitGraphLayout(
 
   const cx = (lane: number) => pad + lane * laneW + laneW / 2;
   const cy = (row: number) => row * rowH + rowH / 2;
+  const rowTop = (row: number) => row * rowH;
+  const rowBottom = (row: number) => (row + 1) * rowH;
 
   const edgePaths: CommitGraphLayout["edgePaths"] = [];
 
@@ -329,24 +350,27 @@ export function computeCommitGraphLayout(
     const c = commits[i];
     const y1 = cy(i);
     const x1 = cx(lanes[i] ?? 0);
+    const rowColor = rowColors[i] ?? laneColors[(lanes[i] ?? 0) % laneColors.length];
     let pi = 0;
     for (const p of c.parentHashes) {
       const j = indexByHash.get(p);
       if (j === undefined || j <= i) continue;
       const y2 = cy(j);
       const x2 = cx(lanes[j] ?? 0);
-      const yMid = (y1 + y2) / 2;
-      const d = `M ${x1} ${y1} L ${x1} ${yMid} L ${x2} ${yMid} L ${x2} ${y2}`;
-      const color =
-        pi === 0
-          ? laneColors[(lanes[i] ?? 0) % laneColors.length]
-          : laneColors[(lanes[j] ?? 0) % laneColors.length];
+      const parentRowColor = rowColors[j] ?? laneColors[(lanes[j] ?? 0) % laneColors.length];
+      const isFirstParent = pi === 0;
+      const sameLane = x1 === x2;
+      const yJoin = sameLane ? y2 : isFirstParent ? rowTop(j) : rowBottom(i);
+      const d = sameLane
+        ? `M ${x1} ${y1} L ${x2} ${y2}`
+        : `M ${x1} ${y1} L ${x1} ${yJoin} L ${x2} ${yJoin} L ${x2} ${y2}`;
+      const color = pi === 0 ? rowColor : parentRowColor;
       edgePaths.push({
         d,
         color,
         fromHash: c.hash,
         toHash: p,
-        firstParent: pi === 0,
+        firstParent: isFirstParent,
         dashed: stashRows[i],
       });
       pi += 1;
@@ -357,6 +381,7 @@ export function computeCommitGraphLayout(
     laneCount,
     graphWidthPx,
     lanes,
+    rowColors,
     stashRows,
     branchNamesSorted,
     laneColors,
