@@ -4812,8 +4812,8 @@ export default function App({
                                           ref={commitBrowseFileListScrollRef}
                                           className="m-0 min-h-0 flex-1 overflow-y-auto py-1"
                                         >
-                                          <div
-                                            className="relative w-full"
+                                          <ul
+                                            className="list relative m-0 w-full list-none p-0"
                                             style={{
                                               height: commitBrowseFileVirtualizer.getTotalSize(),
                                             }}
@@ -4825,28 +4825,38 @@ export default function App({
                                                 if (!entry) return null;
                                                 const selected = commitDiffPath === entry.path;
                                                 return (
-                                                  <div
+                                                  <li
                                                     key={virtualRow.key}
                                                     data-index={virtualRow.index}
                                                     ref={commitBrowseFileVirtualizer.measureElement}
-                                                    className="absolute top-0 left-0 w-full pb-2"
+                                                    className="absolute top-0 left-0 m-0 w-full p-0"
                                                     style={{
                                                       transform: `translateY(${virtualRow.start}px)`,
                                                     }}
                                                   >
-                                                    <button
-                                                      type="button"
-                                                      className={`flex min-h-10 w-full items-center gap-2 rounded-lg border px-0 py-2 text-left text-[0.8125rem] leading-snug transition-colors ${
+                                                    <div
+                                                      role="button"
+                                                      tabIndex={0}
+                                                      className={`list-row min-h-10 cursor-pointer rounded-none! px-3! py-2! text-[0.8125rem] leading-snug transition-colors ${
                                                         selected
-                                                          ? "border-primary/50 bg-primary/10 ring-1 ring-primary/25"
-                                                          : "border-base-300/40 bg-base-200/50 hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
+                                                          ? "bg-primary/10 ring-1 ring-primary/25"
+                                                          : "bg-base-200/50 hover:bg-base-300/45 active:bg-base-300/55"
                                                       }`}
-                                                      onClick={() =>
+                                                      onClick={() => {
                                                         void loadCommitFileDiff(
                                                           entry.path,
                                                           commitBrowseHash ?? "",
-                                                        )
-                                                      }
+                                                        );
+                                                      }}
+                                                      onKeyDown={(e) => {
+                                                        if (e.key !== "Enter" && e.key !== " ")
+                                                          return;
+                                                        e.preventDefault();
+                                                        void loadCommitFileDiff(
+                                                          entry.path,
+                                                          commitBrowseHash ?? "",
+                                                        );
+                                                      }}
                                                       onContextMenu={(e) => {
                                                         if (!nativeContextMenusAvailable()) return;
                                                         e.preventDefault();
@@ -4858,15 +4868,15 @@ export default function App({
                                                         );
                                                       }}
                                                     >
-                                                      <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
+                                                      <code className="list-col-grow min-w-0 font-mono wrap-break-word text-base-content/95">
                                                         {entry.path}
                                                       </code>
                                                       <DiffLineStatBadge stat={entry.stats} />
-                                                    </button>
-                                                  </div>
+                                                    </div>
+                                                  </li>
                                                 );
                                               })}
-                                          </div>
+                                          </ul>
                                         </div>
                                       )}
                                     </div>
