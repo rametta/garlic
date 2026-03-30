@@ -579,15 +579,12 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
   discardAction: HunkAction | null;
 }) {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 p-3">
         <div className="min-w-0">
           <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
-            Diff
+          {path}
           </h2>
-          <code className="mt-1 block font-mono text-xs wrap-break-word text-base-content/80">
-            {path}
-          </code>
           {side ? (
             <p className="mt-1 mb-0 text-xs text-base-content/65">
               {side === "staged" ? "Staged changes" : "Unstaged changes"}
@@ -609,33 +606,23 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
             <span className="wrap-break-word">{diffError}</span>
           </DismissibleAlert>
         ) : (
-          <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded-lg border border-base-300 bg-base-200/40 p-4">
+          <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto bg-base-200/40">
             {stagedText !== null ? (
-              <div className="mb-8 last:mb-0">
-                <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                  Staged
-                </div>
-                <UnifiedDiff
-                  text={stagedText}
-                  emptyLabel="(no staged diff)"
-                  binaryImagePreview={stagedImagePreview}
-                  partialAction={stagedAction}
-                />
-              </div>
+              <UnifiedDiff
+                text={stagedText}
+                emptyLabel="(no staged diff)"
+                binaryImagePreview={stagedImagePreview}
+                partialAction={stagedAction}
+              />
             ) : null}
             {unstagedText !== null ? (
-              <div>
-                <div className="m-0 mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
-                  Unstaged
-                </div>
-                <UnifiedDiff
-                  text={unstagedText}
-                  emptyLabel="(no unstaged diff)"
-                  binaryImagePreview={unstagedImagePreview}
-                  partialAction={unstagedAction}
-                  secondaryHunkAction={discardAction}
-                />
-              </div>
+              <UnifiedDiff
+                text={unstagedText}
+                emptyLabel="(no unstaged diff)"
+                binaryImagePreview={unstagedImagePreview}
+                partialAction={unstagedAction}
+                secondaryHunkAction={discardAction}
+              />
             ) : null}
           </div>
         )}
@@ -712,7 +699,7 @@ const FileHistoryPane = memo(function FileHistoryPane({
   onPickCommit: (hash: string) => void;
 }) {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
         <div className="min-w-0">
           <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
@@ -4797,8 +4784,8 @@ export default function App({
                                 }}
                               />
                             ) : !listsError && commitBrowseHash ? (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden px-4 pt-3 pb-4">
-                                <div className="shrink-0 rounded-xl border border-base-300/80 bg-base-200/35 p-3">
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
+                                <div className="shrink-0 p-3">
                                   <div className="flex flex-wrap items-start justify-between gap-2">
                                     <button
                                       type="button"
@@ -4808,11 +4795,23 @@ export default function App({
                                       Back to commits
                                     </button>
                                     <div className="min-w-0 text-right">
-                                      <p className="m-0 font-mono text-[0.65rem] text-base-content/60">
-                                        {commitDetails?.shortHash ??
-                                          commitBrowseMeta?.shortHash ??
-                                          commitBrowseHash.slice(0, 7)}
-                                      </p>
+                                      <div className="flex items-center justify-end gap-2">
+                                        <p className="m-0 font-mono text-[0.65rem] text-base-content/60">
+                                          {commitDetails?.shortHash ??
+                                            commitBrowseMeta?.shortHash ??
+                                            commitBrowseHash.slice(0, 7)}
+                                        </p>
+                                        <button
+                                          type="button"
+                                          className="btn shrink-0 btn-ghost btn-xs"
+                                          aria-expanded={commitDetailsExpanded}
+                                          onClick={() => {
+                                            setCommitDetailsExpanded((expanded) => !expanded);
+                                          }}
+                                        >
+                                          {commitDetailsExpanded ? "Hide details" : "Show details"}
+                                        </button>
+                                      </div>
                                       <p className="mt-0.5 mb-0 text-[0.65rem] text-base-content/55">
                                         Signature:{" "}
                                         {commitSignature.loading ? (
@@ -4827,22 +4826,12 @@ export default function App({
                                       </p>
                                     </div>
                                   </div>
-                                  <div className="mt-2 flex items-center justify-between gap-2">
+                                  <div className="mt-2">
                                     <p className="m-0 text-[0.68rem] text-base-content/55">
                                       {commitDetails?.subject ??
                                         commitBrowseMeta?.subject ??
                                         commitBrowseHash.slice(0, 7)}
                                     </p>
-                                    <button
-                                      type="button"
-                                      className="btn btn-ghost btn-xs"
-                                      aria-expanded={commitDetailsExpanded}
-                                      onClick={() => {
-                                        setCommitDetailsExpanded((expanded) => !expanded);
-                                      }}
-                                    >
-                                      {commitDetailsExpanded ? "Hide details" : "Show details"}
-                                    </button>
                                   </div>
                                   {commitDetailsLoading ? (
                                     <p className="mt-2 mb-0 text-xs text-base-content/60">
@@ -4993,7 +4982,7 @@ export default function App({
                                             </span>
                                           </DismissibleAlert>
                                         ) : (
-                                          <div className="min-h-0 w-full min-w-0 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
+                                          <div className="ml-4 flex-1 overflow-auto rounded border border-base-300/80 bg-base-200/30 p-2">
                                             <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
                                               Patch
                                             </div>
@@ -5009,7 +4998,7 @@ export default function App({
                                   </div>
                                   <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-l border-base-300/80">
                                     <div className="shrink-0 border-b border-base-300/80 pb-2">
-                                      <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                      <h2 className="m-0 ml-3 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                         <span>Files</span>
                                         {!commitBrowseLoading ? (
                                           <span className="font-mono text-[0.65rem] font-normal tracking-normal text-base-content/45 normal-case tabular-nums">

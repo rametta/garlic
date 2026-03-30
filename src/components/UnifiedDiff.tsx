@@ -50,7 +50,7 @@ export type HunkAction = {
 
 function BinaryImagePreview({ beforeUrl, afterUrl, fileLabel }: BinaryImagePreview) {
   return (
-    <div className="unified-diff-binary-preview mb-3 flex min-w-0 flex-col gap-2 overflow-hidden rounded border border-base-300/80 bg-base-200/30 p-2">
+    <div className="unified-diff-binary-preview mb-3 flex min-w-0 flex-col gap-2 overflow-hidden border border-base-300/80 bg-base-200/30 p-2">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[0.65rem] text-base-content/60">
         <span className="font-mono wrap-break-word">{fileLabel}</span>
         <span className="shrink-0 tracking-wide uppercase opacity-60">Image preview</span>
@@ -60,7 +60,7 @@ function BinaryImagePreview({ beforeUrl, afterUrl, fileLabel }: BinaryImagePrevi
           <span className="text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
             Before
           </span>
-          <div className="flex max-h-[min(50vh,420px)] min-h-[120px] min-w-0 items-center justify-center overflow-auto rounded bg-base-300/20 p-2">
+          <div className="flex max-h-[min(50vh,420px)] min-h-[120px] min-w-0 items-center justify-center overflow-auto bg-base-300/20 p-2">
             {beforeUrl ? (
               <img src={beforeUrl} alt="" className="max-h-full max-w-full object-contain" />
             ) : (
@@ -72,7 +72,7 @@ function BinaryImagePreview({ beforeUrl, afterUrl, fileLabel }: BinaryImagePrevi
           <span className="text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
             After
           </span>
-          <div className="flex max-h-[min(50vh,420px)] min-h-[120px] min-w-0 items-center justify-center overflow-auto rounded bg-base-300/20 p-2">
+          <div className="flex max-h-[min(50vh,420px)] min-h-[120px] min-w-0 items-center justify-center overflow-auto bg-base-300/20 p-2">
             {afterUrl ? (
               <img src={afterUrl} alt="" className="max-h-full max-w-full object-contain" />
             ) : (
@@ -453,7 +453,7 @@ export const UnifiedDiff = memo(function UnifiedDiff({
   if (parsed.kind === "raw") {
     if (showImagePreview) {
       return (
-        <div className="unified-diff-root w-full min-w-0">
+        <div className="w-full min-w-0">
           <BinaryImagePreview {...binaryImagePreview} />
           <p className="m-0 text-xs text-base-content/50">Binary file (no line diff)</p>
         </div>
@@ -467,7 +467,7 @@ export const UnifiedDiff = memo(function UnifiedDiff({
   }
 
   return (
-    <div className="unified-diff-root w-full min-w-0">
+    <div className="w-full min-w-0">
       {showImagePreview ? <BinaryImagePreview {...binaryImagePreview} /> : null}
       <UnifiedDiffWithHighlight
         parsedFiles={parsed.files}
