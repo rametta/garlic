@@ -1,4 +1,15 @@
-import { memo, useEffect, useState, type RefObject } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { memo, useEffect, useMemo, useState, type RefObject } from "react";
+
+const GITLAB_MERGE_REQUEST_URL_RE = /\bhttps?:\/\/[^\s)]+\/-\/merge_requests\/\d+\b/;
+
+function extractMergeRequestUrl(lines: { stream: string; text: string }[]): string | null {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = lines[index]?.text.match(GITLAB_MERGE_REQUEST_URL_RE);
+    if (match) return match[0];
+  }
+  return null;
+}
 
 function IconChevronRight({ className }: { className?: string }) {
   return (
@@ -43,10 +54,20 @@ export const GitCommandPanel = memo(function GitCommandPanel({
   onClear,
 }: GitCommandPanelProps) {
   const [open, setOpen] = useState(false);
+  const mergeRequestUrl = useMemo(
+    () => (gitCommandStream ? extractMergeRequestUrl(gitCommandStream.lines) : null),
+    [gitCommandStream],
+  );
 
   useEffect(() => {
     setOpen(false);
   }, [repoPath]);
+
+  useEffect(() => {
+    if (mergeRequestUrl) {
+      setOpen(true);
+    }
+  }, [mergeRequestUrl]);
 
   return (
     <div className="card shrink-0 border-base-300 bg-base-100 shadow-sm">
@@ -101,13 +122,27 @@ export const GitCommandPanel = memo(function GitCommandPanel({
                         {gitCommandStream.commandLine}
                       </code>
                     </div>
-                    <button
-                      type="button"
-                      className="btn shrink-0 btn-ghost btn-xs"
-                      onClick={onClear}
-                    >
-                      Clear
-                    </button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {mergeRequestUrl ? (
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-primary"
+                          title={mergeRequestUrl}
+                          onClick={() => {
+                            void openUrl(mergeRequestUrl);
+                          }}
+                        >
+                          View MR
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn shrink-0 btn-ghost btn-xs"
+                        onClick={onClear}
+                      >
+                        Clear
+                      </button>
+                    </div>
                   </div>
                   <div
                     ref={scrollRef}
