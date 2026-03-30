@@ -307,6 +307,15 @@ fn run_git_streaming(
     run_git_streaming_with_input(app, repo_path_str, workdir, args, operation, None)
 }
 
+async fn run_blocking_git_command<F>(task: F) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|e| format!("Git command task failed: {e}"))?
+}
+
 /// Payload for [`start_clone_repository`] → `clone-progress` (stderr lines from `git clone --progress`).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1805,8 +1814,7 @@ pub fn delete_local_branch(
 }
 
 /// Delete a branch on the remote (`git push <remote> --delete <branch>`). `remote_ref` is e.g. `origin/feature/foo`.
-#[tauri::command]
-pub fn delete_remote_branch(
+fn delete_remote_branch_blocking(
     app: AppHandle,
     path: String,
     remote_ref: String,
@@ -1830,6 +1838,15 @@ pub fn delete_remote_branch(
         "push",
     )?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_remote_branch(
+    app: AppHandle,
+    path: String,
+    remote_ref: String,
+) -> Result<(), String> {
+    run_blocking_git_command(move || delete_remote_branch_blocking(app, path, remote_ref)).await
 }
 
 /// Fetch URL for a named remote (`git remote get-url <name>`).
@@ -2589,8 +2606,7 @@ pub fn discard_path_changes(
     Ok(())
 }
 
-#[tauri::command]
-pub fn commit_staged(app: AppHandle, path: String, message: String) -> Result<(), String> {
+fn commit_staged_blocking(app: AppHandle, path: String, message: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let msg = message.trim();
@@ -2601,10 +2617,14 @@ pub fn commit_staged(app: AppHandle, path: String, message: String) -> Result<()
     Ok(())
 }
 
+#[tauri::command]
+pub async fn commit_staged(app: AppHandle, path: String, message: String) -> Result<(), String> {
+    run_blocking_git_command(move || commit_staged_blocking(app, path, message)).await
+}
+
 /// Amend `HEAD` with staged changes. With a non-empty `message`, replaces the commit message (`git commit --amend -m`).
 /// With `None` or empty message, keeps the previous message (`git commit --amend --no-edit`).
-#[tauri::command]
-pub fn amend_last_commit(
+fn amend_last_commit_blocking(
     app: AppHandle,
     path: String,
     message: Option<String>,
@@ -2633,6 +2653,15 @@ pub fn amend_last_commit(
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn amend_last_commit(
+    app: AppHandle,
+    path: String,
+    message: Option<String>,
+) -> Result<(), String> {
+    run_blocking_git_command(move || amend_last_commit_blocking(app, path, message)).await
 }
 
 /// Merge `branch_or_ref` into the current branch (`git merge`).
@@ -3245,8 +3274,7 @@ pub fn current_branch_name(path: impl AsRef<Path>) -> Result<String, String> {
 
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).
 /// With `skip_hooks`, passes `--no-verify` so local pre-push hooks are skipped.
-#[tauri::command]
-pub fn push_to_origin(app: AppHandle, path: String, skip_hooks: bool) -> Result<(), String> {
+fn push_to_origin_blocking(app: AppHandle, path: String, skip_hooks: bool) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -3277,10 +3305,18 @@ pub fn push_to_origin(app: AppHandle, path: String, skip_hooks: bool) -> Result<
     Ok(())
 }
 
+#[tauri::command]
+pub async fn push_to_origin(app: AppHandle, path: String, skip_hooks: bool) -> Result<(), String> {
+    run_blocking_git_command(move || push_to_origin_blocking(app, path, skip_hooks)).await
+}
+
 /// Force-push the current branch to `origin` with lease (`git push --force-with-lease -u origin HEAD`).
 /// Refuses if `HEAD` is detached or `origin` is missing (same rules as [`push_to_origin`]).
-#[tauri::command]
-pub fn force_push_to_origin(app: AppHandle, path: String, skip_hooks: bool) -> Result<(), String> {
+fn force_push_to_origin_blocking(
+    app: AppHandle,
+    path: String,
+    skip_hooks: bool,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -3318,6 +3354,15 @@ pub fn force_push_to_origin(app: AppHandle, path: String, skip_hooks: bool) -> R
     Ok(())
 }
 
+#[tauri::command]
+pub async fn force_push_to_origin(
+    app: AppHandle,
+    path: String,
+    skip_hooks: bool,
+) -> Result<(), String> {
+    run_blocking_git_command(move || force_push_to_origin_blocking(app, path, skip_hooks)).await
+}
+
 /// Whether `origin` exists and whether `refs/tags/<tag>` is present on `origin` (`git ls-remote`).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3349,8 +3394,7 @@ pub fn tag_origin_status(path: String, tag: String) -> Result<TagOriginStatus, S
 }
 
 /// Delete a tag on `origin` (`git push origin --delete <tag>`).
-#[tauri::command]
-pub fn delete_remote_tag(app: AppHandle, path: String, tag: String) -> Result<(), String> {
+fn delete_remote_tag_blocking(app: AppHandle, path: String, tag: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let tag = tag.trim();
@@ -3369,9 +3413,13 @@ pub fn delete_remote_tag(app: AppHandle, path: String, tag: String) -> Result<()
     Ok(())
 }
 
-/// Push a local tag to `origin` (`git push origin <tag>`).
 #[tauri::command]
-pub fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Result<(), String> {
+pub async fn delete_remote_tag(app: AppHandle, path: String, tag: String) -> Result<(), String> {
+    run_blocking_git_command(move || delete_remote_tag_blocking(app, path, tag)).await
+}
+
+/// Push a local tag to `origin` (`git push origin <tag>`).
+fn push_tag_to_origin_blocking(app: AppHandle, path: String, tag: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let tag = tag.trim();
@@ -3384,6 +3432,11 @@ pub fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Result<(
     git_output(&path_buf, &["rev-parse", "--verify", &tag_ref])?;
     run_git_streaming(&app, &path, &path_buf, &["push", "origin", tag], "push")?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Result<(), String> {
+    run_blocking_git_command(move || push_tag_to_origin_blocking(app, path, tag)).await
 }
 
 #[cfg(test)]

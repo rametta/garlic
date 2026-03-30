@@ -27,6 +27,7 @@ export async function popupBranchContextMenu(
     currentBranchName: string | null;
     repoDetached: boolean;
     branchBusy: boolean;
+    canPull?: boolean;
     onPull: () => void;
     /** Check out this branch (local) or create from remote ref. */
     onCheckout?: () => void;
@@ -72,7 +73,7 @@ export async function popupBranchContextMenu(
     });
   }
 
-  if (args.kind === "local") {
+  if (args.kind === "local" && args.canPull) {
     items.push({
       id: "branch_pull",
       text: "Pull",

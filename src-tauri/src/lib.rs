@@ -460,19 +460,21 @@ pub fn run() {
                         if !confirmed {
                             return;
                         }
-                        match git::force_push_to_origin(handle_confirm.clone(), path_for_push, false) {
-                            Ok(()) => {
-                                let _ = handle_confirm.emit("repository-mutated", ());
+                        let h = handle_confirm.clone();
+                        tauri::async_runtime::spawn(async move {
+                            match git::force_push_to_origin(h.clone(), path_for_push, false).await {
+                                Ok(()) => {
+                                    let _ = h.emit("repository-mutated", ());
+                                }
+                                Err(e) => {
+                                    h.dialog()
+                                        .message(e)
+                                        .title("Force Push")
+                                        .kind(MessageDialogKind::Error)
+                                        .show(|_| {});
+                                }
                             }
-                            Err(e) => {
-                                let h = handle_confirm.clone();
-                                h.dialog()
-                                    .message(e)
-                                    .title("Force Push")
-                                    .kind(MessageDialogKind::Error)
-                                    .show(|_| {});
-                            }
-                        }
+                        });
                     });
                 return;
             }
