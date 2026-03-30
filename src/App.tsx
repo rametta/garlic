@@ -271,6 +271,10 @@ function blobPairToPreviewUrls(
   };
 }
 
+function fileBlobPairKey(pair: FileBlobPair): string {
+  return `${pair.beforeBase64 ?? ""}\0${pair.afterBase64 ?? ""}`;
+}
+
 /** Rules aligned with `git check-ref-format --branch` for short branch names. */
 function branchNameValidationError(name: string): string | null {
   if (name.length === 0) return null;
@@ -656,7 +660,7 @@ const FileBlamePane = memo(function FileBlamePane({
   onDismissError: () => void;
 }) {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 pb-4">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-3">
         <div className="min-w-0">
           <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
@@ -916,6 +920,17 @@ export default function App({
     before: string | null;
     after: string | null;
   } | null>(null);
+  const selectedDiffPathRef = useRef<string | null>(selectedDiffPath);
+  selectedDiffPathRef.current = selectedDiffPath;
+  const selectedDiffSideRef = useRef<"unstaged" | "staged" | null>(selectedDiffSide);
+  selectedDiffSideRef.current = selectedDiffSide;
+  const selectedDiffRepoPathRef = useRef<string | null>(selectedDiffRepoPath);
+  selectedDiffRepoPathRef.current = selectedDiffRepoPath;
+  const diffStagedTextRef = useRef<string | null>(diffStagedText);
+  diffStagedTextRef.current = diffStagedText;
+  const diffUnstagedTextRef = useRef<string | null>(diffUnstagedText);
+  diffUnstagedTextRef.current = diffUnstagedText;
+  const diffImagePreviewKeyRef = useRef<string | null>(null);
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
   const [syncingStagePaths, setSyncingStagePaths] = useState<Set<string>>(() => new Set());
   const [pushBusy, setPushBusy] = useState(false);
@@ -1023,6 +1038,16 @@ export default function App({
     },
     [queryClient],
   );
+  const clearDiffImagePreview = useCallback(() => {
+    diffImagePreviewKeyRef.current = null;
+    setDiffImagePreview(null);
+  }, []);
+  const clearSelectedDiffContent = useCallback(() => {
+    setDiffStagedText(null);
+    setDiffUnstagedText(null);
+    setDiffError(null);
+    clearDiffImagePreview();
+  }, [clearDiffImagePreview]);
 
   useEffect(() => {
     if (!repo?.path || repo.error) return;
@@ -1548,13 +1573,22 @@ export default function App({
     async (
       f: WorkingTreeFile,
       side: "unstaged" | "staged",
-      options?: { repoPath?: string; clearCommitBrowse?: boolean },
+      options?: { repoPath?: string; clearCommitBrowse?: boolean; preserveExisting?: boolean },
     ) => {
       const pathAtStart = options?.repoPath ?? repo?.path ?? null;
       const guardActiveRepo = options?.repoPath == null;
       if (!pathAtStart) return;
       if (side === "unstaged" && !f.unstaged) return;
       if (side === "staged" && !f.staged) return;
+      const preserveExisting = Boolean(
+        options?.preserveExisting &&
+        selectedDiffRepoPathRef.current === pathAtStart &&
+        selectedDiffPathRef.current === f.path &&
+        selectedDiffSideRef.current === side &&
+        (side === "unstaged"
+          ? diffUnstagedTextRef.current !== null
+          : diffStagedTextRef.current !== null),
+      );
       const seq = ++diffLoadSeqRef.current;
       const isCurrentDiffRequest = () =>
         seq === diffLoadSeqRef.current &&
@@ -1565,11 +1599,11 @@ export default function App({
       setSelectedDiffPath(f.path);
       setSelectedDiffSide(side);
       setSelectedDiffRepoPath(pathAtStart);
-      setDiffLoading(true);
       setDiffError(null);
-      setDiffStagedText(null);
-      setDiffUnstagedText(null);
-      setDiffImagePreview(null);
+      if (!preserveExisting) {
+        setDiffLoading(true);
+        clearSelectedDiffContent();
+      }
       try {
         if (side === "unstaged") {
           const unstaged = await invoke<string>("get_unstaged_diff", {
@@ -1587,10 +1621,14 @@ export default function App({
                 renameFrom: f.renameFrom ?? null,
               });
               if (!isCurrentDiffRequest()) return;
-              setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
+              const previewKey = fileBlobPairKey(pair);
+              if (diffImagePreviewKeyRef.current !== previewKey) {
+                diffImagePreviewKeyRef.current = previewKey;
+                setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
+              }
             } catch {
               if (isCurrentDiffRequest()) {
-                setDiffImagePreview(null);
+                clearDiffImagePreview();
               }
             }
           }
@@ -1610,10 +1648,14 @@ export default function App({
                 renameFrom: f.renameFrom ?? null,
               });
               if (!isCurrentDiffRequest()) return;
-              setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
+              const previewKey = fileBlobPairKey(pair);
+              if (diffImagePreviewKeyRef.current !== previewKey) {
+                diffImagePreviewKeyRef.current = previewKey;
+                setDiffImagePreview(blobPairToPreviewUrls(pair, f.path));
+              }
             } catch {
               if (isCurrentDiffRequest()) {
-                setDiffImagePreview(null);
+                clearDiffImagePreview();
               }
             }
           }
@@ -1628,7 +1670,7 @@ export default function App({
         }
       }
     },
-    [repo?.path, clearCommitBrowse],
+    [repo?.path, clearCommitBrowse, clearDiffImagePreview, clearSelectedDiffContent],
   );
 
   const openWorktreeBrowse = useCallback(
@@ -1640,11 +1682,8 @@ export default function App({
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
       setSelectedDiffRepoPath(null);
-      setDiffStagedText(null);
-      setDiffUnstagedText(null);
-      setDiffError(null);
+      clearSelectedDiffContent();
       setDiffLoading(false);
-      setDiffImagePreview(null);
       setWorktreeBrowseTarget(worktree);
       setWorktreeBrowseError(null);
       setWorktreeBrowseLoading(true);
@@ -1670,7 +1709,14 @@ export default function App({
         setWorktreeBrowseLoading(false);
       }
     },
-    [clearCommitBrowse, clearFileToolView, loadDiffForFile, repo?.path, workingTreeFiles],
+    [
+      clearCommitBrowse,
+      clearFileToolView,
+      loadDiffForFile,
+      clearSelectedDiffContent,
+      repo?.path,
+      workingTreeFiles,
+    ],
   );
 
   const loadCommitFileDiff = useCallback(
@@ -1730,9 +1776,7 @@ export default function App({
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
       setSelectedDiffRepoPath(null);
-      setDiffStagedText(null);
-      setDiffUnstagedText(null);
-      setDiffError(null);
+      clearSelectedDiffContent();
       setCommitBrowseHash(hash);
       setCommitBrowseFiles([]);
       setCommitDiffPath(null);
@@ -1796,7 +1840,7 @@ export default function App({
         requestId: seq,
       }).catch(() => {});
     },
-    [repo, clearFileToolView, loadCommitFileDiff, clearWorktreeBrowse],
+    [repo, clearFileToolView, loadCommitFileDiff, clearSelectedDiffContent, clearWorktreeBrowse],
   );
 
   const clearDiffSelection = useCallback(() => {
@@ -1804,13 +1848,10 @@ export default function App({
     setSelectedDiffPath(null);
     setSelectedDiffSide(null);
     setSelectedDiffRepoPath(null);
-    setDiffStagedText(null);
-    setDiffUnstagedText(null);
-    setDiffError(null);
+    clearSelectedDiffContent();
     setDiffLoading(false);
-    setDiffImagePreview(null);
     clearFileToolView();
-  }, [clearFileToolView]);
+  }, [clearFileToolView, clearSelectedDiffContent]);
 
   const previousRepoContextRef = useRef<{
     path: string | null;
@@ -1847,29 +1888,36 @@ export default function App({
       diffLoadSeqRef.current += 1;
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
-      setDiffStagedText(null);
-      setDiffUnstagedText(null);
-      setDiffError(null);
+      setSelectedDiffRepoPath(null);
+      clearSelectedDiffContent();
+      setDiffLoading(false);
       return;
     }
 
     const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
     if (preferredSide === "unstaged" && next.unstaged) {
-      void loadDiffForFile(next, "unstaged");
+      if (diffUnstagedText === null) {
+        void loadDiffForFile(next, "unstaged", { clearCommitBrowse: false });
+      }
       return;
     }
     if (preferredSide === "staged" && next.staged) {
-      void loadDiffForFile(next, "staged");
+      if (diffStagedText === null) {
+        void loadDiffForFile(next, "staged", { clearCommitBrowse: false });
+      }
       return;
     }
     if (next.unstaged) {
-      void loadDiffForFile(next, "unstaged");
+      void loadDiffForFile(next, "unstaged", { clearCommitBrowse: false });
       return;
     }
     if (next.staged) {
-      void loadDiffForFile(next, "staged");
+      void loadDiffForFile(next, "staged", { clearCommitBrowse: false });
     }
   }, [
+    clearSelectedDiffContent,
+    diffStagedText,
+    diffUnstagedText,
     repo?.path,
     workingTreeFiles,
     selectedDiffPath,
@@ -1895,9 +1943,7 @@ export default function App({
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
       setSelectedDiffRepoPath(null);
-      setDiffStagedText(null);
-      setDiffUnstagedText(null);
-      setDiffError(null);
+      clearSelectedDiffContent();
       setDiffLoading(false);
       try {
         const snapshot = await loadRepoSnapshot(target);
@@ -1925,7 +1971,7 @@ export default function App({
         }
       }
     },
-    [clearCommitBrowse, clearWorktreeBrowse, queryClient],
+    [clearCommitBrowse, clearSelectedDiffContent, clearWorktreeBrowse, queryClient],
   );
 
   /** Coalesce rapid `clone-progress` events to one React update per frame (avoids UI freeze). */
@@ -2164,28 +2210,34 @@ export default function App({
             if (next && (next.staged || next.unstaged)) {
               const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
               if (preferredSide === "unstaged" && next.unstaged) {
-                void loadDiffForFile(next, "unstaged");
+                void loadDiffForFile(next, "unstaged", {
+                  clearCommitBrowse: false,
+                  preserveExisting: true,
+                });
               } else if (preferredSide === "staged" && next.staged) {
-                void loadDiffForFile(next, "staged");
+                void loadDiffForFile(next, "staged", {
+                  clearCommitBrowse: false,
+                  preserveExisting: true,
+                });
               } else if (next.unstaged) {
-                void loadDiffForFile(next, "unstaged");
+                void loadDiffForFile(next, "unstaged", { clearCommitBrowse: false });
               } else if (next.staged) {
-                void loadDiffForFile(next, "staged");
+                void loadDiffForFile(next, "staged", { clearCommitBrowse: false });
               } else {
                 diffLoadSeqRef.current += 1;
                 setSelectedDiffPath(null);
                 setSelectedDiffSide(null);
-                setDiffStagedText(null);
-                setDiffUnstagedText(null);
-                setDiffError(null);
+                setSelectedDiffRepoPath(null);
+                clearSelectedDiffContent();
+                setDiffLoading(false);
               }
             } else {
               diffLoadSeqRef.current += 1;
               setSelectedDiffPath(null);
               setSelectedDiffSide(null);
-              setDiffStagedText(null);
-              setDiffUnstagedText(null);
-              setDiffError(null);
+              setSelectedDiffRepoPath(null);
+              clearSelectedDiffContent();
+              setDiffLoading(false);
             }
           }
         }
@@ -2202,6 +2254,7 @@ export default function App({
       selectedDiffRepoPath,
       selectedDiffSide,
       loadDiffForFile,
+      clearSelectedDiffContent,
       clearCommitBrowse,
       queryClient,
     ],
@@ -3345,9 +3398,7 @@ export default function App({
     ) {
       diffLoadSeqRef.current += 1;
       setSelectedDiffSide("staged");
-      setDiffStagedText(null);
-      setDiffUnstagedText(null);
-      setDiffError(null);
+      clearSelectedDiffContent();
     }
     try {
       await stagePathsMutation.mutateAsync({ path: repo.path, paths: nextPaths });
@@ -3380,9 +3431,7 @@ export default function App({
     ) {
       diffLoadSeqRef.current += 1;
       setSelectedDiffSide("unstaged");
-      setDiffStagedText(null);
-      setDiffUnstagedText(null);
-      setDiffError(null);
+      clearSelectedDiffContent();
     }
     try {
       await unstagePathsMutation.mutateAsync({ path: repo.path, paths: nextPaths });
