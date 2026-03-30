@@ -33,9 +33,19 @@ export function CommitGraphColumn({
 
   const cx = (lane: number) => pad + lane * laneW + laneW / 2;
   const cy = (row: number) => row * rowH + rowH / 2;
-  const wipLane = commitCount > 0 ? (layout.lanes[0] ?? 0) : 0;
+  const activeTipRow =
+    currentBranchTipHash !== null ? commitHashes.indexOf(currentBranchTipHash) : -1;
+  const firstVisibleActiveBranchRow =
+    activeTipRow >= 0
+      ? activeTipRow
+      : commitHashes.findIndex((hash) => activeFirstParentHashes.has(hash));
+  const wipTargetCommitRow =
+    firstVisibleActiveBranchRow >= 0 ? firstVisibleActiveBranchRow : commitCount > 0 ? 0 : null;
+  const wipLane = wipTargetCommitRow !== null ? (layout.lanes[wipTargetCommitRow] ?? 0) : 0;
   const wipColor =
-    layout.rowColors[0] ?? layout.laneColors[wipLane % layout.laneColors.length] ?? "currentColor";
+    (wipTargetCommitRow !== null ? layout.rowColors[wipTargetCommitRow] : undefined) ??
+    layout.laneColors[wipLane % layout.laneColors.length] ??
+    "currentColor";
 
   return (
     <svg
@@ -46,16 +56,19 @@ export function CommitGraphColumn({
     >
       {wipRowAbove ? (
         <g aria-hidden>
-          <line
-            x1={cx(wipLane)}
-            y1={cy(0)}
-            x2={cx(wipLane)}
-            y2={cy(1)}
-            stroke={wipColor}
-            strokeOpacity={0.85}
-            strokeWidth={1.75}
-            strokeLinecap="round"
-          />
+          {wipTargetCommitRow !== null ? (
+            <line
+              x1={cx(wipLane)}
+              y1={cy(0)}
+              x2={cx(wipLane)}
+              y2={cy(wipTargetCommitRow + rowShift)}
+              stroke={wipColor}
+              strokeOpacity={0.85}
+              strokeWidth={1.75}
+              strokeLinecap="round"
+              strokeDasharray="3 3"
+            />
+          ) : null}
           <circle
             cx={cx(wipLane)}
             cy={cy(0)}

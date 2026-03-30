@@ -297,7 +297,7 @@ function UnifiedDiffHunk({
       <div className="diff-hunk-meta flex items-center justify-between gap-2 border-b border-base-300/80 px-2 py-1 font-mono text-[0.65rem] text-base-content/60 select-none">
         <span className="min-w-0 flex-1 truncate">{hunk.content.trim()}</span>
         {!binary && hunkPatch && (partialAction || secondaryHunkAction) ? (
-          <div className="flex shrink-0 items-center gap-1 mr-7">
+          <div className="mr-7 flex shrink-0 items-center gap-1">
             {secondaryHunkAction ? (
               <button
                 type="button"

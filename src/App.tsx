@@ -583,7 +583,7 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 p-3">
         <div className="min-w-0">
           <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
-          {path}
+            {path}
           </h2>
           {side ? (
             <p className="mt-1 mb-0 text-xs text-base-content/65">
