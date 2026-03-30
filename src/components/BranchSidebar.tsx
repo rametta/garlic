@@ -526,12 +526,14 @@ function LocalBranchRow({
             className="min-w-0 flex-1 truncate text-[0.8125rem] leading-snug"
             title={busy ? undefined : branch.name}
           >
-            {busy ? "Switching…" : label}
+            {label}
             {isCurrent && !busy ? (
               <span className="ml-1.5 text-xs font-normal opacity-70">(current)</span>
             ) : null}
           </span>
-          {upstreamLabel && !busy ? (
+          {busy ? (
+            <span className="loading loading-xs shrink-0 loading-spinner text-base-content/60" />
+          ) : upstreamLabel ? (
             <span
               className={`shrink-0 font-mono text-[0.65rem] leading-none tracking-tight ${
                 isCurrent ? "text-inherit opacity-90" : "text-base-content/60"

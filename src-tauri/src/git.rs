@@ -117,14 +117,15 @@ pub struct GitCommandStreamFinishedEvent {
     pub error: Option<String>,
 }
 
-/// Runs `git` with piped stdout/stderr, streams lines to the webview, writes the audit log, and
-/// returns `Err` with stderr (or a generic message) on failure.
-fn run_git_streaming(
+/// Runs `git` with piped stdout/stderr, optionally writes stdin, streams lines to the webview,
+/// writes the audit log, and returns `Err` with stderr (or a generic message) on failure.
+fn run_git_streaming_with_input(
     app: &AppHandle,
     repo_path_str: &str,
     workdir: &Path,
     args: &[&str],
     operation: &str,
+    stdin_text: Option<&str>,
 ) -> Result<(), String> {
     let session_id = next_git_stream_session_id();
     let repo_owned = repo_path_str.to_string();
@@ -142,6 +143,9 @@ fn run_git_streaming(
 
     let mut cmd = git_cmd(workdir);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if stdin_text.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
     let mut child = cmd.spawn().map_err(|e| format!("Could not run git: {e}"))?;
     let stdout = child
         .stdout
@@ -213,6 +217,44 @@ fn run_git_streaming(
         }
     });
 
+    if let Some(input) = stdin_text {
+        let stdin_error = {
+            let mut stdin = child.stdin.take();
+            if let Some(stdin) = stdin.as_mut() {
+                if let Err(e) = stdin.write_all(input.as_bytes()) {
+                    Some(format!("Could not write command input to git: {e}"))
+                } else if !input.ends_with('\n') {
+                    match stdin.write_all(b"\n") {
+                        Ok(_) => None,
+                        Err(e) => Some(format!("Could not finalize command input for git: {e}")),
+                    }
+                } else {
+                    None
+                }
+            } else {
+                Some("git: no stdin".to_string())
+            }
+        };
+        if let Some(msg) = stdin_error {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = h_out.join();
+            let _ = h_err.join();
+            write_git_audit_line(workdir, args, false, &msg);
+            let _ = app.emit(
+                "git-command-stream-finished",
+                GitCommandStreamFinishedEvent {
+                    session_id,
+                    repo_path: repo_owned.clone(),
+                    operation: op_owned.clone(),
+                    success: false,
+                    error: Some(msg.clone()),
+                },
+            );
+            return Err(msg);
+        }
+    }
+
     let status = child
         .wait()
         .map_err(|e| format!("Could not wait for git: {e}"))?;
@@ -251,6 +293,18 @@ fn run_git_streaming(
     } else {
         Err(err_msg.unwrap_or_else(|| format!("git {} failed", args.join(" "))))
     }
+}
+
+/// Runs `git` with piped stdout/stderr, streams lines to the webview, writes the audit log, and
+/// returns `Err` with stderr (or a generic message) on failure.
+fn run_git_streaming(
+    app: &AppHandle,
+    repo_path_str: &str,
+    workdir: &Path,
+    args: &[&str],
+    operation: &str,
+) -> Result<(), String> {
+    run_git_streaming_with_input(app, repo_path_str, workdir, args, operation, None)
 }
 
 /// Payload for [`start_clone_repository`] → `clone-progress` (stderr lines from `git clone --progress`).
@@ -634,45 +688,19 @@ fn git_output_raw(workdir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(out)
 }
 
-fn git_apply_patch(workdir: &Path, args: &[&str], patch: &str) -> Result<(), String> {
+fn run_git_apply_patch_streaming(
+    app: &AppHandle,
+    repo_path_str: &str,
+    workdir: &Path,
+    args: &[&str],
+    operation: &str,
+    patch: &str,
+) -> Result<(), String> {
     let trimmed = patch.trim();
     if trimmed.is_empty() {
         return Err("Patch cannot be empty.".to_string());
     }
-    let mut child = git_cmd(workdir)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Could not run git: {e}"))?;
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "git apply: no stdin".to_string())?;
-        stdin
-            .write_all(trimmed.as_bytes())
-            .map_err(|e| format!("Could not write patch to git apply: {e}"))?;
-        stdin
-            .write_all(b"\n")
-            .map_err(|e| format!("Could not finalize patch for git apply: {e}"))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Could not wait for git apply: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            format!("git {} failed", args.join(" "))
-        } else {
-            stderr.clone()
-        };
-        write_git_audit_line(workdir, args, false, &msg);
-        return Err(msg);
-    }
-    write_git_audit_line(workdir, args, true, "");
-    Ok(())
+    run_git_streaming_with_input(app, repo_path_str, workdir, args, operation, Some(trimmed))
 }
 
 /// `git diff` / `git diff --no-index` use exit status 1 when there are differences (POSIX).
@@ -1610,29 +1638,40 @@ pub fn get_commit_details(path: String, commit_hash: String) -> Result<CommitDet
 }
 
 #[tauri::command]
-pub fn checkout_local_branch(path: String, branch: String) -> Result<(), String> {
+pub fn checkout_local_branch(app: AppHandle, path: String, branch: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    git_output(&path_buf, &["switch", &branch])?;
+    run_git_streaming(&app, &path, &path_buf, &["switch", &branch], "checkout")?;
     Ok(())
 }
 
 /// Create a new local branch at the current `HEAD` and switch to it.
 #[tauri::command]
-pub fn create_local_branch(path: String, branch: String) -> Result<(), String> {
+pub fn create_local_branch(app: AppHandle, path: String, branch: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let name = branch.trim();
     if name.is_empty() {
         return Err("Branch name cannot be empty.".to_string());
     }
-    git_output(&path_buf, &["switch", "-c", name])?;
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["switch", "-c", name],
+        "create branch",
+    )?;
     Ok(())
 }
 
 /// Create a new local branch at `commit` and switch to it (`git switch -c <branch> <start-point>`).
 #[tauri::command]
-pub fn create_branch_at_commit(path: String, branch: String, commit: String) -> Result<(), String> {
+pub fn create_branch_at_commit(
+    app: AppHandle,
+    path: String,
+    branch: String,
+    commit: String,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let name = branch.trim();
@@ -1645,13 +1684,20 @@ pub fn create_branch_at_commit(path: String, branch: String, commit: String) -> 
     }
     let verify_spec = format!("{commit}^{{commit}}");
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
-    git_output(&path_buf, &["switch", "-c", name, commit])?;
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["switch", "-c", name, commit],
+        "create branch",
+    )?;
     Ok(())
 }
 
 /// Create a tag at `commit`. With a non-empty `message`, creates an annotated tag (`git tag -a`).
 #[tauri::command]
 pub fn create_tag(
+    app: AppHandle,
     path: String,
     tag: String,
     commit: String,
@@ -1671,29 +1717,39 @@ pub fn create_tag(
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
     let msg = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
     if let Some(m) = msg {
-        git_output(&path_buf, &["tag", "-a", tag, "-m", m, commit])?;
+        run_git_streaming(
+            &app,
+            &path,
+            &path_buf,
+            &["tag", "-a", tag, "-m", m, commit],
+            "create tag",
+        )?;
     } else {
-        git_output(&path_buf, &["tag", tag, commit])?;
+        run_git_streaming(&app, &path, &path_buf, &["tag", tag, commit], "create tag")?;
     }
     Ok(())
 }
 
 /// Delete a local tag (`git tag -d`).
 #[tauri::command]
-pub fn delete_tag(path: String, tag: String) -> Result<(), String> {
+pub fn delete_tag(app: AppHandle, path: String, tag: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let tag = tag.trim();
     if tag.is_empty() {
         return Err("Tag name cannot be empty.".to_string());
     }
-    git_output(&path_buf, &["tag", "-d", tag])?;
+    run_git_streaming(&app, &path, &path_buf, &["tag", "-d", tag], "delete tag")?;
     Ok(())
 }
 
 /// Create a local branch from `remote_ref` (e.g. `origin/feature/foo`) and switch to it.
 #[tauri::command]
-pub fn create_branch_from_remote(path: String, remote_ref: String) -> Result<(), String> {
+pub fn create_branch_from_remote(
+    app: AppHandle,
+    path: String,
+    remote_ref: String,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let Some(slash) = remote_ref.find('/') else {
@@ -1703,16 +1759,24 @@ pub fn create_branch_from_remote(path: String, remote_ref: String) -> Result<(),
     if local_name.is_empty() {
         return Err("Invalid remote branch ref.".to_string());
     }
-    git_output(
+    run_git_streaming(
+        &app,
+        &path,
         &path_buf,
         &["switch", "-c", local_name, remote_ref.as_str()],
+        "create branch",
     )?;
     Ok(())
 }
 
 /// Delete a local branch (`git branch -d` or `-D` when `force`).
 #[tauri::command]
-pub fn delete_local_branch(path: String, branch: String, force: bool) -> Result<(), String> {
+pub fn delete_local_branch(
+    app: AppHandle,
+    path: String,
+    branch: String,
+    force: bool,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let name = branch.trim();
@@ -1720,7 +1784,13 @@ pub fn delete_local_branch(path: String, branch: String, force: bool) -> Result<
         return Err("Branch name cannot be empty.".to_string());
     }
     let flag = if force { "-D" } else { "-d" };
-    match git_output(&path_buf, &["branch", flag, "--", name]) {
+    match run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["branch", flag, "--", name],
+        "delete branch",
+    ) {
         Ok(_) => Ok(()),
         Err(e) => {
             if !force && e.contains("not fully merged") {
@@ -1736,7 +1806,11 @@ pub fn delete_local_branch(path: String, branch: String, force: bool) -> Result<
 
 /// Delete a branch on the remote (`git push <remote> --delete <branch>`). `remote_ref` is e.g. `origin/feature/foo`.
 #[tauri::command]
-pub fn delete_remote_branch(path: String, remote_ref: String) -> Result<(), String> {
+pub fn delete_remote_branch(
+    app: AppHandle,
+    path: String,
+    remote_ref: String,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let remote_ref = remote_ref.trim();
@@ -1748,7 +1822,13 @@ pub fn delete_remote_branch(path: String, remote_ref: String) -> Result<(), Stri
     if remote.is_empty() || branch_on_remote.is_empty() {
         return Err("Invalid remote branch ref.".to_string());
     }
-    git_output(&path_buf, &["push", remote, "--delete", branch_on_remote])?;
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["push", remote, "--delete", branch_on_remote],
+        "push",
+    )?;
     Ok(())
 }
 
@@ -1766,7 +1846,12 @@ pub fn get_remote_url(path: String, remote_name: String) -> Result<String, Strin
 
 /// Set URL for a named remote (`git remote set-url <name> <newurl>`).
 #[tauri::command]
-pub fn set_remote_url(path: String, remote_name: String, url: String) -> Result<(), String> {
+pub fn set_remote_url(
+    app: AppHandle,
+    path: String,
+    remote_name: String,
+    url: String,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let name = remote_name.trim();
@@ -1777,7 +1862,13 @@ pub fn set_remote_url(path: String, remote_name: String, url: String) -> Result<
     if url.is_empty() {
         return Err("Remote URL cannot be empty.".to_string());
     }
-    git_output(&path_buf, &["remote", "set-url", "--", name, url])?;
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["remote", "set-url", "--", name, url],
+        "set remote url",
+    )?;
     Ok(())
 }
 
@@ -2296,7 +2387,12 @@ pub fn list_worktrees(path: String) -> Result<Vec<WorktreeEntry>, String> {
 
 /// Remove a linked worktree (`git worktree remove`).
 #[tauri::command]
-pub fn remove_worktree(path: String, worktree_path: String, force: bool) -> Result<(), String> {
+pub fn remove_worktree(
+    app: AppHandle,
+    path: String,
+    worktree_path: String,
+    force: bool,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let target = worktree_path.trim();
@@ -2309,12 +2405,12 @@ pub fn remove_worktree(path: String, worktree_path: String, force: bool) -> Resu
     }
     args.push("--");
     args.push(target);
-    git_output(&path_buf, &args)?;
+    run_git_streaming(&app, &path, &path_buf, &args, "remove worktree")?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn stage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
+pub fn stage_paths(app: AppHandle, path: String, paths: Vec<String>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     if paths.is_empty() {
@@ -2322,18 +2418,18 @@ pub fn stage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
     }
     let mut args: Vec<String> = vec!["add".into(), "--".into()];
     args.extend(paths);
-    git_output(
-        &path_buf,
-        &args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-    )?;
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_git_streaming(&app, &path, &path_buf, &args_ref, "stage")?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn stage_patch(path: String, patch: String) -> Result<(), String> {
+pub fn stage_patch(app: AppHandle, path: String, patch: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    git_apply_patch(
+    run_git_apply_patch_streaming(
+        &app,
+        &path,
         &path_buf,
         &[
             "apply",
@@ -2342,13 +2438,14 @@ pub fn stage_patch(path: String, patch: String) -> Result<(), String> {
             "--recount",
             "--whitespace=nowarn",
         ],
+        "stage",
         &patch,
     )?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
+pub fn unstage_paths(app: AppHandle, path: String, paths: Vec<String>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     if paths.is_empty() {
@@ -2356,18 +2453,18 @@ pub fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), String> {
     }
     let mut args: Vec<String> = vec!["restore".into(), "--staged".into(), "--".into()];
     args.extend(paths);
-    git_output(
-        &path_buf,
-        &args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-    )?;
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_git_streaming(&app, &path, &path_buf, &args_ref, "unstage")?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn unstage_patch(path: String, patch: String) -> Result<(), String> {
+pub fn unstage_patch(app: AppHandle, path: String, patch: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    git_apply_patch(
+    run_git_apply_patch_streaming(
+        &app,
+        &path,
         &path_buf,
         &[
             "apply",
@@ -2377,16 +2474,19 @@ pub fn unstage_patch(path: String, patch: String) -> Result<(), String> {
             "--recount",
             "--whitespace=nowarn",
         ],
+        "unstage",
         &patch,
     )?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn discard_patch(path: String, patch: String) -> Result<(), String> {
+pub fn discard_patch(app: AppHandle, path: String, patch: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    git_apply_patch(
+    run_git_apply_patch_streaming(
+        &app,
+        &path,
         &path_buf,
         &[
             "apply",
@@ -2395,6 +2495,7 @@ pub fn discard_patch(path: String, patch: String) -> Result<(), String> {
             "--recount",
             "--whitespace=nowarn",
         ],
+        "discard changes",
         &patch,
     )?;
     Ok(())
@@ -2406,6 +2507,7 @@ pub fn discard_patch(path: String, patch: String) -> Result<(), String> {
 /// - **Staged:** reset index and working tree to `HEAD` for this path (`git restore --source=HEAD --staged --worktree`).
 #[tauri::command]
 pub fn discard_path_changes(
+    app: AppHandle,
     path: String,
     file_path: String,
     from_unstaged: bool,
@@ -2424,17 +2526,37 @@ pub fn discard_path_changes(
     if from_unstaged {
         if let Some(from) = rename_from {
             if git_path_known_to_git(&path_buf, from) {
-                git_output(&path_buf, &["restore", "--worktree", "--", from])?;
+                run_git_streaming(
+                    &app,
+                    &path,
+                    &path_buf,
+                    &["restore", "--worktree", "--", from],
+                    "discard changes",
+                )?;
             }
         }
         if git_path_known_to_git(&path_buf, rel) {
-            git_output(&path_buf, &["restore", "--worktree", "--", rel])?;
+            run_git_streaming(
+                &app,
+                &path,
+                &path_buf,
+                &["restore", "--worktree", "--", rel],
+                "discard changes",
+            )?;
         } else {
-            git_output(&path_buf, &["clean", "-f", "--", rel])?;
+            run_git_streaming(
+                &app,
+                &path,
+                &path_buf,
+                &["clean", "-f", "--", rel],
+                "discard changes",
+            )?;
         }
     } else {
         if let Some(from) = rename_from {
-            git_output(
+            run_git_streaming(
+                &app,
+                &path,
                 &path_buf,
                 &[
                     "restore",
@@ -2445,9 +2567,12 @@ pub fn discard_path_changes(
                     from,
                     rel,
                 ],
+                "discard changes",
             )?;
         } else {
-            git_output(
+            run_git_streaming(
+                &app,
+                &path,
                 &path_buf,
                 &[
                     "restore",
@@ -2457,6 +2582,7 @@ pub fn discard_path_changes(
                     "--",
                     rel,
                 ],
+                "discard changes",
             )?;
         }
     }
@@ -3039,14 +3165,20 @@ pub fn stash_pop(app: AppHandle, path: String, stash_ref: String) -> Result<(), 
 
 /// Remove a stash without applying (`git stash drop stash@{n}`).
 #[tauri::command]
-pub fn stash_drop(path: String, stash_ref: String) -> Result<(), String> {
+pub fn stash_drop(app: AppHandle, path: String, stash_ref: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let s = stash_ref.trim();
     if !is_valid_stash_ref(s) {
         return Err("Invalid stash reference.".to_string());
     }
-    git_output(&path_buf, &["stash", "drop", "-q", s])?;
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["stash", "drop", "-q", s],
+        "stash drop",
+    )?;
     Ok(())
 }
 
@@ -3218,7 +3350,7 @@ pub fn tag_origin_status(path: String, tag: String) -> Result<TagOriginStatus, S
 
 /// Delete a tag on `origin` (`git push origin --delete <tag>`).
 #[tauri::command]
-pub fn delete_remote_tag(path: String, tag: String) -> Result<(), String> {
+pub fn delete_remote_tag(app: AppHandle, path: String, tag: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let tag = tag.trim();
@@ -3227,7 +3359,13 @@ pub fn delete_remote_tag(path: String, tag: String) -> Result<(), String> {
     }
     git_output(&path_buf, &["remote", "get-url", "origin"])
         .map_err(|_| "No remote named \"origin\" configured.".to_string())?;
-    git_output(&path_buf, &["push", "origin", "--delete", tag])?;
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["push", "origin", "--delete", tag],
+        "push",
+    )?;
     Ok(())
 }
 
