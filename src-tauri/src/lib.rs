@@ -125,6 +125,7 @@ pub fn run() {
             git::discard_path_changes,
             git::commit_staged,
             git::amend_last_commit,
+            git::reword_commit,
             git::merge_branch,
             git::cherry_pick_commit,
             git::list_file_history,

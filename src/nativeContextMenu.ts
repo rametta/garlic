@@ -328,10 +328,12 @@ export async function popupGraphCommitContextMenu(
   clientX: number,
   clientY: number,
   args: {
+    amendDisabled: boolean;
     branchBusy: boolean;
     cherryPickDisabled: boolean;
     dropCommitDisabled: boolean;
     rebaseOntoDisabled: boolean;
+    onAmend: () => void;
     onBrowse: () => void;
     onCherryPick: () => void;
     onDropCommit: () => void;
@@ -351,6 +353,14 @@ export async function popupGraphCommitContextMenu(
         enabled: true,
         action: () => {
           args.onBrowse();
+        },
+      },
+      {
+        id: "commit_amend",
+        text: "Edit Commit Message",
+        enabled: !args.amendDisabled,
+        action: () => {
+          args.onAmend();
         },
       },
       {

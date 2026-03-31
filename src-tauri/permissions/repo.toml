@@ -34,6 +34,7 @@ commands.allow = [
   "discard_path_changes",
   "commit_staged",
   "amend_last_commit",
+  "reword_commit",
   "merge_branch",
   "cherry_pick_commit",
   "list_file_history",

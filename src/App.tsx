@@ -90,6 +90,7 @@ import {
   usePushTagToOriginMutation,
   usePushToOriginMutation,
   useRebaseCurrentBranchOntoMutation,
+  useRewordCommitMutation,
   useRemoveWorktreeMutation,
   useSetBranchSidebarSectionsMutation,
   useSetRemoteUrlMutation,
@@ -349,6 +350,14 @@ function stripCoAuthorTrailers(body: string): string {
   const kept = lines.filter((line) => !line.trim().startsWith("Co-authored-by:"));
   while (kept.length > 0 && kept[kept.length - 1]?.trim() === "") kept.pop();
   return kept.join("\n").trim();
+}
+
+function composeCommitMessage(title: string, description: string): string {
+  const trimmedTitle = title.trim();
+  const trimmedDescription = description.trim();
+  if (!trimmedTitle) return trimmedDescription;
+  if (!trimmedDescription) return trimmedTitle;
+  return `${trimmedTitle}\n\n${trimmedDescription}`;
 }
 
 function DismissibleAlert({
@@ -941,6 +950,12 @@ export default function App({
     ? worktreeBrowseFiles.length
     : commitBrowseFiles.length;
   const [createBranchDialogOpen, setCreateBranchDialogOpen] = useState(false);
+  const [amendCommitDialogOpen, setAmendCommitDialogOpen] = useState(false);
+  const [amendCommitHash, setAmendCommitHash] = useState<string | null>(null);
+  const [amendCommitTitle, setAmendCommitTitle] = useState("");
+  const [amendCommitBody, setAmendCommitBody] = useState("");
+  const [amendCommitOriginalMessage, setAmendCommitOriginalMessage] = useState("");
+  const [amendCommitFieldError, setAmendCommitFieldError] = useState<string | null>(null);
   const [squashDialogOpen, setSquashDialogOpen] = useState(false);
   const [squashCommitMessage, setSquashCommitMessage] = useState("");
   const [squashCommitFieldError, setSquashCommitFieldError] = useState<string | null>(null);
@@ -990,6 +1005,7 @@ export default function App({
   const amendLastCommitMutation = useAmendLastCommitMutation();
   const commitStagedMutation = useCommitStagedMutation();
   const pushToOriginMutation = usePushToOriginMutation();
+  const rewordCommitMutation = useRewordCommitMutation();
   const closeOpenAiSettingsDialog = useCallback(() => {
     setOpenaiSettingsOpen(false);
   }, []);
@@ -2079,6 +2095,15 @@ export default function App({
     setCreateTagCommit(null);
   }, []);
 
+  const closeAmendCommitDialog = useCallback(() => {
+    setAmendCommitDialogOpen(false);
+    setAmendCommitHash(null);
+    setAmendCommitTitle("");
+    setAmendCommitBody("");
+    setAmendCommitOriginalMessage("");
+    setAmendCommitFieldError(null);
+  }, []);
+
   const clearGraphCommitSelection = useCallback(() => {
     setSelectedGraphCommitHashes([]);
     setGraphSelectionAnchorHash(null);
@@ -2273,6 +2298,31 @@ export default function App({
     setCreateBranchStartCommit(null);
   }, []);
 
+  const openAmendCommitDialog = useCallback(
+    async (hash: string) => {
+      if (!repo?.path || repo.error) return;
+      const pathAtStart = repo.path;
+      setOperationError(null);
+      try {
+        const details = await invoke<CommitDetails>("get_commit_details", {
+          path: pathAtStart,
+          commitHash: hash,
+        });
+        if (activeRepoPathRef.current !== pathAtStart) return;
+        setAmendCommitHash(hash);
+        setAmendCommitTitle(details.subject);
+        setAmendCommitBody(details.body);
+        setAmendCommitOriginalMessage(composeCommitMessage(details.subject, details.body));
+        setAmendCommitFieldError(null);
+        setAmendCommitDialogOpen(true);
+      } catch (e) {
+        if (activeRepoPathRef.current !== pathAtStart) return;
+        setOperationError(invokeErrorMessage(e));
+      }
+    },
+    [repo],
+  );
+
   const onStashPush = useCallback(async () => {
     if (!repo?.path || repo.error) return;
     setStashBusy("push");
@@ -2318,6 +2368,7 @@ export default function App({
 
   const cloneRepoDialogBackdropClose = useDialogBackdropClose(closeCloneRepoDialog);
   const createBranchDialogBackdropClose = useDialogBackdropClose(closeCreateBranchDialog);
+  const amendCommitDialogBackdropClose = useDialogBackdropClose(closeAmendCommitDialog);
   const squashDialogBackdropClose = useDialogBackdropClose(closeSquashDialog);
   const createTagDialogBackdropClose = useDialogBackdropClose(closeCreateTagDialog);
   const editOriginUrlDialogBackdropClose = useDialogBackdropClose(closeEditOriginUrlDialog);
@@ -2905,7 +2956,14 @@ export default function App({
     (hash: string, clientX: number, clientY: number) => {
       const entry = commits.find((x) => x.hash === hash);
       const shortHash = entry?.shortHash ?? hash.slice(0, 7);
+      const amendDisabled =
+        Boolean(branchBusy) ||
+        Boolean(repo?.detached) ||
+        Boolean(entry?.stashRef) ||
+        !graphHeadFirstParentHashes.has(hash) ||
+        (Boolean(repo?.headHash && repo.headHash !== hash) && entry?.parentHashes.length !== 1);
       void popupGraphCommitContextMenu(clientX, clientY, {
+        amendDisabled,
         branchBusy: Boolean(branchBusy),
         cherryPickDisabled:
           Boolean(branchBusy) || Boolean(repo?.detached) || Boolean(entry?.stashRef),
@@ -2919,6 +2977,9 @@ export default function App({
           Boolean(branchBusy) ||
           Boolean(repo?.detached) ||
           Boolean(repo?.headHash && repo.headHash === hash),
+        onAmend: () => {
+          void openAmendCommitDialog(hash);
+        },
         onBrowse: () => {
           clearGraphCommitSelection();
           void selectCommit(hash);
@@ -2950,6 +3011,7 @@ export default function App({
       repo,
       commits,
       graphHeadFirstParentHashes,
+      openAmendCommitDialog,
       clearGraphCommitSelection,
       selectCommit,
       cherryPickCommit,
@@ -3270,6 +3332,35 @@ export default function App({
     }
   }
 
+  async function submitAmendCommit() {
+    const trimmed = composeCommitMessage(amendCommitTitle, amendCommitBody).trim();
+    if (!repo?.path || repo.error || !amendCommitHash) return;
+    if (amendCommitTitle.trim().length === 0 && amendCommitBody.trim().length > 0) {
+      setAmendCommitFieldError("Add a commit title before the description.");
+      return;
+    }
+    if (!trimmed) {
+      setAmendCommitFieldError("Enter a commit message.");
+      return;
+    }
+    setAmendCommitFieldError(null);
+    setBranchBusy("reword");
+    setOperationError(null);
+    try {
+      await rewordCommitMutation.mutateAsync({
+        path: repo.path,
+        commitHash: amendCommitHash,
+        message: trimmed,
+      });
+      clearGraphCommitSelection();
+      closeAmendCommitDialog();
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }
+
   async function submitSquashSelectedCommits() {
     const trimmed = squashCommitMessage.trim();
     if (!repo?.path || repo.error) return;
@@ -3565,6 +3656,24 @@ export default function App({
   const canSubmitNewTag = newTagTrimmed.length > 0 && !newTagNameInvalid && !createTagDialogBusy;
   const createTagBusy = createTagSubmitAction === "create" && createTagDialogBusy;
   const createAndPushTagBusy = createTagSubmitAction === "create-and-push" && createTagDialogBusy;
+  const amendCommitMessage = useMemo(
+    () => composeCommitMessage(amendCommitTitle, amendCommitBody),
+    [amendCommitBody, amendCommitTitle],
+  );
+  const amendCommitTitleTrimmed = amendCommitTitle.trim();
+  const amendCommitBodyTrimmed = amendCommitBody.trim();
+  const amendCommitDraftInvalid =
+    amendCommitTitleTrimmed.length === 0 && amendCommitBodyTrimmed.length > 0;
+  const amendCommitDialogBusy = branchBusy === "reword";
+  const amendCommitTrimmed = amendCommitMessage.trim();
+  const amendCommitUnchanged =
+    amendCommitTrimmed.length > 0 && amendCommitTrimmed === amendCommitOriginalMessage.trim();
+  const canSubmitAmendCommit =
+    amendCommitHash !== null &&
+    amendCommitTrimmed.length > 0 &&
+    !amendCommitDraftInvalid &&
+    !amendCommitUnchanged &&
+    !amendCommitDialogBusy;
 
   const createBranchStartEntry = useMemo(() => {
     if (!createBranchStartCommit) return null;
@@ -3575,6 +3684,11 @@ export default function App({
     if (!createTagCommit) return null;
     return commits.find((c) => c.hash === createTagCommit) ?? null;
   }, [commits, createTagCommit]);
+
+  const amendCommitEntry = useMemo(() => {
+    if (!amendCommitHash) return null;
+    return commits.find((c) => c.hash === amendCommitHash) ?? null;
+  }, [commits, amendCommitHash]);
 
   const worktreeBrowseFileEntries = useMemo(
     () =>
@@ -4059,6 +4173,113 @@ export default function App({
                       <span className="loading loading-sm loading-spinner" />
                     ) : (
                       "Create"
+                    )}
+                  </button>
+                </div>
+              </div>
+            </dialog>
+          ) : null}
+
+          {amendCommitDialogOpen ? (
+            <dialog
+              open
+              className="modal"
+              onCancel={(e) => {
+                e.preventDefault();
+                closeAmendCommitDialog();
+              }}
+              onMouseDown={amendCommitDialogBackdropClose.onMouseDown}
+              onMouseUp={amendCommitDialogBackdropClose.onMouseUp}
+            >
+              <div
+                className="modal-box"
+                onClick={(e) => {
+                  e.stopPropagation();
+                }}
+              >
+                <h3 className="m-0 text-lg font-bold">Edit Commit Message</h3>
+                <p className="mt-1 mb-0 text-sm text-base-content/70">
+                  Rewrites this commit message and updates any newer commits on this branch if
+                  needed.
+                </p>
+                {amendCommitHash ? (
+                  <p className="mt-2 mb-0 text-xs text-base-content/70">
+                    <span className="font-mono text-base-content/80">
+                      {amendCommitEntry?.shortHash ?? amendCommitHash.slice(0, 7)}
+                    </span>
+                    {amendCommitEntry?.subject ? (
+                      <span className="block truncate pt-0.5">{amendCommitEntry.subject}</span>
+                    ) : null}
+                  </p>
+                ) : null}
+                <label className="form-control mt-4 block w-full">
+                  <span className="label-text mb-1">Title</span>
+                  <input
+                    type="text"
+                    autoFocus
+                    className="input-bordered input w-full font-sans text-sm"
+                    value={amendCommitTitle}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={amendCommitDialogBusy}
+                    onChange={(e) => {
+                      setAmendCommitTitle(e.target.value);
+                      if (amendCommitFieldError) setAmendCommitFieldError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        void submitAmendCommit();
+                      }
+                    }}
+                  />
+                </label>
+                <label className="form-control mt-3 block w-full">
+                  <span className="label-text mb-1">Description</span>
+                  <textarea
+                    className="textarea-bordered textarea min-h-28 w-full font-sans text-sm"
+                    value={amendCommitBody}
+                    disabled={amendCommitDialogBusy}
+                    onChange={(e) => {
+                      setAmendCommitBody(e.target.value);
+                      if (amendCommitFieldError) setAmendCommitFieldError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        void submitAmendCommit();
+                      }
+                    }}
+                  />
+                  {amendCommitFieldError ? (
+                    <span className="label-text-alt mt-1 block w-full text-error">
+                      {amendCommitFieldError}
+                    </span>
+                  ) : amendCommitDraftInvalid ? (
+                    <span className="label-text-alt mt-1 block w-full text-error">
+                      Add a commit title before the description.
+                    </span>
+                  ) : null}
+                </label>
+                <div className="modal-action">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={amendCommitDialogBusy}
+                    onClick={closeAmendCommitDialog}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={!canSubmitAmendCommit}
+                    onClick={() => void submitAmendCommit()}
+                  >
+                    {amendCommitDialogBusy ? (
+                      <span className="loading loading-sm loading-spinner" />
+                    ) : (
+                      "Amend"
                     )}
                   </button>
                 </div>

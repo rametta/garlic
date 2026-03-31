@@ -2878,6 +2878,137 @@ pub async fn amend_last_commit(
     run_blocking_git_command(move || amend_last_commit_blocking(app, path, message)).await
 }
 
+/// Rewrite a commit message on the current branch without changing file contents.
+///
+/// - `HEAD`: rewrites the commit object in place and keeps the current index / working tree.
+/// - Older commits: limited to non-root, non-merge commits on the current branch's first-parent
+///   history, then rebases newer descendants onto the rewritten commit.
+#[tauri::command]
+pub fn reword_commit(
+    app: AppHandle,
+    path: String,
+    commit_hash: String,
+    message: String,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let trimmed_message = message.trim();
+    if trimmed_message.is_empty() {
+        return Err("Commit message cannot be empty.".to_string());
+    }
+
+    git_output(&path_buf, &["symbolic-ref", "--quiet", "--short", "HEAD"]).map_err(|_| {
+        "Amending a commit message requires the current branch to be checked out.".to_string()
+    })?;
+
+    let hash = commit_hash.trim();
+    if hash.is_empty() {
+        return Err("Commit hash cannot be empty.".to_string());
+    }
+    let verify_spec = format!("{hash}^{{commit}}");
+    let resolved_hash = git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+    let head_hash = git_output(&path_buf, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let is_head = resolved_hash == head_hash;
+
+    let parents_line = git_output(
+        &path_buf,
+        &["rev-list", "--parents", "-n", "1", &resolved_hash],
+    )?;
+    let mut parts = parents_line.split_whitespace();
+    let _ = parts.next();
+    let parent_hashes = parts.map(str::to_string).collect::<Vec<_>>();
+
+    if !is_head {
+        let tracked_status = git_output(
+            &path_buf,
+            &["status", "--porcelain", "--untracked-files=no"],
+        )?;
+        if !tracked_status.is_empty() {
+            return Err(
+                "Amending an older commit message requires a clean index and working tree."
+                    .to_string(),
+            );
+        }
+        if parent_hashes.is_empty() {
+            return Err("Amending the root commit message is not supported yet.".to_string());
+        }
+        if parent_hashes.len() > 1 {
+            return Err("Amending older merge commit messages is not supported yet.".to_string());
+        }
+
+        let first_parent_history = git_output(&path_buf, &["rev-list", "--first-parent", "HEAD"])?;
+        if !first_parent_history
+            .lines()
+            .any(|line| line.trim() == resolved_hash)
+        {
+            return Err(
+                "Only commits on the current branch's primary history can be amended.".to_string(),
+            );
+        }
+    }
+
+    let author_line = git_output(
+        &path_buf,
+        &["show", "-s", "--format=%an%x00%ae%x00%aI", &resolved_hash],
+    )?;
+    let mut author_parts = author_line.split('\0');
+    let author_name = author_parts.next().unwrap_or_default().trim().to_string();
+    let author_email = author_parts.next().unwrap_or_default().trim().to_string();
+    let author_date = author_parts.next().unwrap_or_default().trim().to_string();
+    if author_name.is_empty() || author_email.is_empty() || author_date.is_empty() {
+        return Err("Failed to determine the commit author.".to_string());
+    }
+
+    let tree_hash = git_output(
+        &path_buf,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("{resolved_hash}^{{tree}}"),
+        ],
+    )?;
+    let author_env = [
+        ("GIT_AUTHOR_NAME", author_name.as_str()),
+        ("GIT_AUTHOR_EMAIL", author_email.as_str()),
+        ("GIT_AUTHOR_DATE", author_date.as_str()),
+    ];
+    let mut commit_tree_args = vec!["commit-tree".to_string(), tree_hash];
+    for parent_hash in &parent_hashes {
+        commit_tree_args.push("-p".to_string());
+        commit_tree_args.push(parent_hash.clone());
+    }
+    let commit_tree_args_ref = commit_tree_args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let rewritten_hash = git_output_with_input_and_env(
+        &path_buf,
+        &commit_tree_args_ref,
+        Some(trimmed_message),
+        &author_env,
+    )?;
+
+    if is_head {
+        run_git_streaming(
+            &app,
+            &path,
+            &path_buf,
+            &["reset", "--soft", &rewritten_hash],
+            "edit commit message",
+        )?;
+        return Ok(());
+    }
+
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["rebase", "--onto", &rewritten_hash, &resolved_hash],
+        "edit commit message",
+    )?;
+    Ok(())
+}
+
 /// Merge `branch_or_ref` into the current branch (`git merge`).
 #[tauri::command]
 pub fn merge_branch(app: AppHandle, path: String, branch_or_ref: String) -> Result<(), String> {

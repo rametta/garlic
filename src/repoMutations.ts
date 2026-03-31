@@ -561,6 +561,13 @@ export function useAmendLastCommitMutation() {
   });
 }
 
+export function useRewordCommitMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string; commitHash: string; message: string }) =>
+      invokeRepoMutation("reword_commit", variables),
+  });
+}
+
 export function useCommitStagedMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; message: string }) =>
