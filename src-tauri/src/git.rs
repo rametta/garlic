@@ -697,6 +697,20 @@ fn git_output_raw(workdir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(out)
 }
 
+fn git_config_bool(workdir: &Path, key: &str) -> bool {
+    git_output(workdir, &["config", "--bool", "--get", key])
+        .map(|value| matches!(value.trim(), "true" | "yes" | "on" | "1"))
+        .unwrap_or(false)
+}
+
+fn commit_has_signature(workdir: &Path, hash: &str) -> bool {
+    let Ok(flag) = git_output(workdir, &["log", "-1", "--format=%G?", hash]) else {
+        return false;
+    };
+    let marker = flag.chars().next().unwrap_or(' ');
+    !flag.is_empty() && marker != 'N'
+}
+
 fn git_output_with_input_and_env(
     workdir: &Path,
     args: &[&str],
@@ -2909,6 +2923,8 @@ pub fn reword_commit(
     let resolved_hash = git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
     let head_hash = git_output(&path_buf, &["rev-parse", "--verify", "HEAD^{commit}"])?;
     let is_head = resolved_hash == head_hash;
+    let mut sign_rewritten_commits = git_config_bool(&path_buf, "commit.gpgsign")
+        || commit_has_signature(&path_buf, &resolved_hash);
 
     let parents_line = git_output(
         &path_buf,
@@ -2945,6 +2961,13 @@ pub fn reword_commit(
                 "Only commits on the current branch's primary history can be amended.".to_string(),
             );
         }
+        if !sign_rewritten_commits {
+            sign_rewritten_commits = first_parent_history
+                .lines()
+                .map(str::trim)
+                .take_while(|line| *line != resolved_hash)
+                .any(|line| !line.is_empty() && commit_has_signature(&path_buf, line));
+        }
     }
 
     let author_line = git_output(
@@ -2973,6 +2996,9 @@ pub fn reword_commit(
         ("GIT_AUTHOR_DATE", author_date.as_str()),
     ];
     let mut commit_tree_args = vec!["commit-tree".to_string(), tree_hash];
+    if sign_rewritten_commits {
+        commit_tree_args.push("-S".to_string());
+    }
     for parent_hash in &parent_hashes {
         commit_tree_args.push("-p".to_string());
         commit_tree_args.push(parent_hash.clone());
@@ -2999,13 +3025,23 @@ pub fn reword_commit(
         return Ok(());
     }
 
-    run_git_streaming(
-        &app,
-        &path,
-        &path_buf,
-        &["rebase", "--onto", &rewritten_hash, &resolved_hash],
-        "edit commit message",
-    )?;
+    let rebase_args = if sign_rewritten_commits {
+        vec![
+            "rebase",
+            "--gpg-sign",
+            "--onto",
+            rewritten_hash.as_str(),
+            resolved_hash.as_str(),
+        ]
+    } else {
+        vec![
+            "rebase",
+            "--onto",
+            rewritten_hash.as_str(),
+            resolved_hash.as_str(),
+        ]
+    };
+    run_git_streaming(&app, &path, &path_buf, &rebase_args, "edit commit message")?;
     Ok(())
 }
 
