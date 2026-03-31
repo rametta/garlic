@@ -5277,7 +5277,7 @@ export default function App({
 
         <aside className="col-span-12 flex min-h-0 min-w-0 lg:col-span-3 lg:h-full lg:min-h-0">
           <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm">
-            <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
+            <div className="card-body min-h-0 gap-0 p-0">
               <section
                 className="flex min-h-0 flex-[1_1_0%] flex-col border-b border-base-300"
                 aria-labelledby="sidebar-unstaged-heading"

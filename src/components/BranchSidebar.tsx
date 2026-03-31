@@ -151,7 +151,7 @@ function BranchPanel({
           ) : null}
           <div
             ref={contentScrollRef}
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           >
             {empty ? (
               <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
@@ -429,7 +429,7 @@ function LocalBranchFolderRow({
         </button>
         <button
           type="button"
-          className="min-w-0 flex-1 rounded-md py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word transition-colors hover:bg-base-200/50"
+          className="min-w-0 flex-1 py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word transition-colors hover:bg-base-200/50"
           aria-label={`${expanded ? "Collapse" : "Expand"} ${label} folder`}
           aria-expanded={expanded}
           onClick={onToggle}
@@ -475,7 +475,7 @@ function LocalBranchRow({
 
   return (
     <div
-      className={isCurrent ? "rounded-md bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""}
+      className={isCurrent ? "bg-base-200/50" : ""}
       style={{
         paddingLeft: `${depth * BRANCH_TREE_INDENT_PX}px`,
       }}
@@ -520,7 +520,7 @@ function LocalBranchRow({
             if (busy || isCurrent) return;
             onCheckoutLocal(branch.name);
           }}
-          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 rounded-md py-2 pr-2 pl-1 text-left transition-colors hover:bg-base-200/50 ${busy ? "opacity-60" : ""}`}
+          className={`flex h-auto min-h-0 min-w-0 flex-1 flex-row items-center justify-between gap-2 py-2 pr-2 pl-1 text-left transition-colors hover:bg-base-200/50 ${busy ? "opacity-60" : ""}`}
         >
           <span
             className="min-w-0 flex-1 truncate text-[0.8125rem] leading-snug"
@@ -612,7 +612,7 @@ function RemoteBranchFolderRow({
         </button>
         <button
           type="button"
-          className="min-w-0 flex-1 rounded-md py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word transition-colors hover:bg-base-200/50"
+          className="min-w-0 flex-1 py-2 pr-2 pl-1 text-left font-mono text-[0.8125rem] wrap-break-word transition-colors hover:bg-base-200/50"
           aria-label={`${expanded ? "Collapse" : "Expand"} ${label} folder`}
           aria-expanded={expanded}
           onClick={onToggle}
@@ -727,7 +727,7 @@ function TagRow({
       <div
         role="button"
         tabIndex={0}
-        className="flex w-full min-w-0 cursor-pointer flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
+        className="flex w-full min-w-0 cursor-pointer flex-col gap-0.5 px-3 py-2 text-left wrap-break-word hover:bg-base-200/50"
         title={`${tag.name} → ${tag.tipHash}`}
         onClick={() => {
           if (tagRowBusy) return;
@@ -797,7 +797,7 @@ function WorktreeRow({
   return (
     <li
       className={
-        worktree.isCurrent ? "rounded-md bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""
+        worktree.isCurrent ? "bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""
       }
       onContextMenu={(e) => {
         if (!nativeContextMenusAvailable()) return;
@@ -1099,7 +1099,7 @@ export const BranchSidebar = memo(function BranchSidebar({
 
   return (
     <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm lg:min-h-0">
-      <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
+      <div className="card-body min-h-0 gap-0 p-0">
         <BranchPanel
           title="Local branches"
           entityCount={localBranches.length}
@@ -1401,7 +1401,7 @@ export const BranchSidebar = memo(function BranchSidebar({
                     <div
                       role="button"
                       tabIndex={0}
-                      className="flex w-full min-w-0 cursor-pointer flex-col gap-0.5 px-2 py-2 text-left wrap-break-word hover:bg-base-200/50"
+                      className="flex w-full min-w-0 cursor-pointer flex-col gap-0.5 px-3 py-2 text-left wrap-break-word hover:bg-base-200/50"
                       title={`${s.refName}: ${s.message}`}
                       onClick={() => {
                         if (stashRowBusy) return;
