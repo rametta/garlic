@@ -64,6 +64,7 @@ import {
 } from "./graphCommitFilters";
 import {
   combineLineStats,
+  clampGraphCommitsPageSize,
   type LineStat,
   type RepoMetadata,
   repoSnapshotFromStartup,
@@ -783,6 +784,7 @@ export default function App({
   branchSidebarSections: initialBranchSidebarSections,
   initialGraphBranchVisible,
   highlightActiveBranchRows: initialHighlightActiveBranchRows,
+  graphCommitsPageSize: initialGraphCommitsPageSize,
 }: {
   startup: RestoreLastRepo;
   /** Persisted value: `auto` or a DaisyUI theme name. */
@@ -797,6 +799,8 @@ export default function App({
   initialGraphBranchVisible: Record<string, boolean>;
   /** Whether active-branch commits get a tinted row background in the graph. */
   highlightActiveBranchRows: boolean;
+  /** Commits per `git log` page for the main graph (default 500). */
+  graphCommitsPageSize: number;
 }) {
   const [themePreference, setThemePreference] = useState(initialThemePreference);
   const [branchSidebarSections, setBranchSidebarSections] = useState<BranchSidebarSectionsState>(
@@ -804,6 +808,9 @@ export default function App({
   );
   const [highlightActiveBranchRows, setHighlightActiveBranchRows] = useState(
     initialHighlightActiveBranchRows,
+  );
+  const [graphCommitsPageSize, setGraphCommitsPageSize] = useState(() =>
+    clampGraphCommitsPageSize(initialGraphCommitsPageSize),
   );
   const queryClient = useQueryClient();
   const [currentRepoPath, setCurrentRepoPath] = useState<string | null>(
@@ -1161,6 +1168,7 @@ export default function App({
           path: pathAtStart,
           refs: graphRefs,
           skip: 0,
+          pageSize: graphCommitsPageSize,
         });
         if (cancelled || activeRepoPathRef.current !== pathAtStart) return;
         setCommits(page.commits);
@@ -1174,7 +1182,13 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [repo?.path, repo?.error, repo?.headHash, graphRefsKey, graphRefs]);
+  }, [repo?.path, repo?.error, repo?.headHash, graphRefsKey, graphRefs, graphCommitsPageSize]);
+
+  const handleGraphCommitsPageSizeChange = useCallback((next: number) => {
+    const clamped = clampGraphCommitsPageSize(next);
+    setGraphCommitsPageSize(clamped);
+    void invoke("set_graph_commits_page_size", { pageSize: clamped }).catch(() => {});
+  }, []);
 
   const loadMoreGraphCommits = useCallback(async () => {
     if (!repo?.path || repo.error || !graphCommitsHasMore || loadingMoreGraphCommits) return;
@@ -1186,6 +1200,7 @@ export default function App({
         path: pathAtStart,
         refs: graphRefs,
         skip,
+        pageSize: graphCommitsPageSize,
       });
       if (activeRepoPathRef.current !== pathAtStart) return;
       setCommits((prev) => [...prev, ...page.commits]);
@@ -1204,6 +1219,7 @@ export default function App({
     loadingMoreGraphCommits,
     graphRefs,
     commits.length,
+    graphCommitsPageSize,
   ]);
 
   const branchGraphControls: BranchGraphControls = useMemo(
@@ -5573,6 +5589,8 @@ export default function App({
                                   exportGraphCommitsDisabled={graphExportListCommits.length === 0}
                                   wipChangedFileCount={wipChangedFileCount}
                                   onWipSelect={handleSelectWipRow}
+                                  graphCommitsPageSize={graphCommitsPageSize}
+                                  onGraphCommitsPageSizeChange={handleGraphCommitsPageSizeChange}
                                 />
                               </div>
                             )}

@@ -77,8 +77,13 @@ pub struct GraphCommitsPage {
     pub has_more: bool,
 }
 
-/// `git log -n` cap per request. We fetch one extra row to know whether another page exists.
-const GRAPH_COMMITS_PAGE_SIZE: usize = 500;
+/// Default `git log -n` cap per graph request (matches historical behavior before the setting existed).
+pub const DEFAULT_GRAPH_COMMITS_PAGE_SIZE: u32 = 500;
+
+/// Clamps user-configured graph page size to a safe range for `git log -n`.
+pub fn clamp_graph_commits_page_size(n: u32) -> u32 {
+    n.clamp(10, 10_000)
+}
 
 static CLONE_SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -1553,10 +1558,10 @@ fn parse_co_author_trailers(body: &str) -> Vec<CommitCoAuthor> {
     out
 }
 
-fn trim_graph_commits_page(mut commits: Vec<CommitEntry>) -> GraphCommitsPage {
-    let has_more = commits.len() > GRAPH_COMMITS_PAGE_SIZE;
+fn trim_graph_commits_page(mut commits: Vec<CommitEntry>, page_size: usize) -> GraphCommitsPage {
+    let has_more = commits.len() > page_size;
     if has_more {
-        commits.truncate(GRAPH_COMMITS_PAGE_SIZE);
+        commits.truncate(page_size);
     }
     GraphCommitsPage { commits, has_more }
 }
@@ -1622,10 +1627,11 @@ fn annotate_stash_refs(path: &Path, commits: &mut [CommitEntry]) -> Result<(), S
 
 /// Commits reachable from any local branch (`--branches`), commit-date order, newest first.
 #[tauri::command]
-pub fn list_branch_commits(path: String) -> Result<GraphCommitsPage, String> {
+pub fn list_branch_commits(path: String, page_size: u32) -> Result<GraphCommitsPage, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let fetch_n = (GRAPH_COMMITS_PAGE_SIZE + 1).to_string();
+    let page_size = clamp_graph_commits_page_size(page_size) as usize;
+    let fetch_n = (page_size + 1).to_string();
     let mut cmd_args: Vec<String> = vec![
         "log".into(),
         "--branches".into(),
@@ -1643,7 +1649,7 @@ pub fn list_branch_commits(path: String) -> Result<GraphCommitsPage, String> {
     let out = git_output(&path_buf, &args_ref)?;
     let mut commits = parse_commit_log_lines(&out);
     annotate_stash_refs(&path_buf, &mut commits)?;
-    Ok(trim_graph_commits_page(commits))
+    Ok(trim_graph_commits_page(commits, page_size))
 }
 
 /// Commits reachable from the given refs (branch names like `main` or `origin/main`), commit-date order, newest first.
@@ -1655,9 +1661,11 @@ pub fn list_graph_commits_blocking(
     path: String,
     refs: Vec<String>,
     skip: u32,
+    page_size: u32,
 ) -> Result<GraphCommitsPage, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
+    let page_size = clamp_graph_commits_page_size(page_size) as usize;
     let mut clean: Vec<String> = refs
         .into_iter()
         .map(|s| s.trim().to_string())
@@ -1672,7 +1680,7 @@ pub fn list_graph_commits_blocking(
             has_more: false,
         });
     }
-    let fetch_n = (GRAPH_COMMITS_PAGE_SIZE + 1).to_string();
+    let fetch_n = (page_size + 1).to_string();
     let skip_s = skip.to_string();
     let mut cmd_args: Vec<String> = vec![
         "log".into(),
@@ -1688,7 +1696,7 @@ pub fn list_graph_commits_blocking(
     let out = git_output(&path_buf, &args_ref)?;
     let mut commits = parse_commit_log_lines(&out);
     annotate_stash_refs(&path_buf, &mut commits)?;
-    Ok(trim_graph_commits_page(commits))
+    Ok(trim_graph_commits_page(commits, page_size))
 }
 
 #[tauri::command]
@@ -1696,8 +1704,9 @@ pub async fn list_graph_commits(
     path: String,
     refs: Vec<String>,
     skip: u32,
+    page_size: u32,
 ) -> Result<GraphCommitsPage, String> {
-    run_blocking_git_task(move || list_graph_commits_blocking(path, refs, skip)).await
+    run_blocking_git_task(move || list_graph_commits_blocking(path, refs, skip, page_size)).await
 }
 
 #[tauri::command]

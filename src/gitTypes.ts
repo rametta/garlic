@@ -95,6 +95,19 @@ export function repoSnapshotFromStartup(startup: RestoreLastRepo): RepoSnapshot 
   };
 }
 
+/** Matches `git.rs` clamp for graph commit listing. */
+export const GRAPH_COMMITS_PAGE_SIZE_MIN = 10;
+export const GRAPH_COMMITS_PAGE_SIZE_MAX = 10000;
+export const DEFAULT_GRAPH_COMMITS_PAGE_SIZE = 500;
+
+export function clampGraphCommitsPageSize(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_GRAPH_COMMITS_PAGE_SIZE;
+  return Math.min(
+    GRAPH_COMMITS_PAGE_SIZE_MAX,
+    Math.max(GRAPH_COMMITS_PAGE_SIZE_MIN, Math.round(n)),
+  );
+}
+
 export function combineLineStats(a?: LineStat, b?: LineStat): LineStat | undefined {
   if (!a) return b ? { ...b } : undefined;
   if (!b) return { ...a };

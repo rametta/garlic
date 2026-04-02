@@ -159,6 +159,7 @@ pub fn run() {
             settings::get_graph_branch_visibility,
             settings::set_graph_branch_visibility,
             settings::set_openai_settings,
+            settings::set_graph_commits_page_size,
             write_export_text_file,
             open_in_cursor::open_in_cursor,
             repo_watch::start_repo_watch,

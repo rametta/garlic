@@ -4,6 +4,11 @@ import { formatAuthorDisplay, formatDate, formatRelativeShort } from "../appForm
 import { CommitGraphColumn } from "./CommitGraphColumn";
 import { COMMIT_GRAPH_ROW_HEIGHT, type CommitGraphLayout } from "../commitGraphLayout";
 import { nativeContextMenusAvailable } from "../nativeContextMenu";
+import {
+  clampGraphCommitsPageSize,
+  GRAPH_COMMITS_PAGE_SIZE_MAX,
+  GRAPH_COMMITS_PAGE_SIZE_MIN,
+} from "../gitTypes";
 import type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, TagEntry } from "../repoTypes";
 
 const GRAPH_GAP_PX = 6;
@@ -68,6 +73,9 @@ export interface CommitGraphSectionProps {
   onWipSelect?: () => void;
   /** True while React is deferring a heavy graph layout pass (concurrent rendering). */
   graphLayoutDeferredPending?: boolean;
+  /** `git log -n` page size for each graph fetch (persisted app setting). */
+  graphCommitsPageSize: number;
+  onGraphCommitsPageSizeChange: (value: number) => void;
 }
 
 type TipsAtHash = {
@@ -513,12 +521,19 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   wipChangedFileCount,
   onWipSelect,
   graphLayoutDeferredPending = false,
+  graphCommitsPageSize,
+  onGraphCommitsPageSizeChange,
 }: CommitGraphSectionProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const authorFilterWrapRef = useRef<HTMLDivElement>(null);
   const whenFilterWrapRef = useRef<HTMLDivElement>(null);
   const [authorFilterOpen, setAuthorFilterOpen] = useState(false);
   const [whenFilterOpen, setWhenFilterOpen] = useState(false);
+  const [pageSizeDraft, setPageSizeDraft] = useState(() => String(graphCommitsPageSize));
+
+  useEffect(() => {
+    setPageSizeDraft(String(graphCommitsPageSize));
+  }, [graphCommitsPageSize]);
 
   useEffect(() => {
     if (!authorFilterOpen && !whenFilterOpen) return;
@@ -598,27 +613,57 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   const graphLeft = `calc(${BRANCH_COL} + ${GRAPH_GAP_PX}px)`;
   const virtualRows = rowVirtualizer.getVirtualItems();
 
-  const loadMoreFooter = graphCommitsHasMore ? (
-    <div className="mt-2 flex justify-center border-t border-base-300/50 pt-2">
-      <button
-        type="button"
-        className="btn btn-outline btn-sm"
-        disabled={loadingMoreGraphCommits}
-        onClick={() => {
-          loadMoreGraphCommits();
-        }}
-      >
-        {loadingMoreGraphCommits ? (
-          <>
-            <span className="loading loading-xs loading-spinner" />
-            Loading…
-          </>
-        ) : (
-          "Load more commits"
-        )}
-      </button>
+  const graphFooter = (
+    <div className="mt-2 flex flex-wrap items-center justify-center gap-3 border-t border-base-300/50 pt-2">
+      <label className="flex items-center gap-2 text-[0.7rem] text-base-content/70">
+        <span className="shrink-0">Commits per page</span>
+        <input
+          type="number"
+          min={GRAPH_COMMITS_PAGE_SIZE_MIN}
+          max={GRAPH_COMMITS_PAGE_SIZE_MAX}
+          step={1}
+          className="input-bordered input input-xs w-[4.5rem] font-mono tabular-nums"
+          aria-label="Commits loaded per graph log request"
+          value={pageSizeDraft}
+          onChange={(e) => {
+            setPageSizeDraft(e.target.value);
+          }}
+          onBlur={() => {
+            const n = parseInt(pageSizeDraft, 10);
+            if (!Number.isFinite(n)) {
+              setPageSizeDraft(String(graphCommitsPageSize));
+              return;
+            }
+            onGraphCommitsPageSizeChange(clampGraphCommitsPageSize(n));
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+        />
+      </label>
+      {graphCommitsHasMore ? (
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          disabled={loadingMoreGraphCommits}
+          onClick={() => {
+            loadMoreGraphCommits();
+          }}
+        >
+          {loadingMoreGraphCommits ? (
+            <>
+              <span className="loading loading-xs loading-spinner" />
+              Loading…
+            </>
+          ) : (
+            "Load more commits"
+          )}
+        </button>
+      ) : null}
     </div>
-  ) : null;
+  );
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -816,7 +861,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                 {emptyMessage}
               </p>
             </div>
-            {loadMoreFooter}
+            {graphFooter}
           </div>
         ) : (
           <>
@@ -1009,7 +1054,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                 );
               })}
             </div>
-            {loadMoreFooter}
+            {graphFooter}
           </>
         )}
       </div>

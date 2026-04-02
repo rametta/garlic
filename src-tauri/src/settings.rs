@@ -85,7 +85,11 @@ pub fn persisted_theme_preference(app: &AppHandle) -> String {
 /// Most recently opened repo paths (newest first), capped for the File → Open Recent menu.
 pub const MAX_RECENT_REPO_PATHS: usize = 5;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+fn default_graph_commits_page_size() -> u32 {
+    git::DEFAULT_GRAPH_COMMITS_PAGE_SIZE
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct AppSettings {
     #[serde(default)]
     last_repo_path: Option<String>,
@@ -105,6 +109,25 @@ struct AppSettings {
     graph_branch_visibility_by_repo: BTreeMap<String, GraphBranchVisibility>,
     #[serde(default = "default_false")]
     highlight_active_branch_rows: bool,
+    /// `git log -n` page size for the main commit graph (each fetch and "load more" chunk).
+    #[serde(default = "default_graph_commits_page_size")]
+    graph_commits_page_size: u32,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            last_repo_path: None,
+            recent_repo_paths: Vec::new(),
+            theme: None,
+            openai_api_key: None,
+            openai_model: None,
+            branch_sidebar_sections: BranchSidebarSections::default(),
+            graph_branch_visibility_by_repo: BTreeMap::new(),
+            highlight_active_branch_rows: false,
+            graph_commits_page_size: git::DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
+        }
+    }
 }
 
 fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -120,6 +143,7 @@ fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
     }
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut s: AppSettings = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    s.graph_commits_page_size = git::clamp_graph_commits_page_size(s.graph_commits_page_size);
     if s.recent_repo_paths.is_empty() {
         if let Some(ref p) = s.last_repo_path {
             s.recent_repo_paths.push(p.clone());
@@ -238,15 +262,16 @@ fn restore_repo_snapshot(
                         h6.join().unwrap(),
                     )
                 });
+            let page_size = git::clamp_graph_commits_page_size(settings.graph_commits_page_size);
             let commits_page = match (&locals, &remotes) {
                 (Ok(loc), Ok(rem)) => {
                     let mut refs: Vec<String> = loc.iter().map(|b| b.name.clone()).collect();
                     refs.extend(rem.iter().map(|r| r.name.clone()));
                     refs.sort();
                     refs.dedup();
-                    git::list_graph_commits_blocking(path.clone(), refs, 0)
+                    git::list_graph_commits_blocking(path.clone(), refs, 0, page_size)
                 }
-                _ => git::list_branch_commits(path.clone()),
+                _ => git::list_branch_commits(path.clone(), page_size),
             };
 
             let lists_error = locals
@@ -300,6 +325,8 @@ pub struct AppBootstrap {
     pub branch_sidebar_sections: BranchSidebarSections,
     pub graph_branch_visible: GraphBranchVisibility,
     pub highlight_active_branch_rows: bool,
+    /// `git log -n` page size for the commit graph (default 500).
+    pub graph_commits_page_size: u32,
 }
 
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
@@ -326,6 +353,7 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
         branch_sidebar_sections: settings.branch_sidebar_sections.clone(),
         graph_branch_visible,
         highlight_active_branch_rows: settings.highlight_active_branch_rows,
+        graph_commits_page_size: git::clamp_graph_commits_page_size(settings.graph_commits_page_size),
     })
 }
 
@@ -454,6 +482,14 @@ pub fn set_highlight_active_branch_rows(app: &AppHandle, enabled: bool) -> Resul
     let mut s = load_settings(app)?;
     s.highlight_active_branch_rows = enabled;
     save_settings(app, &s)
+}
+
+/// Persists how many commits each graph log fetch loads (`git log -n`, default 500).
+#[tauri::command]
+pub fn set_graph_commits_page_size(app: AppHandle, page_size: u32) -> Result<(), String> {
+    let mut s = load_settings(&app)?;
+    s.graph_commits_page_size = git::clamp_graph_commits_page_size(page_size);
+    save_settings(&app, &s)
 }
 
 /// Persists theme preference: `auto` (follow OS light/dark) or a DaisyUI `data-theme` name.

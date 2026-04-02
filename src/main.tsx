@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import type { RestoreLastRepo } from "./gitTypes";
+import { type RestoreLastRepo, DEFAULT_GRAPH_COMMITS_PAGE_SIZE } from "./gitTypes";
 import type { BranchSidebarSectionsState } from "./repoTypes";
 import { queryClient } from "./queryClient";
 import "./index.css";
@@ -18,6 +18,7 @@ export interface AppBootstrap {
   branchSidebarSections: BranchSidebarSectionsState;
   graphBranchVisible: Record<string, boolean>;
   highlightActiveBranchRows: boolean;
+  graphCommitsPageSize: number;
 }
 
 export const emptyAppBootstrap: AppBootstrap = {
@@ -46,6 +47,7 @@ export const emptyAppBootstrap: AppBootstrap = {
   },
   graphBranchVisible: {},
   highlightActiveBranchRows: false,
+  graphCommitsPageSize: DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
 };
 
 async function bootstrap() {
@@ -69,6 +71,7 @@ async function bootstrap() {
           branchSidebarSections={data.branchSidebarSections}
           initialGraphBranchVisible={data.graphBranchVisible}
           highlightActiveBranchRows={data.highlightActiveBranchRows}
+          graphCommitsPageSize={data.graphCommitsPageSize ?? DEFAULT_GRAPH_COMMITS_PAGE_SIZE}
         />
       </QueryClientProvider>
     </React.StrictMode>,
