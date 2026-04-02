@@ -101,20 +101,16 @@ export function buildChangeBlockPatchMap(
       newCursor += 1;
       continue;
     }
-    if (!current) {
-      current = {
-        changeKeys: [],
-        lines: [],
-        oldStartCursor: oldCursor,
-        newStartCursor: newCursor,
-        oldCount: 0,
-        newCount: 0,
-      };
-    }
-    current.changeKeys.push(getChangeKey(change));
-    current.lines.push(normalizePatchLine(change));
-    if (del) current.oldCount += 1;
-    if (insert) current.newCount += 1;
+    // One patch per changed line so line-level stage/unstage buttons do not apply whole runs.
+    flushCurrent();
+    current = {
+      changeKeys: [getChangeKey(change)],
+      lines: [normalizePatchLine(change)],
+      oldStartCursor: oldCursor,
+      newStartCursor: newCursor,
+      oldCount: del ? 1 : 0,
+      newCount: insert ? 1 : 0,
+    };
     if (del) oldCursor += 1;
     if (insert) newCursor += 1;
   }

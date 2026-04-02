@@ -188,7 +188,7 @@ function DiffGridRow({
   );
   const partialActionLabel = partialAction?.kind === "unstage" ? "−" : "+";
   const partialActionTitle =
-    partialAction?.kind === "unstage" ? "Unstage this changed block" : "Stage this changed block";
+    partialAction?.kind === "unstage" ? "Unstage this line" : "Stage this line";
 
   const lineTokens = useMemo(() => {
     if (binary || !highlighter || !lang) return null;
