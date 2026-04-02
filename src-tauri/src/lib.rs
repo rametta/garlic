@@ -167,6 +167,7 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             app.manage(active_repo::ActiveRepoPath::default());
             app.manage(repo_watch::RepoWatchState::default());
+            app.manage(git::AutoFetchInFlight::default());
             if let Ok(dir) = app.path().app_config_dir() {
                 let _ = std::fs::create_dir_all(&dir);
                 git::set_git_audit_log_path(Some(dir.join("git-audit.log")));

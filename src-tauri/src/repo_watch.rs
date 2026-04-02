@@ -1,5 +1,7 @@
 //! Debounced filesystem watch for the open repo; emits `repository-mutated` when files change.
+//! Also runs a periodic `git fetch --all` in a background thread while a repo is watched.
 
+use crate::git::{schedule_fetch_all_remotes, AutoFetchInFlight};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -9,10 +11,14 @@ use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
 
+const AUTO_FETCH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
 pub struct RepoWatchState(pub Mutex<Option<RepoWatchGuard>>);
 
 pub struct RepoWatchGuard {
     _watcher: RecommendedWatcher,
+    /// Held so dropping the guard disconnects the auto-fetch thread’s stop channel.
+    _auto_fetch_stop: mpsc::Sender<()>,
 }
 
 impl Default for RepoWatchState {
@@ -90,7 +96,24 @@ pub fn start_repo_watch(app: AppHandle, path: String) -> Result<(), String> {
         .watch(&root, RecursiveMode::Recursive)
         .map_err(|e| format!("Could not watch repository: {e}"))?;
 
-    *g = Some(RepoWatchGuard { _watcher: watcher });
+    let (auto_fetch_stop_tx, auto_fetch_stop_rx) = mpsc::channel::<()>();
+    let path_for_auto_fetch = root.clone();
+    let in_flight = app.state::<AutoFetchInFlight>().inner().clone();
+    std::thread::spawn(move || {
+        loop {
+            match auto_fetch_stop_rx.recv_timeout(AUTO_FETCH_INTERVAL) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let _ = schedule_fetch_all_remotes(path_for_auto_fetch.clone(), &in_flight);
+                }
+            }
+        }
+    });
+
+    *g = Some(RepoWatchGuard {
+        _watcher: watcher,
+        _auto_fetch_stop: auto_fetch_stop_tx,
+    });
 
     let app_emit = app.clone();
     std::thread::spawn(move || {

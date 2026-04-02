@@ -3745,6 +3745,65 @@ pub fn pull_local_branch(app: AppHandle, path: String, branch: String) -> Result
     Ok(())
 }
 
+/// Tracks repositories with an in-flight background `git fetch` so periodic timers do not overlap.
+#[derive(Clone)]
+pub struct AutoFetchInFlight(pub std::sync::Arc<std::sync::Mutex<HashSet<String>>>);
+
+impl Default for AutoFetchInFlight {
+    fn default() -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(HashSet::new())))
+    }
+}
+
+fn git_fetch_all_quiet(workdir: &Path) -> Result<(), String> {
+    let output = git_cmd(workdir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args(["fetch", "--all", "--quiet"])
+        .output()
+        .map_err(|e| format!("Could not run git: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            "git fetch --all failed".to_string()
+        } else {
+            stderr
+        };
+        write_git_audit_line(workdir, &["fetch", "--all", "--quiet"], false, &msg);
+        return Err(msg);
+    }
+    write_git_audit_line(workdir, &["fetch", "--all", "--quiet"], true, "");
+    Ok(())
+}
+
+/// Queues `git fetch --all` on the async runtime’s blocking pool and returns immediately.
+/// Used by the periodic auto-fetch timer in [`crate::repo_watch`].
+pub fn schedule_fetch_all_remotes(path: PathBuf, in_flight: &AutoFetchInFlight) -> Result<(), String> {
+    if path.to_string_lossy().trim().is_empty() {
+        return Err("Path is empty.".to_string());
+    }
+    ensure_git_repo(&path)?;
+    let path_key = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.clone())
+        .to_string_lossy()
+        .to_string();
+    {
+        let mut guard = in_flight.0.lock().map_err(|e| e.to_string())?;
+        if !guard.insert(path_key.clone()) {
+            return Ok(());
+        }
+    }
+    let in_flight_arc = in_flight.0.clone();
+    let path_for_git = path;
+    tauri::async_runtime::spawn(async move {
+        let _ = tauri::async_runtime::spawn_blocking(move || git_fetch_all_quiet(&path_for_git)).await;
+        if let Ok(mut guard) = in_flight_arc.lock() {
+            guard.remove(&path_key);
+        }
+    });
+    Ok(())
+}
+
 /// Current branch name, or an error if `HEAD` is detached or the path is not a repo.
 pub fn current_branch_name(path: impl AsRef<Path>) -> Result<String, String> {
     let path_buf = path.as_ref().to_path_buf();
