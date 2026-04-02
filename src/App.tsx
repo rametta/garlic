@@ -84,7 +84,7 @@ import {
   useDeleteTagMutation,
   useDropCommitMutation,
   useDiscardPatchMutation,
-  useDiscardPathChangesMutation,
+  useDiscardPathsChangesMutation,
   useMergeBranchMutation,
   usePullLocalBranchMutation,
   usePushTagToOriginMutation,
@@ -996,7 +996,7 @@ export default function App({
   const cherryPickCommitMutation = useCherryPickCommitMutation();
   const dropCommitMutation = useDropCommitMutation();
   const squashCommitsMutation = useSquashCommitsMutation();
-  const discardPathChangesMutation = useDiscardPathChangesMutation();
+  const discardPathsChangesMutation = useDiscardPathsChangesMutation();
   const pushTagToOriginMutation = usePushTagToOriginMutation();
   const createBranchAtCommitMutation = useCreateBranchAtCommitMutation();
   const createLocalBranchMutation = useCreateLocalBranchMutation();
@@ -2841,11 +2841,10 @@ export default function App({
       setStageCommitBusy(true);
       setOperationError(null);
       try {
-        await discardPathChangesMutation.mutateAsync({
+        await discardPathsChangesMutation.mutateAsync({
           path: repo.path,
-          filePath,
+          files: [{ filePath, renameFrom: renameFrom ?? null }],
           fromUnstaged,
-          renameFrom: renameFrom ?? null,
         });
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
@@ -2853,7 +2852,37 @@ export default function App({
         setStageCommitBusy(false);
       }
     },
-    [repo, discardPathChangesMutation],
+    [repo, discardPathsChangesMutation],
+  );
+
+  const discardAllUnstagedFiles = useCallback(
+    async (files: readonly Pick<WorkingTreeFile, "path" | "renameFrom">[]) => {
+      if (!repo?.path || repo.error || files.length === 0) return;
+      const ok = await ask(
+        `Discard unstaged changes for all ${
+          files.length === 1 ? "1 file" : `${files.length} files`
+        }? Untracked files will be permanently deleted.`,
+        { title: "Garlic", kind: "warning" },
+      );
+      if (!ok) return;
+      setStageCommitBusy(true);
+      setOperationError(null);
+      try {
+        await discardPathsChangesMutation.mutateAsync({
+          path: repo.path,
+          files: files.map((file) => ({
+            filePath: file.path,
+            renameFrom: file.renameFrom ?? null,
+          })),
+          fromUnstaged: true,
+        });
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setStageCommitBusy(false);
+      }
+    },
+    [repo, discardPathsChangesMutation],
   );
 
   const openFileHistory = useCallback(
@@ -5554,14 +5583,24 @@ export default function App({
                     Unstaged files ({unstagedFiles.length})
                   </h2>
                   {canShowBranches && unstagedPaths.length > 0 ? (
-                    <button
-                      type="button"
-                      className="btn shrink-0 btn-outline btn-xs btn-success"
-                      disabled={stageSyncBusy || stageCommitBusy || commitPushBusy}
-                      onClick={() => void onStagePaths(unstagedPaths)}
-                    >
-                      Stage all
-                    </button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        className="btn shrink-0 btn-outline btn-xs btn-success"
+                        disabled={stageSyncBusy || stageCommitBusy || commitPushBusy}
+                        onClick={() => void onStagePaths(unstagedPaths)}
+                      >
+                        Stage all
+                      </button>
+                      <button
+                        type="button"
+                        className="btn shrink-0 btn-outline btn-xs btn-error"
+                        disabled={stageSyncBusy || stageCommitBusy || commitPushBusy}
+                        onClick={() => void discardAllUnstagedFiles(unstagedFiles)}
+                      >
+                        Discard all
+                      </button>
+                    </div>
                   ) : null}
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto p-2">

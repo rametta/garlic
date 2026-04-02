@@ -393,6 +393,26 @@ export function useDiscardPathChangesMutation() {
   });
 }
 
+export function useDiscardPathsChangesMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: {
+      path: string;
+      files: { filePath: string; renameFrom?: string | null }[];
+      fromUnstaged: boolean;
+    }) => invokeRepoMutation("discard_paths_changes", variables),
+    optimisticUpdate: (snapshot, variables) =>
+      withWorkingTreeFiles(
+        snapshot,
+        variables.files.reduce(
+          (files, file) =>
+            applyOptimisticDiscardPathChange(files, file.filePath, variables.fromUnstaged),
+          snapshot.workingTreeFiles,
+        ),
+      ),
+    invalidateSnapshotOnSettled: false,
+  });
+}
+
 export function usePushTagToOriginMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; tag: string }) =>

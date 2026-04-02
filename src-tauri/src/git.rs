@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use serde::Serialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -418,6 +418,13 @@ pub struct WorktreeEntry {
     pub locked_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prunable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscardPathTarget {
+    pub file_path: String,
+    pub rename_from: Option<String>,
 }
 
 /// One entry from `git stash list` (`stash@{n}: message`).
@@ -2746,6 +2753,115 @@ pub fn discard_patch(app: AppHandle, path: String, patch: String) -> Result<(), 
     Ok(())
 }
 
+fn push_unique_path(paths: &mut Vec<String>, seen: &mut HashSet<String>, rel: &str) {
+    if seen.insert(rel.to_string()) {
+        paths.push(rel.to_string());
+    }
+}
+
+fn discard_paths_changes_inner(
+    app: &AppHandle,
+    path: &str,
+    path_buf: &Path,
+    files: &[DiscardPathTarget],
+    from_unstaged: bool,
+) -> Result<(), String> {
+    if files.is_empty() {
+        return Ok(());
+    }
+
+    if from_unstaged {
+        let mut restore_paths: Vec<String> = Vec::new();
+        let mut restore_seen: HashSet<String> = HashSet::new();
+        let mut clean_paths: Vec<String> = Vec::new();
+        let mut clean_seen: HashSet<String> = HashSet::new();
+
+        for file in files {
+            let rel = file.file_path.trim();
+            if rel.is_empty() {
+                return Err("File path cannot be empty.".to_string());
+            }
+            let rename_from = file
+                .rename_from
+                .as_deref()
+                .map(str::trim)
+                .filter(|from| !from.is_empty() && *from != rel);
+            if let Some(from) = rename_from {
+                if git_path_known_to_git(path_buf, from) {
+                    push_unique_path(&mut restore_paths, &mut restore_seen, from);
+                }
+            }
+            if git_path_known_to_git(path_buf, rel) {
+                push_unique_path(&mut restore_paths, &mut restore_seen, rel);
+            } else {
+                push_unique_path(&mut clean_paths, &mut clean_seen, rel);
+            }
+        }
+
+        if !restore_paths.is_empty() {
+            let mut args: Vec<String> = vec!["restore".into(), "--worktree".into(), "--".into()];
+            args.extend(restore_paths);
+            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            run_git_streaming(app, path, path_buf, &args_ref, "discard changes")?;
+        }
+        if !clean_paths.is_empty() {
+            let mut args: Vec<String> = vec!["clean".into(), "-f".into(), "--".into()];
+            args.extend(clean_paths);
+            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            run_git_streaming(app, path, path_buf, &args_ref, "discard changes")?;
+        }
+        return Ok(());
+    }
+
+    let mut restore_paths: Vec<String> = Vec::new();
+    let mut restore_seen: HashSet<String> = HashSet::new();
+    for file in files {
+        let rel = file.file_path.trim();
+        if rel.is_empty() {
+            return Err("File path cannot be empty.".to_string());
+        }
+        let rename_from = file
+            .rename_from
+            .as_deref()
+            .map(str::trim)
+            .filter(|from| !from.is_empty() && *from != rel);
+        if let Some(from) = rename_from {
+            push_unique_path(&mut restore_paths, &mut restore_seen, from);
+        }
+        push_unique_path(&mut restore_paths, &mut restore_seen, rel);
+    }
+    if restore_paths.is_empty() {
+        return Ok(());
+    }
+    let mut args: Vec<String> = vec![
+        "restore".into(),
+        "--source=HEAD".into(),
+        "--staged".into(),
+        "--worktree".into(),
+        "--".into(),
+    ];
+    args.extend(restore_paths);
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_git_streaming(app, path, path_buf, &args_ref, "discard changes")?;
+    Ok(())
+}
+
+/// Discard local changes for many paths. `from_unstaged` selects the sidebar column:
+/// - **Unstaged:** restore the working tree from the index for tracked files (`git restore --worktree`);
+///   remove untracked paths (`git clean -f`).
+/// - **Staged:** reset index and working tree to `HEAD` for these paths (`git restore --source=HEAD --staged --worktree`).
+#[tauri::command]
+pub fn discard_paths_changes(
+    app: AppHandle,
+    path: String,
+    files: Vec<DiscardPathTarget>,
+    from_unstaged: bool,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    discard_paths_changes_inner(&app, &path, &path_buf, &files, from_unstaged)
+}
+
 /// Discard local changes for one path. `from_unstaged` selects the sidebar column:
 /// - **Unstaged:** restore the working tree from the index for tracked files (`git restore --worktree`);
 ///   remove untracked paths (`git clean -f`).
@@ -2760,78 +2876,16 @@ pub fn discard_path_changes(
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let rel = file_path.trim();
-    if rel.is_empty() {
-        return Err("File path cannot be empty.".to_string());
-    }
-    let rename_from = rename_from
-        .as_deref()
-        .map(str::trim)
-        .filter(|from| !from.is_empty() && *from != rel);
-    if from_unstaged {
-        if let Some(from) = rename_from {
-            if git_path_known_to_git(&path_buf, from) {
-                run_git_streaming(
-                    &app,
-                    &path,
-                    &path_buf,
-                    &["restore", "--worktree", "--", from],
-                    "discard changes",
-                )?;
-            }
-        }
-        if git_path_known_to_git(&path_buf, rel) {
-            run_git_streaming(
-                &app,
-                &path,
-                &path_buf,
-                &["restore", "--worktree", "--", rel],
-                "discard changes",
-            )?;
-        } else {
-            run_git_streaming(
-                &app,
-                &path,
-                &path_buf,
-                &["clean", "-f", "--", rel],
-                "discard changes",
-            )?;
-        }
-    } else {
-        if let Some(from) = rename_from {
-            run_git_streaming(
-                &app,
-                &path,
-                &path_buf,
-                &[
-                    "restore",
-                    "--source=HEAD",
-                    "--staged",
-                    "--worktree",
-                    "--",
-                    from,
-                    rel,
-                ],
-                "discard changes",
-            )?;
-        } else {
-            run_git_streaming(
-                &app,
-                &path,
-                &path_buf,
-                &[
-                    "restore",
-                    "--source=HEAD",
-                    "--staged",
-                    "--worktree",
-                    "--",
-                    rel,
-                ],
-                "discard changes",
-            )?;
-        }
-    }
-    Ok(())
+    discard_paths_changes_inner(
+        &app,
+        &path,
+        &path_buf,
+        &[DiscardPathTarget {
+            file_path,
+            rename_from,
+        }],
+        from_unstaged,
+    )
 }
 
 fn commit_staged_blocking(app: AppHandle, path: String, message: String) -> Result<(), String> {

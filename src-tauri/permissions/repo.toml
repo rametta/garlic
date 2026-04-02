@@ -31,6 +31,7 @@ commands.allow = [
   "unstage_paths",
   "unstage_patch",
   "discard_patch",
+  "discard_paths_changes",
   "discard_path_changes",
   "commit_staged",
   "amend_last_commit",

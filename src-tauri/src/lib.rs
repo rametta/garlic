@@ -122,6 +122,7 @@ pub fn run() {
             git::unstage_paths,
             git::unstage_patch,
             git::discard_patch,
+            git::discard_paths_changes,
             git::discard_path_changes,
             git::commit_staged,
             git::amend_last_commit,
