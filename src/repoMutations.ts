@@ -290,6 +290,18 @@ export function useRebaseCurrentBranchOntoMutation() {
   });
 }
 
+export enum ResetMode {
+  Soft,
+  Hard,
+}
+
+export function useResetCurrentBranchToCommitMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string; commitHash: string; mode: ResetMode }) =>
+      invokeRepoMutation("reset_current_branch_to_commit", variables),
+  });
+}
+
 export function useMergeBranchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; branchOrRef: string }) =>

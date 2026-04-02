@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
+use serde_repr::Deserialize_repr;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -1990,6 +1991,48 @@ pub fn rebase_current_branch_onto(
     } else {
         run_git_streaming(&app, &path, &path_buf, &["rebase", onto], "rebase")?;
     }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Deserialize_repr)]
+#[repr(u8)]
+pub enum ResetMode {
+    Soft = 0,
+    Hard = 1,
+}
+
+/// Reset the checked-out branch to `commit_hash` using `git reset --soft` or `git reset --hard`.
+#[tauri::command]
+pub fn reset_current_branch_to_commit(
+    app: AppHandle,
+    path: String,
+    commit_hash: String,
+    mode: ResetMode,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let hash = commit_hash.trim();
+    if hash.is_empty() {
+        return Err("Commit hash cannot be empty.".to_string());
+    }
+    let flag = match mode {
+        ResetMode::Soft => "--soft",
+        ResetMode::Hard => "--hard",
+    };
+
+    git_output(&path_buf, &["symbolic-ref", "--quiet", "--short", "HEAD"]).map_err(|_| {
+        "Reset to commit requires the current branch to be checked out.".to_string()
+    })?;
+
+    let verify_spec = format!("{hash}^{{commit}}");
+    let resolved_hash = git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &["reset", flag, &resolved_hash],
+        "reset",
+    )?;
     Ok(())
 }
 

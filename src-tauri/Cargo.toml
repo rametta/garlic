@@ -28,4 +28,5 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 notify = "7"
 tauri-plugin-updater = "2.10.0"
 tauri-plugin-process = "2.3.1"
+serde_repr = "0.1.20"
 

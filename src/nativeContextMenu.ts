@@ -332,12 +332,15 @@ export async function popupGraphCommitContextMenu(
     branchBusy: boolean;
     cherryPickDisabled: boolean;
     dropCommitDisabled: boolean;
+    resetDisabled: boolean;
     rebaseOntoDisabled: boolean;
     onAmend: () => void;
     onBrowse: () => void;
     onCherryPick: () => void;
     onDropCommit: () => void;
+    onHardReset: () => void;
     onRebaseCurrentOnto: () => void;
+    onSoftReset: () => void;
     onCreateBranch: () => void;
     onCreateTag: () => void;
     onCopyFull: () => void;
@@ -369,6 +372,22 @@ export async function popupGraphCommitContextMenu(
         enabled: !args.branchBusy && !args.rebaseOntoDisabled,
         action: () => {
           args.onRebaseCurrentOnto();
+        },
+      },
+      {
+        id: "commit_soft_reset",
+        text: "Soft reset to this commit (keep changes)",
+        enabled: !args.resetDisabled,
+        action: () => {
+          args.onSoftReset();
+        },
+      },
+      {
+        id: "commit_hard_reset",
+        text: "Hard reset to this commit",
+        enabled: !args.resetDisabled,
+        action: () => {
+          args.onHardReset();
         },
       },
       {

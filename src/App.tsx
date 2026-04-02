@@ -70,6 +70,7 @@ import {
   type WorkingTreeFile,
 } from "./gitTypes";
 import {
+  ResetMode,
   useAmendLastCommitMutation,
   useCheckoutLocalBranchMutation,
   useCherryPickCommitMutation,
@@ -90,6 +91,7 @@ import {
   usePushTagToOriginMutation,
   usePushToOriginMutation,
   useRebaseCurrentBranchOntoMutation,
+  useResetCurrentBranchToCommitMutation,
   useRewordCommitMutation,
   useRemoveWorktreeMutation,
   useSetBranchSidebarSectionsMutation,
@@ -989,6 +991,7 @@ export default function App({
   const deleteLocalBranchMutation = useDeleteLocalBranchMutation();
   const deleteRemoteBranchMutation = useDeleteRemoteBranchMutation();
   const rebaseCurrentBranchOntoMutation = useRebaseCurrentBranchOntoMutation();
+  const resetCurrentBranchToCommitMutation = useResetCurrentBranchToCommitMutation();
   const mergeBranchMutation = useMergeBranchMutation();
   const removeWorktreeMutation = useRemoveWorktreeMutation();
   const checkoutLocalBranchMutation = useCheckoutLocalBranchMutation();
@@ -2803,6 +2806,38 @@ export default function App({
     [repo, commits, rebaseCurrentBranchOntoMutation],
   );
 
+  const resetCurrentBranchToCommit = useCallback(
+    async (hash: string, mode: ResetMode) => {
+      if (!repo?.path || repo.error || repo.detached) return;
+      const short = commits.find((c) => c.hash === hash)?.shortHash ?? hash.slice(0, 7);
+      const ok =
+        mode === ResetMode.Soft
+          ? await ask(
+              `Soft reset the current branch to ${short}? This rewrites this branch and keeps the resulting changes staged.`,
+              { title: "Garlic", kind: "warning" },
+            )
+          : await ask(
+              `Hard reset the current branch to ${short}? This rewrites this branch and discards staged and unstaged tracked changes.`,
+              { title: "Garlic", kind: "warning" },
+            );
+      if (!ok) return;
+      setBranchBusy("reset");
+      setOperationError(null);
+      try {
+        await resetCurrentBranchToCommitMutation.mutateAsync({
+          path: repo.path,
+          commitHash: hash,
+          mode,
+        });
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setBranchBusy(null);
+      }
+    },
+    [repo, commits, resetCurrentBranchToCommitMutation],
+  );
+
   const dropCommit = useCallback(
     async (hash: string) => {
       if (!repo?.path || repo.error || repo.detached) return;
@@ -3045,6 +3080,11 @@ export default function App({
           Boolean(entry?.stashRef) ||
           entry?.parentHashes.length !== 1 ||
           !graphHeadFirstParentHashes.has(hash),
+        resetDisabled:
+          Boolean(branchBusy) ||
+          Boolean(repo?.detached) ||
+          Boolean(entry?.stashRef) ||
+          Boolean(repo?.headHash && repo.headHash === hash),
         rebaseOntoDisabled:
           Boolean(branchBusy) ||
           Boolean(repo?.detached) ||
@@ -3058,7 +3098,9 @@ export default function App({
         },
         onCherryPick: () => void cherryPickCommit(hash),
         onDropCommit: () => void dropCommit(hash),
+        onHardReset: () => void resetCurrentBranchToCommit(hash, ResetMode.Hard),
         onRebaseCurrentOnto: () => void rebaseCurrentBranchOntoCommit(hash),
+        onSoftReset: () => void resetCurrentBranchToCommit(hash, ResetMode.Soft),
         onCreateBranch: () => {
           setCreateBranchStartCommit(hash);
           setNewBranchName("");
@@ -3089,6 +3131,7 @@ export default function App({
       cherryPickCommit,
       dropCommit,
       rebaseCurrentBranchOntoCommit,
+      resetCurrentBranchToCommit,
     ],
   );
 
