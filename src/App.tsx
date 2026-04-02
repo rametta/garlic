@@ -5629,19 +5629,19 @@ export default function App({
                     <div className="flex shrink-0 items-center gap-2">
                       <button
                         type="button"
-                        className="btn shrink-0 btn-outline btn-xs btn-success"
-                        disabled={stageSyncBusy || stageCommitBusy || commitPushBusy}
-                        onClick={() => void onStagePaths(unstagedPaths)}
-                      >
-                        Stage all
-                      </button>
-                      <button
-                        type="button"
                         className="btn shrink-0 btn-outline btn-xs btn-error"
                         disabled={stageSyncBusy || stageCommitBusy || commitPushBusy}
                         onClick={() => void discardAllUnstagedFiles(unstagedFiles)}
                       >
                         Discard all
+                      </button>
+                      <button
+                        type="button"
+                        className="btn shrink-0 btn-outline btn-xs btn-success"
+                        disabled={stageSyncBusy || stageCommitBusy || commitPushBusy}
+                        onClick={() => void onStagePaths(unstagedPaths)}
+                      >
+                        Stage all
                       </button>
                     </div>
                   ) : null}
