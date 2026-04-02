@@ -219,7 +219,7 @@ fn restore_repo_snapshot(
                     });
                     let h4 = s.spawn({
                         let p = path.clone();
-                        move || git::list_working_tree_files(p)
+                        move || git::list_working_tree_files_blocking(p)
                     });
                     let h5 = s.spawn({
                         let p = path.clone();
@@ -244,7 +244,7 @@ fn restore_repo_snapshot(
                     refs.extend(rem.iter().map(|r| r.name.clone()));
                     refs.sort();
                     refs.dedup();
-                    git::list_graph_commits(path.clone(), refs, 0)
+                    git::list_graph_commits_blocking(path.clone(), refs, 0)
                 }
                 _ => git::list_branch_commits(path.clone()),
             };

@@ -324,6 +324,16 @@ where
         .map_err(|e| format!("Git command task failed: {e}"))?
 }
 
+async fn run_blocking_git_task<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|e| format!("Git command task failed: {e}"))?
+}
+
 /// Payload for [`start_clone_repository`] → `clone-progress` (stderr lines from `git clone --progress`).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1639,8 +1649,9 @@ pub fn list_branch_commits(path: String) -> Result<GraphCommitsPage, String> {
 /// Commits reachable from the given refs (branch names like `main` or `origin/main`), commit-date order, newest first.
 /// Stash entries (`stash@{n}`) are merged into the log so stashes appear by commit date with branch history.
 /// Use `skip` 0 for the first page, then `skip` = loaded count for "load more".
-#[tauri::command]
-pub fn list_graph_commits(
+///
+/// Same work as [`list_graph_commits`]; exposed for bootstrap and tests that run synchronously on a worker thread.
+pub fn list_graph_commits_blocking(
     path: String,
     refs: Vec<String>,
     skip: u32,
@@ -1678,6 +1689,15 @@ pub fn list_graph_commits(
     let mut commits = parse_commit_log_lines(&out);
     annotate_stash_refs(&path_buf, &mut commits)?;
     Ok(trim_graph_commits_page(commits))
+}
+
+#[tauri::command]
+pub async fn list_graph_commits(
+    path: String,
+    refs: Vec<String>,
+    skip: u32,
+) -> Result<GraphCommitsPage, String> {
+    run_blocking_git_task(move || list_graph_commits_blocking(path, refs, skip)).await
 }
 
 #[tauri::command]
@@ -2559,8 +2579,9 @@ fn parse_worktree_list_porcelain(out: &str) -> Vec<WorktreeListAcc> {
 /// Combined working tree file list for the UI (staged / unstaged flags per path).
 /// Uses `git status --porcelain -z --untracked-files=all` so renames appear as a single row
 /// and untracked files inside untracked directories are listed as full paths.
-#[tauri::command]
-pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, String> {
+///
+/// Same work as [`list_working_tree_files`]; exposed for bootstrap and other synchronous call sites.
+pub fn list_working_tree_files_blocking(path: String) -> Result<Vec<WorkingTreeFile>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let porcelain = git_output_raw(
@@ -2640,6 +2661,11 @@ pub fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, Str
             }
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn list_working_tree_files(path: String) -> Result<Vec<WorkingTreeFile>, String> {
+    run_blocking_git_task(move || list_working_tree_files_blocking(path)).await
 }
 
 /// All worktrees known to this repository, including the currently open checkout.

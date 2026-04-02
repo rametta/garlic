@@ -3,6 +3,7 @@ import {
   type MouseEvent,
   type ReactNode,
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -1310,6 +1311,11 @@ export default function App({
     return graphFilteredCommits.filter((c) => !hiddenHashes.has(c.hash));
   }, [graphFilteredCommits]);
 
+  /** Lets the UI stay responsive while layout runs on large graphs (React concurrent feature). */
+  const deferredGraphDisplayCommits = useDeferredValue(graphDisplayCommits);
+  /** While a deferred update is in flight, `useDeferredValue` keeps the previous array; when caught up it returns the same reference as `graphDisplayCommits` (not a deep compare). O(1); avoids scanning thousands of hashes. */
+  const graphLayoutDeferredPending = deferredGraphDisplayCommits !== graphDisplayCommits;
+
   const graphCommitFiltersActive =
     graphAuthorFilter.trim().length > 0 ||
     graphDateFrom.trim().length > 0 ||
@@ -1320,12 +1326,14 @@ export default function App({
     [selectedGraphCommitHashes],
   );
   const selectedGraphCommitEntries = useMemo(
-    () => graphDisplayCommits.filter((commit) => selectedGraphCommitHashSet.has(commit.hash)),
-    [graphDisplayCommits, selectedGraphCommitHashSet],
+    () =>
+      deferredGraphDisplayCommits.filter((commit) => selectedGraphCommitHashSet.has(commit.hash)),
+    [deferredGraphDisplayCommits, selectedGraphCommitHashSet],
   );
   const graphDisplayIndexByHash = useMemo(
-    () => new Map(graphDisplayCommits.map((commit, index) => [commit.hash, index] as const)),
-    [graphDisplayCommits],
+    () =>
+      new Map(deferredGraphDisplayCommits.map((commit, index) => [commit.hash, index] as const)),
+    [deferredGraphDisplayCommits],
   );
   const graphHeadFirstParentOrder = useMemo(() => {
     const ordered: string[] = [];
@@ -3954,7 +3962,7 @@ export default function App({
         }
         const start = Math.min(anchorIndex, targetIndex);
         const end = Math.max(anchorIndex, targetIndex);
-        const nextSelection = graphDisplayCommits
+        const nextSelection = deferredGraphDisplayCommits
           .slice(start, end + 1)
           .map((commit) => commit.hash);
         setSelectedGraphCommitHashes(nextSelection);
@@ -3974,7 +3982,7 @@ export default function App({
     },
     [
       clearGraphCommitSelection,
-      graphDisplayCommits,
+      deferredGraphDisplayCommits,
       graphDisplayIndexByHash,
       graphSelectionAnchorHash,
       selectCommit,
@@ -4103,7 +4111,7 @@ export default function App({
       return null;
     }
     return computeCommitGraphLayout(
-      graphDisplayCommits.map((c) => ({
+      deferredGraphDisplayCommits.map((c) => ({
         hash: c.hash,
         parentHashes: c.parentHashes,
         stashRef: c.stashRef,
@@ -4117,7 +4125,7 @@ export default function App({
     selectedDiffPath,
     fileBlamePath,
     fileHistoryPath,
-    graphDisplayCommits,
+    deferredGraphDisplayCommits,
     graphBranchTips,
     currentBranchName,
   ]);
@@ -5511,7 +5519,8 @@ export default function App({
                                   </div>
                                 ) : null}
                                 <CommitGraphSection
-                                  commits={graphDisplayCommits}
+                                  commits={deferredGraphDisplayCommits}
+                                  graphLayoutDeferredPending={graphLayoutDeferredPending}
                                   commitGraphLayout={commitGraphLayout!}
                                   localBranches={localBranches}
                                   remoteBranches={remoteBranches}

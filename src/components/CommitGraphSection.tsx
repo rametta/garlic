@@ -66,6 +66,8 @@ export interface CommitGraphSectionProps {
   wipChangedFileCount: number;
   /** Opens the first available working-tree diff when the WIP row is activated. */
   onWipSelect?: () => void;
+  /** True while React is deferring a heavy graph layout pass (concurrent rendering). */
+  graphLayoutDeferredPending?: boolean;
 }
 
 type TipsAtHash = {
@@ -510,6 +512,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   exportGraphCommitsDisabled,
   wipChangedFileCount,
   onWipSelect,
+  graphLayoutDeferredPending = false,
 }: CommitGraphSectionProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const authorFilterWrapRef = useRef<HTMLDivElement>(null);
@@ -799,7 +802,13 @@ export const CommitGraphSection = memo(function CommitGraphSection({
           </div>
         </div>
       </div>
-      <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto">
+      <div
+        ref={scrollRef}
+        className={`min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto transition-opacity duration-150 ${
+          graphLayoutDeferredPending ? "opacity-[0.93]" : ""
+        }`}
+        aria-busy={graphLayoutDeferredPending}
+      >
         {commits.length === 0 && !showWipRow ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-40 flex-1 flex-col items-center justify-center px-3 py-8">
