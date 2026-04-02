@@ -16,6 +16,7 @@ export interface AppBootstrap {
   openaiApiKey: string | null;
   openaiModel: string;
   branchSidebarSections: BranchSidebarSectionsState;
+  graphBranchVisible: Record<string, boolean>;
   highlightActiveBranchRows: boolean;
 }
 
@@ -43,6 +44,7 @@ export const emptyAppBootstrap: AppBootstrap = {
     tagsOpen: true,
     stashOpen: false,
   },
+  graphBranchVisible: {},
   highlightActiveBranchRows: false,
 };
 
@@ -65,6 +67,7 @@ async function bootstrap() {
           openaiApiKey={data.openaiApiKey ?? null}
           openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}
           branchSidebarSections={data.branchSidebarSections}
+          initialGraphBranchVisible={data.graphBranchVisible}
           highlightActiveBranchRows={data.highlightActiveBranchRows}
         />
       </QueryClientProvider>

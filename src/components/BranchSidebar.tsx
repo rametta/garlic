@@ -149,10 +149,7 @@ function BranchPanel({
           {belowHeader ? (
             <div className="shrink-0 border-b border-base-300">{belowHeader}</div>
           ) : null}
-          <div
-            ref={contentScrollRef}
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-          >
+          <div ref={contentScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {empty ? (
               <p className="m-0 py-2 text-center text-xs text-base-content/50">{emptyHint}</p>
             ) : (
@@ -796,9 +793,7 @@ function WorktreeRow({
 
   return (
     <li
-      className={
-        worktree.isCurrent ? "bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""
-      }
+      className={worktree.isCurrent ? "bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""}
       onContextMenu={(e) => {
         if (!nativeContextMenusAvailable()) return;
         e.preventDefault();

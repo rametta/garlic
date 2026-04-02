@@ -1,6 +1,7 @@
 use crate::git;
 use crate::window_title;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use tauri::AppHandle;
 use tauri::Manager;
@@ -65,6 +66,8 @@ impl Default for BranchSidebarSections {
     }
 }
 
+type GraphBranchVisibility = BTreeMap<String, bool>;
+
 fn resolve_persisted_theme_preference(theme: &Option<String>) -> String {
     const DEFAULT: &str = "light";
     match theme {
@@ -98,6 +101,8 @@ struct AppSettings {
     openai_model: Option<String>,
     #[serde(default)]
     branch_sidebar_sections: BranchSidebarSections,
+    #[serde(default)]
+    graph_branch_visibility_by_repo: BTreeMap<String, GraphBranchVisibility>,
     #[serde(default = "default_false")]
     highlight_active_branch_rows: bool,
 }
@@ -293,6 +298,7 @@ pub struct AppBootstrap {
     /// Resolved model id (defaults to `gpt-5.4-mini` when unset).
     pub openai_model: String,
     pub branch_sidebar_sections: BranchSidebarSections,
+    pub graph_branch_visible: GraphBranchVisibility,
     pub highlight_active_branch_rows: bool,
 }
 
@@ -303,6 +309,11 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
     let theme = settings.theme.clone();
     let openai_api_key = settings.openai_api_key.clone();
     let openai_model = resolve_openai_model(&settings);
+    let graph_branch_visible = settings
+        .last_repo_path
+        .as_deref()
+        .map(|path| persisted_graph_branch_visibility(&settings, path))
+        .unwrap_or_default();
     let repo = restore_repo_snapshot(&app, &settings)?;
     if repo.metadata.is_none() {
         window_title::set_main_window_title(&app, window_title::DEFAULT_WINDOW_TITLE);
@@ -313,6 +324,7 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
         openai_api_key,
         openai_model,
         branch_sidebar_sections: settings.branch_sidebar_sections.clone(),
+        graph_branch_visible,
         highlight_active_branch_rows: settings.highlight_active_branch_rows,
     })
 }
@@ -326,6 +338,27 @@ fn resolve_openai_model(settings: &AppSettings) -> String {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| DEFAULT.to_string())
+}
+
+fn persisted_graph_branch_visibility(settings: &AppSettings, path: &str) -> GraphBranchVisibility {
+    settings
+        .graph_branch_visibility_by_repo
+        .get(path)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn normalize_graph_branch_visibility(visibility: GraphBranchVisibility) -> GraphBranchVisibility {
+    visibility
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let key = key.trim();
+            if key.is_empty() {
+                return None;
+            }
+            Some((key.to_string(), value))
+        })
+        .collect()
 }
 
 /// Persists OpenAI API key and model for AI-generated commit messages.
@@ -377,6 +410,42 @@ pub fn set_branch_sidebar_sections(
 ) -> Result<(), String> {
     let mut s = load_settings(&app)?;
     s.branch_sidebar_sections = sections;
+    save_settings(&app, &s)
+}
+
+/// Loads per-repo commit-graph branch visibility overrides.
+#[tauri::command]
+pub fn get_graph_branch_visibility(
+    app: AppHandle,
+    path: String,
+) -> Result<GraphBranchVisibility, String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok(GraphBranchVisibility::default());
+    }
+    let s = load_settings(&app)?;
+    Ok(persisted_graph_branch_visibility(&s, path))
+}
+
+/// Persists per-repo commit-graph branch visibility overrides.
+#[tauri::command]
+pub fn set_graph_branch_visibility(
+    app: AppHandle,
+    path: String,
+    visibility: GraphBranchVisibility,
+) -> Result<(), String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok(());
+    }
+    let mut s = load_settings(&app)?;
+    let normalized = normalize_graph_branch_visibility(visibility);
+    if normalized.is_empty() {
+        s.graph_branch_visibility_by_repo.remove(path);
+    } else {
+        s.graph_branch_visibility_by_repo
+            .insert(path.to_string(), normalized);
+    }
     save_settings(&app, &s)
 }
 

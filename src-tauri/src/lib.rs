@@ -154,6 +154,8 @@ pub fn run() {
             set_last_repo_path,
             settings::set_theme,
             settings::set_branch_sidebar_sections,
+            settings::get_graph_branch_visibility,
+            settings::set_graph_branch_visibility,
             settings::set_openai_settings,
             write_export_text_file,
             open_in_cursor::open_in_cursor,

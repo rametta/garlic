@@ -93,6 +93,7 @@ import {
   useRewordCommitMutation,
   useRemoveWorktreeMutation,
   useSetBranchSidebarSectionsMutation,
+  useSetGraphBranchVisibilityMutation,
   useSetRemoteUrlMutation,
   useStagePatchMutation,
   useStagePathsMutation,
@@ -777,6 +778,7 @@ export default function App({
   openaiApiKey: initialOpenaiApiKey,
   openaiModel: initialOpenaiModel,
   branchSidebarSections: initialBranchSidebarSections,
+  initialGraphBranchVisible,
   highlightActiveBranchRows: initialHighlightActiveBranchRows,
 }: {
   startup: RestoreLastRepo;
@@ -788,6 +790,8 @@ export default function App({
   openaiModel: string;
   /** Which branch-sidebar panels are expanded (persisted in settings). */
   branchSidebarSections: BranchSidebarSectionsState;
+  /** Per-repo branch visibility overrides for the commit graph. */
+  initialGraphBranchVisible: Record<string, boolean>;
   /** Whether active-branch commits get a tinted row background in the graph. */
   highlightActiveBranchRows: boolean;
 }) {
@@ -868,7 +872,10 @@ export default function App({
   const [graphCommitsHasMore, setGraphCommitsHasMore] = useState(() => startup.graphCommitsHasMore);
   const [loadingMoreGraphCommits, setLoadingMoreGraphCommits] = useState(false);
   /** `local:name` / `remote:name` → visible in commit graph (default true when key missing). */
-  const [graphBranchVisible, setGraphBranchVisible] = useState<Record<string, boolean>>({});
+  const [graphBranchVisible, setGraphBranchVisibleState] = useState<Record<string, boolean>>(
+    () => ({ ...initialGraphBranchVisible }),
+  );
+  const graphBranchVisibleRef = useRef(graphBranchVisible);
   /** Graph list filters (client-side; does not change loaded commit pages). */
   const [graphAuthorFilter, setGraphAuthorFilter] = useState("");
   const [graphDateFrom, setGraphDateFrom] = useState("");
@@ -976,6 +983,7 @@ export default function App({
   const [openaiSettingsOpen, setOpenaiSettingsOpen] = useState(false);
   const stashPushMutation = useStashPushMutation();
   const setBranchSidebarSectionsMutation = useSetBranchSidebarSectionsMutation();
+  const setGraphBranchVisibilityMutation = useSetGraphBranchVisibilityMutation();
   const setRemoteUrlMutation = useSetRemoteUrlMutation();
   const pullLocalBranchMutation = usePullLocalBranchMutation();
   const deleteLocalBranchMutation = useDeleteLocalBranchMutation();
@@ -1006,6 +1014,28 @@ export default function App({
   const commitStagedMutation = useCommitStagedMutation();
   const pushToOriginMutation = usePushToOriginMutation();
   const rewordCommitMutation = useRewordCommitMutation();
+  const replaceGraphBranchVisible = useCallback((next: Record<string, boolean>) => {
+    graphBranchVisibleRef.current = next;
+    setGraphBranchVisibleState(next);
+  }, []);
+  const persistGraphBranchVisible = useCallback(
+    (visibility: Record<string, boolean>) => {
+      const path = activeRepoPathRef.current;
+      if (!path) return;
+      void setGraphBranchVisibilityMutation.mutateAsync({ path, visibility }).catch(() => {});
+    },
+    [setGraphBranchVisibilityMutation],
+  );
+  const updateGraphBranchVisible = useCallback(
+    (updater: (prev: Record<string, boolean>) => Record<string, boolean>) => {
+      const prev = graphBranchVisibleRef.current;
+      const next = updater(prev);
+      if (next === prev) return;
+      replaceGraphBranchVisible(next);
+      persistGraphBranchVisible(next);
+    },
+    [persistGraphBranchVisible, replaceGraphBranchVisible],
+  );
   const closeOpenAiSettingsDialog = useCallback(() => {
     setOpenaiSettingsOpen(false);
   }, []);
@@ -1077,7 +1107,7 @@ export default function App({
     const valid = new Set<string>();
     for (const b of localBranches) valid.add(`local:${b.name}`);
     for (const r of remoteBranches) valid.add(`remote:${r.name}`);
-    setGraphBranchVisible((prev) => {
+    updateGraphBranchVisible((prev) => {
       let changed = false;
       const next: Record<string, boolean> = {};
       for (const [key, value] of Object.entries(prev)) {
@@ -1089,7 +1119,7 @@ export default function App({
       }
       return changed ? next : prev;
     });
-  }, [localBranches, remoteBranches]);
+  }, [localBranches, remoteBranches, updateGraphBranchVisible]);
 
   const remoteGraphDefaultsVisible = remoteBranches.length <= LARGE_REMOTE_GRAPH_REF_THRESHOLD;
 
@@ -1177,7 +1207,7 @@ export default function App({
       graphVisibleLocal: (name) => graphLocalVisible(graphBranchVisible, name),
       toggleGraphLocal: (name) => {
         const k = `local:${name}`;
-        setGraphBranchVisible((prev) => {
+        updateGraphBranchVisible((prev) => {
           const nextVisible = !graphLocalVisible(prev, name);
           const next = { ...prev };
           if (nextVisible) delete next[k];
@@ -1194,7 +1224,7 @@ export default function App({
         if (names.length === 0) return;
         const anyVisible = names.some((n) => graphLocalVisible(graphBranchVisible, n));
         const nextVal = !anyVisible;
-        setGraphBranchVisible((prev) => {
+        updateGraphBranchVisible((prev) => {
           const next = { ...prev };
           for (const n of names) {
             const k = `local:${n}`;
@@ -1208,7 +1238,7 @@ export default function App({
         graphRemoteVisible(graphBranchVisible, name, remoteGraphDefaultsVisible),
       toggleGraphRemote: (name) => {
         const k = `remote:${name}`;
-        setGraphBranchVisible((prev) => {
+        updateGraphBranchVisible((prev) => {
           const nextVisible = !graphRemoteVisible(prev, name, remoteGraphDefaultsVisible);
           const next = { ...prev };
           if (nextVisible === remoteGraphDefaultsVisible) delete next[k];
@@ -1229,7 +1259,7 @@ export default function App({
           graphRemoteVisible(graphBranchVisible, r, remoteGraphDefaultsVisible),
         );
         const nextVal = !anyVisible;
-        setGraphBranchVisible((prev) => {
+        updateGraphBranchVisible((prev) => {
           const next = { ...prev };
           for (const r of refs) {
             const k = `remote:${r}`;
@@ -1240,7 +1270,7 @@ export default function App({
         });
       },
     }),
-    [graphBranchVisible, remoteGraphDefaultsVisible],
+    [graphBranchVisible, remoteGraphDefaultsVisible, updateGraphBranchVisible],
   );
 
   const graphBranchTips = useMemo((): BranchTip[] => {
@@ -1943,10 +1973,16 @@ export default function App({
       clearSelectedDiffContent();
       setDiffLoading(false);
       try {
-        const snapshot = await loadRepoSnapshot(target);
+        const [snapshot, savedGraphBranchVisible] = await Promise.all([
+          loadRepoSnapshot(target),
+          invoke<Record<string, boolean>>("get_graph_branch_visibility", { path: target }).catch(
+            () => ({}),
+          ),
+        ]);
         if (pendingLoadRepoRef.current !== target) return;
         setRepoSnapshot(queryClient, target, snapshot);
         setCurrentRepoPath(target);
+        replaceGraphBranchVisible(savedGraphBranchVisible);
         if (!snapshot.metadata?.error) {
           await invoke("set_last_repo_path", { path: target });
           if (pendingLoadRepoRef.current !== target) return;
@@ -1958,6 +1994,7 @@ export default function App({
       } catch (e) {
         if (pendingLoadRepoRef.current !== target) return;
         setCurrentRepoPath(null);
+        replaceGraphBranchVisible({});
         setCommits([]);
         setGraphCommitsHasMore(false);
         setLoadError(invokeErrorMessage(e));
@@ -1968,7 +2005,13 @@ export default function App({
         }
       }
     },
-    [clearCommitBrowse, clearSelectedDiffContent, clearWorktreeBrowse, queryClient],
+    [
+      clearCommitBrowse,
+      clearSelectedDiffContent,
+      clearWorktreeBrowse,
+      queryClient,
+      replaceGraphBranchVisible,
+    ],
   );
 
   /** Coalesce rapid `clone-progress` events to one React update per frame (avoids UI freeze). */

@@ -197,6 +197,14 @@ export function useSetBranchSidebarSectionsMutation() {
   });
 }
 
+export function useSetGraphBranchVisibilityMutation() {
+  return useMutation<void, unknown, { path: string; visibility: Record<string, boolean> }>({
+    mutationFn: async (variables) => {
+      await invoke("set_graph_branch_visibility", variables);
+    },
+  });
+}
+
 export function useSetOpenAiSettingsMutation() {
   return useMutation<void, unknown, { key: string | null; model: string | null }>({
     mutationFn: async (variables) => {
