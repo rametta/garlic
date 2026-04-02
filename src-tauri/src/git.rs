@@ -1,3 +1,4 @@
+use arrayvec::ArrayString;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use serde_repr::Deserialize_repr;
@@ -11,6 +12,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::Emitter;
+
+/// Serialized Git object name from the UI: `%H`, abbreviated SHA-1, or full SHA-256 hex (64 chars max).
+type GitOidArg = ArrayString<64>;
+
+/// `stash@{n}` from the UI (fits inline; much shorter in practice).
+type StashRefArg = ArrayString<64>;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1674,7 +1681,7 @@ pub fn list_graph_commits(
 }
 
 #[tauri::command]
-pub fn get_commit_details(path: String, commit_hash: String) -> Result<CommitDetails, String> {
+pub fn get_commit_details(path: String, commit_hash: GitOidArg) -> Result<CommitDetails, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let hash = commit_hash.trim();
@@ -2006,7 +2013,7 @@ pub enum ResetMode {
 pub fn reset_current_branch_to_commit(
     app: AppHandle,
     path: String,
-    commit_hash: String,
+    commit_hash: GitOidArg,
     mode: ResetMode,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
@@ -2040,7 +2047,7 @@ pub fn reset_current_branch_to_commit(
 /// parent (`git rebase --onto <parent> <commit>`). Limited to non-merge commits on HEAD's
 /// first-parent history.
 #[tauri::command]
-pub fn drop_commit(app: AppHandle, path: String, commit_hash: String) -> Result<(), String> {
+pub fn drop_commit(app: AppHandle, path: String, commit_hash: GitOidArg) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let hash = commit_hash.trim();
@@ -2122,7 +2129,7 @@ pub fn drop_commit(app: AppHandle, path: String, commit_hash: String) -> Result<
 pub fn squash_commits(
     app: AppHandle,
     path: String,
-    commit_hashes: Vec<String>,
+    commit_hashes: Vec<GitOidArg>,
     message: String,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
@@ -2998,7 +3005,7 @@ pub async fn amend_last_commit(
 pub fn reword_commit(
     app: AppHandle,
     path: String,
-    commit_hash: String,
+    commit_hash: GitOidArg,
     message: String,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
@@ -3159,7 +3166,7 @@ pub fn merge_branch(app: AppHandle, path: String, branch_or_ref: String) -> Resu
 
 /// Cherry-pick a single commit onto the current branch.
 #[tauri::command]
-pub fn cherry_pick_commit(app: AppHandle, path: String, commit_hash: String) -> Result<(), String> {
+pub fn cherry_pick_commit(app: AppHandle, path: String, commit_hash: GitOidArg) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let hash = commit_hash.trim();
@@ -3312,7 +3319,7 @@ pub struct CommitFileEntry {
 #[tauri::command]
 pub fn list_commit_files(
     path: String,
-    commit_hash: String,
+    commit_hash: GitOidArg,
 ) -> Result<Vec<CommitFileEntry>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
@@ -3389,7 +3396,7 @@ fn verify_commit_quiet(workdir: &Path, hash: &str) -> Option<bool> {
 pub fn start_commit_signature_check(
     app: AppHandle,
     path: String,
-    commit_hash: String,
+    commit_hash: GitOidArg,
     request_id: u32,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(path.trim());
@@ -3434,7 +3441,7 @@ fn merge_commit_has_second_parent(workdir: &Path, rev: &str) -> bool {
 #[tauri::command]
 pub fn get_commit_file_diff(
     path: String,
-    commit_hash: String,
+    commit_hash: GitOidArg,
     file_path: String,
 ) -> Result<String, String> {
     let path_buf = PathBuf::from(&path);
@@ -3499,7 +3506,7 @@ fn git_show_blob_bytes(workdir: &Path, object_spec: &str) -> Result<Option<Vec<u
 #[tauri::command]
 pub fn get_commit_file_blob_pair(
     path: String,
-    commit_hash: String,
+    commit_hash: GitOidArg,
     file_path: String,
 ) -> Result<FileBlobPair, String> {
     let path_buf = PathBuf::from(&path);
@@ -3659,7 +3666,7 @@ pub fn stash_push(app: AppHandle, path: String, message: Option<String>) -> Resu
 
 /// Apply and remove a stash (`git stash pop stash@{n}`).
 #[tauri::command]
-pub fn stash_pop(app: AppHandle, path: String, stash_ref: String) -> Result<(), String> {
+pub fn stash_pop(app: AppHandle, path: String, stash_ref: StashRefArg) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let s = stash_ref.trim();
@@ -3672,7 +3679,7 @@ pub fn stash_pop(app: AppHandle, path: String, stash_ref: String) -> Result<(), 
 
 /// Remove a stash without applying (`git stash drop stash@{n}`).
 #[tauri::command]
-pub fn stash_drop(app: AppHandle, path: String, stash_ref: String) -> Result<(), String> {
+pub fn stash_drop(app: AppHandle, path: String, stash_ref: StashRefArg) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let s = stash_ref.trim();
