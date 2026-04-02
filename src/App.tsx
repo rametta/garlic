@@ -5389,7 +5389,7 @@ export default function App({
                                   </div>
                                   <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-t border-base-300/80">
                                     <div className="shrink-0 border-b border-base-300/80 py-2">
-                                      <h2 className="m-0 ml-3 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                      <h2 className="m-0 ml-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                         <span>Files</span>
                                         {!commitBrowseLoading ? (
                                           <span className="font-mono text-[0.65rem] font-normal tracking-normal text-base-content/45 normal-case tabular-nums">
@@ -5451,7 +5451,7 @@ export default function App({
                                                     <div
                                                       role="button"
                                                       tabIndex={0}
-                                                      className={`list-row min-h-10 cursor-pointer rounded-none! px-3! py-2! text-[0.8125rem] leading-snug transition-colors ${
+                                                      className={`list-row cursor-pointer rounded-none! px-1! py-2! text-xs leading-snug transition-colors ${
                                                         selected
                                                           ? "bg-primary/10 ring-1 ring-primary/25"
                                                           : "bg-base-200/50 hover:bg-base-300/45 active:bg-base-300/55"
