@@ -12,4 +12,5 @@ Download for Mac in [releases](https://github.com/rametta/garlic/releases).
 - No data collection - all local.
 - Bring your own AI key for commit messages.
 
-![demo of garlic](demo.gif)
+![light mode](lightmode.png)
+![dark mode](darkmode.png)
