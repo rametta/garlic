@@ -8,7 +8,6 @@ import {
   COMMIT_GRAPH_ROW_HEIGHT,
   type CommitGraphLayout,
 } from "../commitGraphLayout";
-import { nativeContextMenusAvailable } from "../nativeContextMenu";
 import {
   clampGraphCommitsPageSize,
   GRAPH_COMMITS_PAGE_SIZE_MAX,
@@ -19,6 +18,134 @@ import type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, TagEntry } from 
 
 const GRAPH_GAP_PX = 6;
 const BRANCH_COL = "6.75rem";
+
+function IconPull({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 4v10" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M5 20h14" />
+    </svg>
+  );
+}
+
+function IconPush({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 20V10" />
+      <path d="m8 14 4-4 4 4" />
+      <path d="M5 4h14" />
+    </svg>
+  );
+}
+
+function IconBranch({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="6" cy="6" r="2" />
+      <circle cx="18" cy="6" r="2" />
+      <circle cx="18" cy="18" r="2" />
+      <path d="M8 6h4a4 4 0 0 1 4 4v6" />
+    </svg>
+  );
+}
+
+function IconStash({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M5 7h14l-1 11H6L5 7Z" />
+      <path d="M8 7 9 4h6l1 3" />
+      <path d="M9 11h6" />
+    </svg>
+  );
+}
+
+function IconPop({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M5 11h14l-1 8H6l-1-8Z" />
+      <path d="M12 15V4" />
+      <path d="m8 8 4-4 4 4" />
+    </svg>
+  );
+}
+
+function IconExport({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 3v5h5" />
+      <path d="M12 11v6" />
+      <path d="m9.5 14.5 2.5 2.5 2.5-2.5" />
+    </svg>
+  );
+}
 
 export interface CommitGraphSectionProps {
   commits: CommitEntry[];
@@ -83,6 +210,19 @@ export interface CommitGraphSectionProps {
   /** `git log -n` page size for each graph fetch (persisted app setting). */
   graphCommitsPageSize: number;
   onGraphCommitsPageSizeChange: (value: number) => void;
+  pullActionDisabled: boolean;
+  onPullAction: () => void;
+  pushActionDisabled: boolean;
+  onPushAction: () => void;
+  onPushActionContextMenu: (clientX: number, clientY: number) => void;
+  branchActionDisabled: boolean;
+  branchActionTargetLabel: string | null;
+  onBranchAction: () => void;
+  stashActionDisabled: boolean;
+  onStashAction: () => void;
+  popActionDisabled: boolean;
+  latestStashRef: string | null;
+  onPopAction: () => void;
 }
 
 type TipsAtHash = {
@@ -378,7 +518,6 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
           }`}
           onContextMenu={(e) => {
             if (branchBusy) return;
-            if (!nativeContextMenusAvailable()) return;
             e.preventDefault();
             e.stopPropagation();
             openGraphBranchLocalMenu(b.name, e.clientX, e.clientY);
@@ -396,7 +535,6 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
           className="max-w-full min-w-0 cursor-context-menu truncate font-medium text-secondary"
           onContextMenu={(e) => {
             if (branchBusy) return;
-            if (!nativeContextMenusAvailable()) return;
             e.preventDefault();
             e.stopPropagation();
             openGraphBranchRemoteMenu(r.name, e.clientX, e.clientY);
@@ -412,7 +550,6 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
       title={`Stash ${stashRef}`}
       onContextMenu={(e) => {
         if (branchBusy || stashBusy !== null) return;
-        if (!nativeContextMenusAvailable()) return;
         e.preventDefault();
         e.stopPropagation();
         openGraphStashMenu(stashRef, e.clientX, e.clientY);
@@ -426,7 +563,6 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
       title={commitsSectionTitle}
       onContextMenu={(e) => {
         if (branchBusy || !currentBranchName) return;
-        if (!nativeContextMenusAvailable()) return;
         e.preventDefault();
         e.stopPropagation();
         openGraphBranchLocalMenu(currentBranchName, e.clientX, e.clientY);
@@ -494,7 +630,6 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
           });
         }}
         onContextMenu={(e) => {
-          if (!nativeContextMenusAvailable()) return;
           e.preventDefault();
           e.stopPropagation();
           openGraphCommitMenu(c.hash, e.clientX, e.clientY);
@@ -511,7 +646,6 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
                   title={t.name}
                   onContextMenu={(e) => {
                     if (branchBusy || pushBusy) return;
-                    if (!nativeContextMenusAvailable()) return;
                     e.preventDefault();
                     e.stopPropagation();
                     openGraphTagMenu(t.name, e.clientX, e.clientY);
@@ -641,6 +775,19 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   graphLayoutDeferredPending = false,
   graphCommitsPageSize,
   onGraphCommitsPageSizeChange,
+  pullActionDisabled,
+  onPullAction,
+  pushActionDisabled,
+  onPushAction,
+  onPushActionContextMenu,
+  branchActionDisabled,
+  branchActionTargetLabel,
+  onBranchAction,
+  stashActionDisabled,
+  onStashAction,
+  popActionDisabled,
+  latestStashRef,
+  onPopAction,
 }: CommitGraphSectionProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const authorFilterWrapRef = useRef<HTMLDivElement>(null);
@@ -730,6 +877,10 @@ export const CommitGraphSection = memo(function CommitGraphSection({
 
   const graphLeft = `calc(${BRANCH_COL} + ${GRAPH_GAP_PX}px)`;
   const virtualRows = rowVirtualizer.getVirtualItems();
+  const pullBusy = currentBranchName !== null && branchBusy === `pull:${currentBranchName}`;
+  const createBranchBusy = branchBusy === "create";
+  const stashPushBusy = stashBusy === "push";
+  const stashPopBusy = stashBusy?.startsWith("pop:") ?? false;
 
   const graphFooter = (
     <div className="mt-2 flex flex-wrap items-center justify-center gap-2 border-t border-base-300/50 pt-2">
@@ -785,6 +936,121 @@ export const CommitGraphSection = memo(function CommitGraphSection({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex shrink-0 justify-center border-b border-base-300/80 px-3 py-2">
+        <ul
+          className="menu menu-horizontal flex-wrap items-center justify-center menu-xs rounded-box bg-base-200/70 p-1"
+          aria-label="Graph actions"
+        >
+          <li className={pullActionDisabled ? "menu-disabled" : undefined}>
+            <button
+              type="button"
+              className="flex items-center gap-1.5"
+              disabled={pullActionDisabled}
+              title={
+                currentBranchName ? `Pull the current branch (${currentBranchName})` : undefined
+              }
+              onClick={onPullAction}
+            >
+              {pullBusy ? (
+                <span className="loading loading-xs shrink-0 loading-spinner" />
+              ) : (
+                <IconPull className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>Pull</span>
+            </button>
+          </li>
+          <li className={pushActionDisabled ? "menu-disabled" : undefined}>
+            <button
+              type="button"
+              className="flex items-center gap-1.5"
+              disabled={pushActionDisabled}
+              title="Push the current branch to origin. Right-click for force push."
+              onClick={onPushAction}
+              onContextMenu={(e) => {
+                if (pushActionDisabled) return;
+                e.preventDefault();
+                e.stopPropagation();
+                onPushActionContextMenu(e.clientX, e.clientY);
+              }}
+            >
+              {pushBusy ? (
+                <span className="loading loading-xs shrink-0 loading-spinner" />
+              ) : (
+                <IconPush className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>Push</span>
+            </button>
+          </li>
+          <li className={branchActionDisabled ? "menu-disabled" : undefined}>
+            <button
+              type="button"
+              className="flex items-center gap-1.5"
+              disabled={branchActionDisabled}
+              title={
+                branchActionTargetLabel
+                  ? `Create a branch from ${branchActionTargetLabel}`
+                  : "Create a branch from the current graph position"
+              }
+              onClick={onBranchAction}
+            >
+              {createBranchBusy ? (
+                <span className="loading loading-xs shrink-0 loading-spinner" />
+              ) : (
+                <IconBranch className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>Branch</span>
+            </button>
+          </li>
+          <li className={stashActionDisabled ? "menu-disabled" : undefined}>
+            <button
+              type="button"
+              className="flex items-center gap-1.5"
+              disabled={stashActionDisabled}
+              title={
+                wipChangedFileCount > 0
+                  ? "Stash working tree changes"
+                  : "No working tree changes to stash"
+              }
+              onClick={onStashAction}
+            >
+              {stashPushBusy ? (
+                <span className="loading loading-xs shrink-0 loading-spinner" />
+              ) : (
+                <IconStash className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>Stash</span>
+            </button>
+          </li>
+          <li className={popActionDisabled ? "menu-disabled" : undefined}>
+            <button
+              type="button"
+              className="flex items-center gap-1.5"
+              disabled={popActionDisabled}
+              title={latestStashRef ? `Pop ${latestStashRef}` : "No stashes available to pop"}
+              onClick={onPopAction}
+            >
+              {stashPopBusy ? (
+                <span className="loading loading-xs shrink-0 loading-spinner" />
+              ) : (
+                <IconPop className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>Pop</span>
+            </button>
+          </li>
+          <li className={exportGraphCommitsDisabled ? "menu-disabled" : undefined}>
+            <button
+              type="button"
+              className="flex items-center gap-1.5"
+              disabled={exportGraphCommitsDisabled}
+              title="Export the list of commits currently shown in the graph"
+              onClick={onExportGraphCommits}
+            >
+              <IconExport className="h-3.5 w-3.5 shrink-0" />
+              <span>Export</span>
+            </button>
+          </li>
+        </ul>
+      </div>
       <div
         className="sticky top-0 z-10 mb-0.5 grid shrink-0 items-center gap-x-1.5 border-b border-base-300/80 bg-base-100 pb-0.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase"
         style={{ gridTemplateColumns }}
@@ -1089,7 +1355,6 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                       height: v.size,
                     }}
                     onContextMenu={(e) => {
-                      if (!nativeContextMenusAvailable()) return;
                       e.preventDefault();
                       e.stopPropagation();
                       openGraphCommitMenu(c.hash, e.clientX, e.clientY);
@@ -1142,7 +1407,6 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                           : undefined
                       }
                       onContextMenu={(e) => {
-                        if (!nativeContextMenusAvailable()) return;
                         e.preventDefault();
                         e.stopPropagation();
                         openGraphWipMenu(e.clientX, e.clientY);

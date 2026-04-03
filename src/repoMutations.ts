@@ -639,6 +639,16 @@ export function usePushToOriginMutation() {
   });
 }
 
+export function useForcePushToOriginMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string; skipHooks: boolean }) =>
+      invokeRepoMutation("force_push_to_origin", variables),
+    optimisticUpdate: (snapshot) => withCurrentBranchAhead(snapshot, 0),
+    successUpdate: (snapshot) => withCurrentBranchPushedToOrigin(snapshot),
+    invalidateSnapshotOnSettled: false,
+  });
+}
+
 export function useContinueRepoOperationMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string }) =>

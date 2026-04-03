@@ -1,7 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, type ReactNode, type Ref, useEffect, useMemo, useRef, useState } from "react";
 import type { BranchTrieNode, RemoteTrieNode } from "../branchTrie";
-import { nativeContextMenusAvailable } from "../nativeContextMenu";
 import type {
   BranchSidebarSectionsState,
   LocalBranchEntry,
@@ -481,7 +480,6 @@ function LocalBranchRow({
         className="flex w-full min-w-0 items-center gap-0"
         onContextMenu={(e) => {
           if (busy) return;
-          if (!nativeContextMenusAvailable()) return;
           e.preventDefault();
           onLocalBranchContextMenu(branch.name, e.clientX, e.clientY);
         }}
@@ -551,20 +549,27 @@ function LocalBranchRow({
 }
 
 function RemoteBranchFolderRow({
+  path,
   label,
   node,
   depth,
   expanded,
+  branchBusy,
   onToggle,
+  onRemoteFolderContextMenu,
   graph,
 }: {
+  path: string;
   label: string;
   node: RemoteTrieNode;
   depth: number;
   expanded: boolean;
+  branchBusy: string | null;
   onToggle: () => void;
+  onRemoteFolderContextMenu: (remotePath: string, clientX: number, clientY: number) => void;
   graph: BranchGraphControls;
 }) {
+  const busy = branchBusy !== null;
   const folderGraphVisible = graph.graphFolderAnyVisibleRemote(node);
   return (
     <div
@@ -573,7 +578,14 @@ function RemoteBranchFolderRow({
         paddingLeft: `${depth * BRANCH_TREE_INDENT_PX}px`,
       }}
     >
-      <div className="flex w-full min-w-0 items-center gap-0">
+      <div
+        className="flex w-full min-w-0 items-center gap-0"
+        onContextMenu={(e) => {
+          if (busy) return;
+          e.preventDefault();
+          onRemoteFolderContextMenu(path, e.clientX, e.clientY);
+        }}
+      >
         <button
           type="button"
           className="flex h-9 w-5 shrink-0 items-center justify-center opacity-40 transition-transform hover:opacity-65"
@@ -656,7 +668,6 @@ function RemoteBranchRow({
         className="flex w-full min-w-0 items-center gap-0"
         onContextMenu={(e) => {
           if (busy) return;
-          if (!nativeContextMenusAvailable()) return;
           e.preventDefault();
           onRemoteBranchContextMenu(fullRef, e.clientX, e.clientY);
         }}
@@ -739,7 +750,6 @@ function TagRow({
         }}
         onContextMenu={(e) => {
           if (tagRowBusy) return;
-          if (!nativeContextMenusAvailable()) return;
           e.preventDefault();
           void openTagSidebarMenu(tag.name, e.clientX, e.clientY);
         }}
@@ -795,7 +805,6 @@ function WorktreeRow({
     <li
       className={worktree.isCurrent ? "bg-base-200/50 ring-1 ring-base-300/60 ring-inset" : ""}
       onContextMenu={(e) => {
-        if (!nativeContextMenusAvailable()) return;
         e.preventDefault();
         onWorktreeContextMenu(worktree, e.clientX, e.clientY);
       }}
@@ -882,6 +891,7 @@ export type BranchSidebarProps = {
   onCheckoutLocal: (name: string) => void;
   onSelectRemoteBranchTip: (fullRef: string) => void;
   onCreateFromRemote: (remoteRef: string) => void;
+  onRemoteFolderContextMenu: (remotePath: string, clientX: number, clientY: number) => void;
   onOpenWorktree: (path: string) => void;
   onPreviewWorktreeDiff: (worktree: WorktreeEntry) => void;
   onWorktreeContextMenu: (worktree: WorktreeEntry, clientX: number, clientY: number) => void;
@@ -915,6 +925,7 @@ export const BranchSidebar = memo(function BranchSidebar({
   onCheckoutLocal,
   onSelectRemoteBranchTip,
   onCreateFromRemote,
+  onRemoteFolderContextMenu,
   onOpenWorktree,
   onPreviewWorktreeDiff,
   onWorktreeContextMenu,
@@ -1224,15 +1235,18 @@ export const BranchSidebar = memo(function BranchSidebar({
                   >
                     {row.kind === "folder" ? (
                       <RemoteBranchFolderRow
+                        path={row.path}
                         label={row.label}
                         node={row.node}
                         depth={row.depth}
                         expanded={row.expanded}
+                        branchBusy={branchBusy}
                         onToggle={() => {
                           setCollapsedRemoteBranchFolders((current) =>
                             togglePathInSet(current, row.path),
                           );
                         }}
+                        onRemoteFolderContextMenu={onRemoteFolderContextMenu}
                         graph={branchGraphControls}
                       />
                     ) : (
@@ -1411,7 +1425,6 @@ export const BranchSidebar = memo(function BranchSidebar({
                       }}
                       onContextMenu={(e) => {
                         if (stashRowBusy) return;
-                        if (!nativeContextMenusAvailable()) return;
                         e.preventDefault();
                         openGraphStashMenu(s.refName, e.clientX, e.clientY);
                       }}

@@ -38,11 +38,12 @@ import {
 } from "./commitGraphLayout";
 import { base64ToObjectUrl, mimeTypeForImagePath, pathLooksLikeRenderableImage } from "./diffImage";
 import {
-  nativeContextMenusAvailable,
   popupBranchContextMenu,
   popupFileRowContextMenu,
   popupGraphCommitContextMenu,
+  popupGraphPushContextMenu,
   popupGraphTagContextMenu,
+  popupRemoteFolderContextMenu,
   popupStashContextMenu,
   popupTagSidebarMenu,
   popupWipContextMenu,
@@ -93,6 +94,7 @@ import {
   useDropCommitMutation,
   useDiscardPatchMutation,
   useDiscardPathsChangesMutation,
+  useForcePushToOriginMutation,
   useMergeBranchMutation,
   usePullLocalBranchMutation,
   usePushTagToOriginMutation,
@@ -156,6 +158,12 @@ function remoteNameFromRemoteRef(fullRef: string): string | null {
   const i = fullRef.indexOf("/");
   if (i <= 0) return null;
   return fullRef.slice(0, i);
+}
+
+/** Top-level remote folder name for sidebar paths like `origin/feature/foo`. */
+function remoteNameFromSidebarPath(remotePath: string): string | null {
+  const [remoteName] = remotePath.split("/", 1);
+  return remoteName || null;
 }
 
 function graphLocalVisible(graphBranchVisible: Record<string, boolean>, name: string): boolean {
@@ -513,7 +521,6 @@ const StagePanelFileRow = memo(function StagePanelFileRow({
       onContextMenu={
         onFileContextMenu
           ? (e) => {
-              if (!nativeContextMenusAvailable()) return;
               e.preventDefault();
               e.stopPropagation();
               onFileContextMenu(f, variant, e.clientX, e.clientY);
@@ -1223,6 +1230,7 @@ export default function App({
   const amendLastCommitMutation = useAmendLastCommitMutation();
   const commitStagedMutation = useCommitStagedMutation();
   const pushToOriginMutation = usePushToOriginMutation();
+  const forcePushToOriginMutation = useForcePushToOriginMutation();
   const rewordCommitMutation = useRewordCommitMutation();
   const replaceGraphBranchVisible = useCallback((next: Record<string, boolean>) => {
     graphBranchVisibleRef.current = next;
@@ -2669,6 +2677,14 @@ export default function App({
     setCreateBranchDialogOpen(true);
   }, []);
 
+  const openCreateBranchDialogAtCommit = useCallback((hash: string) => {
+    setCreateBranchStartCommit(hash);
+    setNewBranchName("");
+    setCreateBranchFieldError(null);
+    setOperationError(null);
+    setCreateBranchDialogOpen(true);
+  }, []);
+
   const closeCreateBranchDialog = useCallback(() => {
     setCreateBranchDialogOpen(false);
     setNewBranchName("");
@@ -3086,6 +3102,20 @@ export default function App({
       onCheckoutLocal,
       onCreateFromRemote,
     ],
+  );
+
+  const openRemoteFolderContextMenu = useCallback(
+    (remotePath: string, clientX: number, clientY: number) => {
+      if (remoteNameFromSidebarPath(remotePath) !== "origin") return;
+      void popupRemoteFolderContextMenu(clientX, clientY, {
+        remoteName: "origin",
+        disabled: Boolean(branchBusy),
+        onEditRemoteUrl: () => {
+          void openEditOriginUrlDialog();
+        },
+      });
+    },
+    [branchBusy, openEditOriginUrlDialog],
   );
 
   const cherryPickCommit = useCallback(
@@ -3533,11 +3563,7 @@ export default function App({
         onRebaseCurrentOnto: () => void rebaseCurrentBranchOntoCommit(hash),
         onSoftReset: () => void resetCurrentBranchToCommit(hash, ResetMode.Soft),
         onCreateBranch: () => {
-          setCreateBranchStartCommit(hash);
-          setNewBranchName("");
-          setCreateBranchFieldError(null);
-          setOperationError(null);
-          setCreateBranchDialogOpen(true);
+          openCreateBranchDialogAtCommit(hash);
         },
         onCreateTag: () => {
           setCreateTagCommit(hash);
@@ -3567,6 +3593,7 @@ export default function App({
       cherryPickCommit,
       dropCommit,
       mergeBranchIntoCurrent,
+      openCreateBranchDialogAtCommit,
       rebaseCurrentBranchOntoCommit,
       resetCurrentBranchToCommit,
     ],
@@ -3939,7 +3966,7 @@ export default function App({
     }
   }
 
-  function pruneStashFromLoadedGraph(stashRef: string) {
+  const pruneStashFromLoadedGraph = useCallback((stashRef: string) => {
     const normalizedStashRef = stashRef.trim();
     if (!normalizedStashRef) return;
     setCommits((prev) => {
@@ -3954,45 +3981,51 @@ export default function App({
       if (removedHashes.size === 0) return prev;
       return prev.filter((commit) => !removedHashes.has(commit.hash));
     });
-  }
+  }, []);
 
-  async function onStashPop(stashRef: string) {
-    if (!repo?.path || repo.error) return;
-    const ok = await ask(`Pop ${stashRef} and apply its changes to the working tree?`, {
-      title: "Garlic",
-      kind: "warning",
-    });
-    if (!ok) return;
-    setStashBusy(`pop:${stashRef}`);
-    setOperationError(null);
-    try {
-      await stashPopMutation.mutateAsync({ path: repo.path, stashRef });
-      pruneStashFromLoadedGraph(stashRef);
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    } finally {
-      setStashBusy(null);
-    }
-  }
+  const onStashPop = useCallback(
+    async (stashRef: string) => {
+      if (!repo?.path || repo.error) return;
+      const ok = await ask(`Pop ${stashRef} and apply its changes to the working tree?`, {
+        title: "Garlic",
+        kind: "warning",
+      });
+      if (!ok) return;
+      setStashBusy(`pop:${stashRef}`);
+      setOperationError(null);
+      try {
+        await stashPopMutation.mutateAsync({ path: repo.path, stashRef });
+        pruneStashFromLoadedGraph(stashRef);
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setStashBusy(null);
+      }
+    },
+    [pruneStashFromLoadedGraph, repo, stashPopMutation],
+  );
 
-  async function onStashDrop(stashRef: string) {
-    if (!repo?.path || repo.error) return;
-    const ok = await ask(`Drop ${stashRef} permanently? This cannot be undone.`, {
-      title: "Garlic",
-      kind: "warning",
-    });
-    if (!ok) return;
-    setStashBusy(`drop:${stashRef}`);
-    setOperationError(null);
-    try {
-      await stashDropMutation.mutateAsync({ path: repo.path, stashRef });
-      pruneStashFromLoadedGraph(stashRef);
-    } catch (e) {
-      setOperationError(invokeErrorMessage(e));
-    } finally {
-      setStashBusy(null);
-    }
-  }
+  const onStashDrop = useCallback(
+    async (stashRef: string) => {
+      if (!repo?.path || repo.error) return;
+      const ok = await ask(`Drop ${stashRef} permanently? This cannot be undone.`, {
+        title: "Garlic",
+        kind: "warning",
+      });
+      if (!ok) return;
+      setStashBusy(`drop:${stashRef}`);
+      setOperationError(null);
+      try {
+        await stashDropMutation.mutateAsync({ path: repo.path, stashRef });
+        pruneStashFromLoadedGraph(stashRef);
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setStashBusy(null);
+      }
+    },
+    [pruneStashFromLoadedGraph, repo, stashDropMutation],
+  );
 
   function openGraphStashMenu(stashRef: string, clientX: number, clientY: number) {
     void popupStashContextMenu(clientX, clientY, {
@@ -4557,6 +4590,41 @@ export default function App({
     },
     [pushToOriginMutation, repo],
   );
+  const forcePushCurrentBranchToOrigin = useCallback(async () => {
+    if (!repo?.path || repo.error || repo.detached) return;
+    const branchName = repo.branch?.trim();
+    if (!branchName) return;
+    const ok = await ask(
+      `Force push "${branchName}" to origin? This runs git push --force-with-lease: the remote branch will be updated to match your local tip, but only if the remote has not received new commits (otherwise the push is rejected).`,
+      { title: "Garlic", kind: "warning" },
+    );
+    if (!ok) return;
+    setPushBusy(true);
+    setOperationError(null);
+    try {
+      await forcePushToOriginMutation.mutateAsync({
+        path: repo.path,
+        skipHooks: false,
+      });
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setPushBusy(false);
+    }
+  }, [forcePushToOriginMutation, repo]);
+  const openGraphPushActionMenu = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!repo?.path || repo.error || repo.detached) return;
+      if (branchBusy || pushBusy || stashBusy !== null) return;
+      void popupGraphPushContextMenu(clientX, clientY, {
+        disabled: false,
+        onForcePush: () => {
+          void forcePushCurrentBranchToOrigin();
+        },
+      });
+    },
+    [branchBusy, forcePushCurrentBranchToOrigin, pushBusy, repo, stashBusy],
+  );
   const submitCommitAndPush = useCallback(
     async ({ message, skipHooks }: { message: string; skipHooks: boolean }) => {
       if (!repo?.path || repo.error || repo.detached || !message || !hasStagedFiles) return false;
@@ -4632,6 +4700,46 @@ export default function App({
     if (!currentBranchName) return null;
     return localBranches.find((b) => b.name === currentBranchName)?.tipHash ?? null;
   }, [currentBranchName, localBranches]);
+  const graphToolbarBranchTargetHash = useMemo(() => {
+    if (selectedGraphCommitHashes.length === 1) {
+      return selectedGraphCommitHashes[0] ?? null;
+    }
+    if (graphFocusHash) return graphFocusHash;
+    return currentBranchTipHash ?? (repo?.headHash?.trim() || null);
+  }, [currentBranchTipHash, graphFocusHash, repo?.headHash, selectedGraphCommitHashes]);
+  const graphToolbarBranchTargetLabel = useMemo(() => {
+    if (!graphToolbarBranchTargetHash) return null;
+    return (
+      commits.find((commit) => commit.hash === graphToolbarBranchTargetHash)?.shortHash ??
+      graphToolbarBranchTargetHash.slice(0, 7)
+    );
+  }, [commits, graphToolbarBranchTargetHash]);
+  const latestStashRef = stashes[0]?.refName ?? null;
+  const graphToolbarActionBusy = Boolean(branchBusy) || pushBusy || stashBusy !== null;
+  const pullActionDisabled = graphToolbarActionBusy || currentBranchName === null;
+  const pushActionDisabled =
+    graphToolbarActionBusy || !repo?.path || Boolean(repo.error) || Boolean(repo.detached);
+  const branchActionDisabled = graphToolbarActionBusy || graphToolbarBranchTargetHash === null;
+  const stashActionDisabled = graphToolbarActionBusy || wipChangedFileCount === 0;
+  const popActionDisabled = graphToolbarActionBusy || latestStashRef === null;
+  const handleGraphPullAction = useCallback(() => {
+    if (!currentBranchName) return;
+    void pullLocalBranch(currentBranchName);
+  }, [currentBranchName, pullLocalBranch]);
+  const handleGraphPushAction = useCallback(() => {
+    void pushCurrentBranchToOrigin({ skipHooks: false });
+  }, [pushCurrentBranchToOrigin]);
+  const handleGraphBranchAction = useCallback(() => {
+    if (!graphToolbarBranchTargetHash) return;
+    openCreateBranchDialogAtCommit(graphToolbarBranchTargetHash);
+  }, [graphToolbarBranchTargetHash, openCreateBranchDialogAtCommit]);
+  const handleGraphStashAction = useCallback(() => {
+    void onStashPush();
+  }, [onStashPush]);
+  const handleGraphPopAction = useCallback(() => {
+    if (!latestStashRef) return;
+    void onStashPop(latestStashRef);
+  }, [latestStashRef, onStashPop]);
 
   return (
     <main className="box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 text-base-content antialiased [font-synthesis:none]">
@@ -5209,6 +5317,7 @@ export default function App({
             onCheckoutLocal={handleCheckoutLocal}
             onSelectRemoteBranchTip={onSelectRemoteBranchTip}
             onCreateFromRemote={handleCreateFromRemote}
+            onRemoteFolderContextMenu={openRemoteFolderContextMenu}
             onOpenWorktree={handleOpenWorktree}
             onPreviewWorktreeDiff={handlePreviewWorktreeDiff}
             onWorktreeContextMenu={runWorktreeSidebarContextMenu}
@@ -5701,8 +5810,6 @@ export default function App({
                                                       onContextMenu={
                                                         browsingCurrentRepoWorktree && !conflicted
                                                           ? (e) => {
-                                                              if (!nativeContextMenusAvailable())
-                                                                return;
                                                               e.preventDefault();
                                                               e.stopPropagation();
                                                               openFileRowMenu(
@@ -6115,7 +6222,6 @@ export default function App({
                                                         );
                                                       }}
                                                       onContextMenu={(e) => {
-                                                        if (!nativeContextMenusAvailable()) return;
                                                         e.preventDefault();
                                                         e.stopPropagation();
                                                         openFileRowMenu(
@@ -6235,6 +6341,19 @@ export default function App({
                                   onWipSelect={handleSelectWipRow}
                                   graphCommitsPageSize={graphCommitsPageSize}
                                   onGraphCommitsPageSizeChange={handleGraphCommitsPageSizeChange}
+                                  pullActionDisabled={pullActionDisabled}
+                                  onPullAction={handleGraphPullAction}
+                                  pushActionDisabled={pushActionDisabled}
+                                  onPushAction={handleGraphPushAction}
+                                  onPushActionContextMenu={openGraphPushActionMenu}
+                                  branchActionDisabled={branchActionDisabled}
+                                  branchActionTargetLabel={graphToolbarBranchTargetLabel}
+                                  onBranchAction={handleGraphBranchAction}
+                                  stashActionDisabled={stashActionDisabled}
+                                  onStashAction={handleGraphStashAction}
+                                  popActionDisabled={popActionDisabled}
+                                  latestStashRef={latestStashRef}
+                                  onPopAction={handleGraphPopAction}
                                 />
                               </div>
                             )}

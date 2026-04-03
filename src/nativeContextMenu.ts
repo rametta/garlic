@@ -154,6 +154,30 @@ export async function popupBranchContextMenu(
   }
 }
 
+export async function popupGraphPushContextMenu(
+  clientX: number,
+  clientY: number,
+  args: {
+    disabled: boolean;
+    onForcePush: () => void;
+  },
+): Promise<void> {
+  try {
+    await showMenuAt(clientX, clientY, [
+      {
+        id: "graph_push_force",
+        text: "Force Push",
+        enabled: !args.disabled,
+        action: () => {
+          args.onForcePush();
+        },
+      },
+    ]);
+  } catch (e) {
+    console.error("native graph push context menu failed", e);
+  }
+}
+
 export async function popupStashContextMenu(
   clientX: number,
   clientY: number,
@@ -515,6 +539,31 @@ export async function popupTagSidebarMenu(
     ]);
   } catch (e) {
     console.error("native tag sidebar context menu failed", e);
+  }
+}
+
+export async function popupRemoteFolderContextMenu(
+  clientX: number,
+  clientY: number,
+  args: {
+    remoteName: string;
+    disabled: boolean;
+    onEditRemoteUrl: () => void;
+  },
+): Promise<void> {
+  try {
+    await showMenuAt(clientX, clientY, [
+      {
+        id: "remote_folder_edit_url",
+        text: `Edit ${args.remoteName} URL…`,
+        enabled: !args.disabled,
+        action: () => {
+          args.onEditRemoteUrl();
+        },
+      },
+    ]);
+  } catch (e) {
+    console.error("native remote folder context menu failed", e);
   }
 }
 
