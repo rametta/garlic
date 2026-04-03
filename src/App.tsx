@@ -4103,7 +4103,7 @@ export default function App({
     [commitStagedMutation, hasStagedFiles, pushToOriginMutation, repo],
   );
 
-  /** Branch/stash sidebar hidden; main column spans 9 — when viewing a commit, file diff, history, or blame. */
+  /** Branch/stash sidebar hidden; main column expands while viewing a commit, file diff, history, or blame. */
   const showExpandedDiff =
     Boolean(
       worktreeBrowseTarget ||
@@ -4115,6 +4115,9 @@ export default function App({
     ) &&
     !listsError &&
     Boolean(repo && !repo.error);
+  /** Selected graph commit browsing takes the full 12-column layout. */
+  const showFullWidthCommitBrowse =
+    Boolean(commitBrowseHash) && !listsError && Boolean(repo && !repo.error);
 
   const commitGraphLayout = useMemo((): CommitGraphLayout | null => {
     if (
@@ -4742,7 +4745,11 @@ export default function App({
 
         <div
           className={`col-span-12 flex min-h-0 min-w-0 flex-col gap-4 lg:h-full lg:min-h-0 ${
-            showExpandedDiff ? "lg:col-span-9" : "lg:col-span-6"
+            showFullWidthCommitBrowse
+              ? "lg:col-span-12"
+              : showExpandedDiff
+                ? "lg:col-span-9"
+                : "lg:col-span-6"
           }`}
         >
           <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-md">
@@ -5387,7 +5394,7 @@ export default function App({
                                       </div>
                                     )}
                                   </div>
-                                  <div className="flex w-[min(15rem,34vw)] min-w-0 shrink-0 flex-col border-t border-base-300/80">
+                                  <div className="flex w-96 min-w-0 shrink-0 flex-col border-t border-base-300/80">
                                     <div className="shrink-0 border-b border-base-300/80 py-2">
                                       <h2 className="m-0 ml-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                         <span>Files</span>
@@ -5638,7 +5645,11 @@ export default function App({
           </section>
         </div>
 
-        <aside className="col-span-12 flex min-h-0 min-w-0 lg:col-span-3 lg:h-full lg:min-h-0">
+        <aside
+          className={`col-span-12 flex min-h-0 min-w-0 lg:col-span-3 lg:h-full lg:min-h-0 ${
+            showFullWidthCommitBrowse ? "hidden" : ""
+          }`}
+        >
           <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm">
             <div className="card-body min-h-0 gap-0 p-0">
               <section
