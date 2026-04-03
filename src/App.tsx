@@ -2678,20 +2678,22 @@ export default function App({
   const onCheckoutLocal = useCallback(
     async (branch: string) => {
       if (!repo?.path || repo.error) return;
+      const pathAtStart = repo.path;
       setBranchBusy(`local:${branch}`);
       setOperationError(null);
       try {
         await checkoutLocalBranchMutation.mutateAsync({
-          path: repo.path,
+          path: pathAtStart,
           branch,
         });
+        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, checkoutLocalBranchMutation],
+    [repo, checkoutLocalBranchMutation, refreshAfterMutation],
   );
 
   const onCreateFromRemote = useCallback(

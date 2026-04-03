@@ -332,6 +332,7 @@ export function useCheckoutLocalBranchMutation() {
         detached: false,
         error: null,
       })),
+    invalidateSnapshotOnSettled: false,
   });
 }
 
