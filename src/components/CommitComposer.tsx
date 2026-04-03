@@ -28,10 +28,12 @@ export interface CommitComposerProps {
   repoDetached: boolean;
   canShowBranches: boolean;
   hasStagedFiles: boolean;
+  hasConflictedFiles: boolean;
   stageSyncBusy: boolean;
   stageCommitBusy: boolean;
   commitPushBusy: boolean;
   pushBusy: boolean;
+  repoOperationLabel: string | null;
   openaiApiKey: string;
   openaiModel: string;
   onCommit: (options: { message: string; amendLastCommit: boolean }) => Promise<boolean>;
@@ -45,10 +47,12 @@ export const CommitComposer = memo(function CommitComposer({
   repoDetached,
   canShowBranches,
   hasStagedFiles,
+  hasConflictedFiles,
   stageSyncBusy,
   stageCommitBusy,
   commitPushBusy,
   pushBusy,
+  repoOperationLabel,
   openaiApiKey,
   openaiModel,
   onCommit,
@@ -70,7 +74,9 @@ export const CommitComposer = memo(function CommitComposer({
     setAiCommitBusy(false);
   }, [repoPath]);
 
-  const controlsBusy = !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy;
+  const blockedByConflicts = hasConflictedFiles || Boolean(repoOperationLabel);
+  const controlsBusy =
+    !canShowBranches || stageSyncBusy || stageCommitBusy || commitPushBusy || blockedByConflicts;
   const commitTitleTrimmed = commitTitle.trim();
   const commitBodyTrimmed = commitBody.trim();
   const commitMessage = useMemo(
@@ -85,6 +91,7 @@ export const CommitComposer = memo(function CommitComposer({
   const canCommit =
     Boolean(repoPath) &&
     (canCommitAmend || canCommitNormal) &&
+    !blockedByConflicts &&
     !stageSyncBusy &&
     !stageCommitBusy &&
     !commitPushBusy;
@@ -94,6 +101,7 @@ export const CommitComposer = memo(function CommitComposer({
     !stageSyncBusy &&
     !stageCommitBusy &&
     !commitPushBusy &&
+    !blockedByConflicts &&
     !pushBusy;
   const canCommitAndPush = canCommit && !repoDetached && !pushBusy && !amendLastCommit;
   const hasOpenAiApiKey = openaiApiKey.trim().length > 0;
@@ -101,6 +109,7 @@ export const CommitComposer = memo(function CommitComposer({
     hasOpenAiApiKey &&
     Boolean(repoPath) &&
     hasStagedFiles &&
+    !blockedByConflicts &&
     !stageSyncBusy &&
     !stageCommitBusy &&
     !commitPushBusy &&
@@ -190,6 +199,13 @@ export const CommitComposer = memo(function CommitComposer({
     >
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3">
         <div className="flex shrink-0 flex-col gap-2">
+          {repoOperationLabel || hasConflictedFiles ? (
+            <div className="rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2 text-[0.7rem] leading-snug text-warning-content/90">
+              {repoOperationLabel
+                ? `${repoOperationLabel}. Finish or abort it from the main panel before creating a normal commit.`
+                : "Resolve conflicted files before committing or pushing."}
+            </div>
+          ) : null}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2
               id="sidebar-commit-heading"

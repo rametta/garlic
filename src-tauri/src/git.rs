@@ -132,13 +132,14 @@ pub struct GitCommandStreamFinishedEvent {
 
 /// Runs `git` with piped stdout/stderr, optionally writes stdin, streams lines to the webview,
 /// writes the audit log, and returns `Err` with stderr (or a generic message) on failure.
-fn run_git_streaming_with_input(
+fn run_git_streaming_with_input_and_env(
     app: &AppHandle,
     repo_path_str: &str,
     workdir: &Path,
     args: &[&str],
     operation: &str,
     stdin_text: Option<&str>,
+    extra_envs: &[(&str, &str)],
 ) -> Result<(), String> {
     let session_id = next_git_stream_session_id();
     let repo_owned = repo_path_str.to_string();
@@ -156,6 +157,9 @@ fn run_git_streaming_with_input(
 
     let mut cmd = git_cmd(workdir);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if !extra_envs.is_empty() {
+        cmd.envs(extra_envs.iter().copied());
+    }
     if stdin_text.is_some() {
         cmd.stdin(Stdio::piped());
     }
@@ -308,6 +312,25 @@ fn run_git_streaming_with_input(
     }
 }
 
+fn run_git_streaming_with_input(
+    app: &AppHandle,
+    repo_path_str: &str,
+    workdir: &Path,
+    args: &[&str],
+    operation: &str,
+    stdin_text: Option<&str>,
+) -> Result<(), String> {
+    run_git_streaming_with_input_and_env(
+        app,
+        repo_path_str,
+        workdir,
+        args,
+        operation,
+        stdin_text,
+        &[],
+    )
+}
+
 /// Runs `git` with piped stdout/stderr, streams lines to the webview, writes the audit log, and
 /// returns `Err` with stderr (or a generic message) on failure.
 fn run_git_streaming(
@@ -318,6 +341,43 @@ fn run_git_streaming(
     operation: &str,
 ) -> Result<(), String> {
     run_git_streaming_with_input(app, repo_path_str, workdir, args, operation, None)
+}
+
+fn run_git_streaming_with_env(
+    app: &AppHandle,
+    repo_path_str: &str,
+    workdir: &Path,
+    args: &[&str],
+    operation: &str,
+    extra_envs: &[(&str, &str)],
+) -> Result<(), String> {
+    run_git_streaming_with_input_and_env(
+        app,
+        repo_path_str,
+        workdir,
+        args,
+        operation,
+        None,
+        extra_envs,
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn non_interactive_git_editor_env() -> [(&'static str, &'static str); 3] {
+    [
+        ("GIT_EDITOR", "cmd /c exit 0"),
+        ("GIT_SEQUENCE_EDITOR", "cmd /c exit 0"),
+        ("GIT_MERGE_AUTOEDIT", "no"),
+    ]
+}
+
+#[cfg(not(target_os = "windows"))]
+fn non_interactive_git_editor_env() -> [(&'static str, &'static str); 3] {
+    [
+        ("GIT_EDITOR", ":"),
+        ("GIT_SEQUENCE_EDITOR", ":"),
+        ("GIT_MERGE_AUTOEDIT", "no"),
+    ]
 }
 
 async fn run_blocking_git_command<F>(task: F) -> Result<(), String>
@@ -410,6 +470,46 @@ pub struct LineStat {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConflictState {
+    pub status_code: String,
+    pub summary: String,
+    pub can_choose_ours: bool,
+    pub can_choose_theirs: bool,
+    pub ours_label: String,
+    pub theirs_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoOperationState {
+    pub kind: String,
+    pub label: String,
+    pub can_continue: bool,
+    pub can_abort: bool,
+    pub can_skip: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictVersionPreview {
+    pub label: String,
+    pub deleted: bool,
+    pub is_binary: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFileDetails {
+    pub status_code: String,
+    pub summary: String,
+    pub ours: ConflictVersionPreview,
+    pub theirs: ConflictVersionPreview,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkingTreeFile {
     /// Path used for git commands (index / worktree); for renames, the new path.
     pub path: String,
@@ -422,6 +522,8 @@ pub struct WorkingTreeFile {
     pub staged_stats: Option<LineStat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unstaged_stats: Option<LineStat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<ConflictState>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -479,6 +581,8 @@ pub struct RepoMetadata {
     pub working_tree_clean: Option<bool>,
     pub ahead: Option<u32>,
     pub behind: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_state: Option<RepoOperationState>,
 }
 
 static GIT_AUDIT_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
@@ -849,6 +953,51 @@ fn git_output_allow_fail(workdir: &Path, args: &[&str]) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
+fn git_internal_path_exists(workdir: &Path, rel: &str) -> bool {
+    let Ok(resolved) = git_output(workdir, &["rev-parse", "--git-path", rel]) else {
+        return false;
+    };
+    let resolved_path = PathBuf::from(resolved.trim());
+    if resolved_path.is_absolute() {
+        resolved_path.exists()
+    } else {
+        workdir.join(resolved_path).exists()
+    }
+}
+
+fn detect_repo_operation_state(workdir: &Path) -> Option<RepoOperationState> {
+    if git_internal_path_exists(workdir, "rebase-merge")
+        || git_internal_path_exists(workdir, "rebase-apply")
+    {
+        return Some(RepoOperationState {
+            kind: "rebase".into(),
+            label: "Rebase in progress".into(),
+            can_continue: true,
+            can_abort: true,
+            can_skip: true,
+        });
+    }
+    if git_internal_path_exists(workdir, "MERGE_HEAD") {
+        return Some(RepoOperationState {
+            kind: "merge".into(),
+            label: "Merge in progress".into(),
+            can_continue: true,
+            can_abort: true,
+            can_skip: false,
+        });
+    }
+    if git_internal_path_exists(workdir, "CHERRY_PICK_HEAD") {
+        return Some(RepoOperationState {
+            kind: "cherryPick".into(),
+            label: "Cherry-pick in progress".into(),
+            can_continue: true,
+            can_abort: true,
+            can_skip: true,
+        });
+    }
+    None
+}
+
 fn repo_name_from_path(path: &str) -> String {
     let trimmed = path.trim_end_matches(['/', '\\']);
     Path::new(trimmed)
@@ -1137,6 +1286,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         working_tree_clean: None,
         ahead: None,
         behind: None,
+        operation_state: None,
     };
 
     if git_output(&path_buf, &["rev-parse", "--is-inside-work-tree"]).is_err() {
@@ -1181,6 +1331,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
     let (ahead, behind) = head_upstream_ahead_behind(&path_buf)
         .map(|(a, b)| (Some(a), Some(b)))
         .unwrap_or((None, None));
+    let operation_state = detect_repo_operation_state(&path_buf);
 
     let meta = RepoMetadata {
         git_root,
@@ -1195,6 +1346,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         working_tree_clean,
         ahead,
         behind,
+        operation_state,
         error: None,
         ..base
     };
@@ -2401,9 +2553,17 @@ fn line_stat_untracked_file(workdir: &Path, rel: &str) -> LineStat {
 struct WtAcc {
     path: String,
     rename_from: Option<String>,
+    status_code: String,
     staged: bool,
     unstaged: bool,
     untracked: bool,
+    conflicted: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ConflictStagePresence {
+    has_ours: bool,
+    has_theirs: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -2424,7 +2584,20 @@ struct WorktreeListAcc {
     prunable_reason: Option<String>,
 }
 
-fn parse_porcelain_xy(xy: &str) -> Option<(bool, bool, bool)> {
+fn conflict_summary_for_status_code(xy: &str) -> Option<&'static str> {
+    match xy {
+        "DD" => Some("Both sides deleted this file"),
+        "AU" => Some("Added by us, deleted by them"),
+        "UD" => Some("Modified by us, deleted by them"),
+        "UA" => Some("Deleted by us, added by them"),
+        "DU" => Some("Deleted by us, modified by them"),
+        "AA" => Some("Both sides added this file"),
+        "UU" => Some("Both sides modified this file"),
+        _ => None,
+    }
+}
+
+fn parse_porcelain_xy(xy: &str) -> Option<(bool, bool, bool, bool)> {
     if xy.len() != 2 {
         return None;
     }
@@ -2432,11 +2605,14 @@ fn parse_porcelain_xy(xy: &str) -> Option<(bool, bool, bool)> {
     let x = it.next()?;
     let y = it.next()?;
     if x == '?' && y == '?' {
-        return Some((false, true, true));
+        return Some((false, true, true, false));
+    }
+    if conflict_summary_for_status_code(xy).is_some() {
+        return Some((true, true, false, true));
     }
     let staged = x != ' ' && x != '?';
     let unstaged = y != ' ';
-    Some((staged, unstaged, false))
+    Some((staged, unstaged, false, false))
 }
 
 fn parse_porcelain_v1_z(out: &str) -> Vec<WtAcc> {
@@ -2450,7 +2626,7 @@ fn parse_porcelain_v1_z(out: &str) -> Vec<WtAcc> {
         if entry.as_bytes().get(2) != Some(&b' ') {
             continue;
         }
-        let Some((staged, unstaged, untracked)) = parse_porcelain_xy(xy) else {
+        let Some((staged, unstaged, untracked, conflicted)) = parse_porcelain_xy(xy) else {
             continue;
         };
         let path = entry[3..].to_string();
@@ -2468,12 +2644,59 @@ fn parse_porcelain_v1_z(out: &str) -> Vec<WtAcc> {
         entries.push(WtAcc {
             path,
             rename_from,
+            status_code: xy.to_string(),
             staged,
             unstaged,
             untracked,
+            conflicted,
         });
     }
     entries
+}
+
+fn parse_unmerged_index_z(out: &str) -> HashMap<String, ConflictStagePresence> {
+    let mut by_path: HashMap<String, ConflictStagePresence> = HashMap::new();
+    for entry in out.split('\0').filter(|field| !field.is_empty()) {
+        let Some((meta, path)) = entry.rsplit_once('\t') else {
+            continue;
+        };
+        let mut parts = meta.split_whitespace();
+        let _mode = parts.next();
+        let _object = parts.next();
+        let Some(stage) = parts.next() else {
+            continue;
+        };
+        let acc = by_path.entry(path.to_string()).or_default();
+        match stage {
+            "2" => acc.has_ours = true,
+            "3" => acc.has_theirs = true,
+            _ => {}
+        }
+    }
+    by_path
+}
+
+fn conflict_choice_labels(has_ours: bool, has_theirs: bool) -> (bool, bool, String, String) {
+    match (has_ours, has_theirs) {
+        (true, true) => (true, true, "Keep ours".into(), "Keep theirs".into()),
+        (true, false) => (true, true, "Keep ours".into(), "Keep deletion".into()),
+        (false, true) => (true, true, "Keep deletion".into(), "Keep theirs".into()),
+        (false, false) => (true, false, "Keep deletion".into(), String::new()),
+    }
+}
+
+fn build_conflict_state(status_code: &str, stages: ConflictStagePresence) -> Option<ConflictState> {
+    let summary = conflict_summary_for_status_code(status_code)?;
+    let (can_choose_ours, can_choose_theirs, ours_label, theirs_label) =
+        conflict_choice_labels(stages.has_ours, stages.has_theirs);
+    Some(ConflictState {
+        status_code: status_code.to_string(),
+        summary: summary.to_string(),
+        can_choose_ours,
+        can_choose_theirs,
+        ours_label,
+        theirs_label,
+    })
 }
 
 fn normalize_worktree_branch_name(branch: Option<String>) -> Option<String> {
@@ -2608,15 +2831,19 @@ pub fn list_working_tree_files_blocking(path: String) -> Result<Vec<WorkingTreeF
         let path_key = acc.path.clone();
         map.entry(path_key.clone())
             .and_modify(|e| {
+                e.status_code = acc.status_code.clone();
                 e.staged |= acc.staged;
                 e.unstaged |= acc.unstaged;
                 e.untracked |= acc.untracked;
+                e.conflicted |= acc.conflicted;
                 if acc.rename_from.is_some() {
                     e.rename_from = acc.rename_from.clone();
                 }
             })
             .or_insert(acc);
     }
+    let unmerged_index = git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?;
+    let conflict_stages = parse_unmerged_index_z(&unmerged_index);
 
     let (staged_map, unstaged_map) = std::thread::scope(|s| {
         let p = &path_buf;
@@ -2636,6 +2863,14 @@ pub fn list_working_tree_files_blocking(path: String) -> Result<Vec<WorkingTreeF
         .map(|acc| {
             let staged = acc.staged;
             let unstaged = acc.unstaged || acc.untracked;
+            let conflict = if acc.conflicted {
+                build_conflict_state(
+                    &acc.status_code,
+                    conflict_stages.get(&acc.path).copied().unwrap_or_default(),
+                )
+            } else {
+                None
+            };
             let staged_stats = if staged && !acc.untracked {
                 Some(staged_map.get(&acc.path).cloned().unwrap_or(LineStat {
                     additions: 0,
@@ -2667,6 +2902,7 @@ pub fn list_working_tree_files_blocking(path: String) -> Result<Vec<WorkingTreeF
                 unstaged,
                 staged_stats,
                 unstaged_stats,
+                conflict,
             }
         })
         .collect())
@@ -2814,6 +3050,52 @@ pub fn unstage_patch(app: AppHandle, path: String, patch: String) -> Result<(), 
         "unstage",
         &patch,
     )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn resolve_conflict_choice(
+    app: AppHandle,
+    path: String,
+    file_path: String,
+    choice: String,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    let choice = choice.trim();
+    if choice != "ours" && choice != "theirs" {
+        return Err("Conflict choice must be \"ours\" or \"theirs\".".to_string());
+    }
+    let unmerged = parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
+    let Some(stages) = unmerged.get(rel).copied() else {
+        return Err("This path is not currently conflicted.".to_string());
+    };
+    let delete_path = match choice {
+        "ours" => !stages.has_ours,
+        "theirs" => !stages.has_theirs,
+        _ => false,
+    };
+    if delete_path {
+        run_git_streaming(
+            &app,
+            &path,
+            &path_buf,
+            &["rm", "--force", "--", rel],
+            "resolve conflict",
+        )?;
+        return Ok(());
+    }
+    let checkout_args = if choice == "ours" {
+        ["checkout", "--ours", "--", rel]
+    } else {
+        ["checkout", "--theirs", "--", rel]
+    };
+    run_git_streaming(&app, &path, &path_buf, &checkout_args, "resolve conflict")?;
+    git_output(&path_buf, &["add", "--", rel])?;
     Ok(())
 }
 
@@ -3224,6 +3506,95 @@ pub fn cherry_pick_commit(
     Ok(())
 }
 
+fn current_repo_operation_state(workdir: &Path) -> Result<RepoOperationState, String> {
+    detect_repo_operation_state(workdir)
+        .ok_or_else(|| "No conflicted Git operation is in progress.".to_string())
+}
+
+#[tauri::command]
+pub fn continue_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let op = current_repo_operation_state(&path_buf)?;
+    let editor_env = non_interactive_git_editor_env();
+    match op.kind.as_str() {
+        "rebase" => run_git_streaming_with_env(
+            &app,
+            &path,
+            &path_buf,
+            &["rebase", "--continue"],
+            "continue rebase",
+            &editor_env,
+        )?,
+        "merge" => run_git_streaming_with_env(
+            &app,
+            &path,
+            &path_buf,
+            &["merge", "--continue"],
+            "continue merge",
+            &editor_env,
+        )?,
+        "cherryPick" => run_git_streaming_with_env(
+            &app,
+            &path,
+            &path_buf,
+            &["cherry-pick", "--continue"],
+            "continue cherry-pick",
+            &editor_env,
+        )?,
+        _ => return Err("Unsupported operation.".to_string()),
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn abort_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let op = current_repo_operation_state(&path_buf)?;
+    match op.kind.as_str() {
+        "rebase" => run_git_streaming(
+            &app,
+            &path,
+            &path_buf,
+            &["rebase", "--abort"],
+            "abort rebase",
+        )?,
+        "merge" => run_git_streaming(&app, &path, &path_buf, &["merge", "--abort"], "abort merge")?,
+        "cherryPick" => run_git_streaming(
+            &app,
+            &path,
+            &path_buf,
+            &["cherry-pick", "--abort"],
+            "abort cherry-pick",
+        )?,
+        _ => return Err("Unsupported operation.".to_string()),
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn skip_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let op = current_repo_operation_state(&path_buf)?;
+    match op.kind.as_str() {
+        "rebase" => {
+            run_git_streaming(&app, &path, &path_buf, &["rebase", "--skip"], "skip rebase")?
+        }
+        "cherryPick" => run_git_streaming(
+            &app,
+            &path,
+            &path_buf,
+            &["cherry-pick", "--skip"],
+            "skip cherry-pick",
+        )?,
+        "merge" => return Err("Merge does not support skip.".to_string()),
+        _ => return Err("Unsupported operation.".to_string()),
+    }
+    Ok(())
+}
+
 /// History of commits touching `file_path` (`git log --follow`), newest first.
 #[tauri::command]
 pub fn list_file_history(
@@ -3344,6 +3715,75 @@ pub fn get_unstaged_diff(
         }
         Err(e) => Err(e),
     }
+}
+
+fn conflict_preview_from_bytes(label: &str, bytes: Option<Vec<u8>>) -> ConflictVersionPreview {
+    match bytes {
+        None => ConflictVersionPreview {
+            label: label.to_string(),
+            deleted: true,
+            is_binary: false,
+            text: None,
+        },
+        Some(bytes) => match String::from_utf8(bytes) {
+            Ok(text) => ConflictVersionPreview {
+                label: label.to_string(),
+                deleted: false,
+                is_binary: false,
+                text: Some(text),
+            },
+            Err(_) => ConflictVersionPreview {
+                label: label.to_string(),
+                deleted: false,
+                is_binary: true,
+                text: None,
+            },
+        },
+    }
+}
+
+#[tauri::command]
+pub fn get_conflict_file_details(
+    path: String,
+    file_path: String,
+) -> Result<ConflictFileDetails, String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    let unmerged = parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
+    let Some(stages) = unmerged.get(rel).copied() else {
+        return Err("This path is not currently conflicted.".to_string());
+    };
+    let porcelain = git_output_raw(
+        &path_buf,
+        &[
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--find-renames",
+            "-z",
+            "--",
+            rel,
+        ],
+    )?;
+    let entries = parse_porcelain_v1_z(&porcelain);
+    let entry = entries
+        .into_iter()
+        .find(|entry| entry.path == rel || entry.rename_from.as_deref() == Some(rel))
+        .ok_or_else(|| "Could not read the conflict state for this path.".to_string())?;
+    let conflict = build_conflict_state(&entry.status_code, stages)
+        .ok_or_else(|| "This path is not currently conflicted.".to_string())?;
+    let ours = git_show_blob_bytes(&path_buf, &format!(":2:{rel}"))?;
+    let theirs = git_show_blob_bytes(&path_buf, &format!(":3:{rel}"))?;
+    Ok(ConflictFileDetails {
+        status_code: conflict.status_code,
+        summary: conflict.summary,
+        ours: conflict_preview_from_bytes("Ours", ours),
+        theirs: conflict_preview_from_bytes("Theirs", theirs),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4028,11 +4468,16 @@ pub async fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_porcelain_v1_z, parse_porcelain_xy};
+    use super::{parse_porcelain_v1_z, parse_porcelain_xy, parse_unmerged_index_z};
 
     #[test]
     fn porcelain_xy_marks_untracked_as_unstaged() {
-        assert_eq!(parse_porcelain_xy("??"), Some((false, true, true)));
+        assert_eq!(parse_porcelain_xy("??"), Some((false, true, true, false)));
+    }
+
+    #[test]
+    fn porcelain_xy_marks_conflicts() {
+        assert_eq!(parse_porcelain_xy("UU"), Some((true, true, false, true)));
     }
 
     #[test]
@@ -4062,5 +4507,15 @@ mod tests {
         assert_eq!(entries[0].rename_from.as_deref(), Some("old name.txt"));
         assert!(entries[0].unstaged);
         assert!(!entries[0].staged);
+    }
+
+    #[test]
+    fn parse_unmerged_index_tracks_stage_presence() {
+        let parsed = parse_unmerged_index_z(
+            "100644 abcdef 2\tconflicted.txt\0100644 fedcba 3\tconflicted.txt\0",
+        );
+        let stages = parsed.get("conflicted.txt").copied().unwrap_or_default();
+        assert!(stages.has_ours);
+        assert!(stages.has_theirs);
     }
 }

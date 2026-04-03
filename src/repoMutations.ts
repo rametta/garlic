@@ -585,6 +585,13 @@ export function useUnstagePatchMutation() {
   });
 }
 
+export function useResolveConflictChoiceMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string; filePath: string; choice: "ours" | "theirs" }) =>
+      invokeRepoMutation("resolve_conflict_choice", variables),
+  });
+}
+
 export function useDiscardPatchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; patch: string }) =>
@@ -629,5 +636,26 @@ export function usePushToOriginMutation() {
     optimisticUpdate: (snapshot) => withCurrentBranchAhead(snapshot, 0),
     successUpdate: (snapshot) => withCurrentBranchPushedToOrigin(snapshot),
     invalidateSnapshotOnSettled: false,
+  });
+}
+
+export function useContinueRepoOperationMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string }) =>
+      invokeRepoMutation("continue_repo_operation", variables),
+  });
+}
+
+export function useAbortRepoOperationMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string }) =>
+      invokeRepoMutation("abort_repo_operation", variables),
+  });
+}
+
+export function useSkipRepoOperationMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string }) =>
+      invokeRepoMutation("skip_repo_operation", variables),
   });
 }

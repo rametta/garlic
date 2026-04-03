@@ -65,6 +65,8 @@ import {
 import {
   combineLineStats,
   clampGraphCommitsPageSize,
+  type ConflictFileDetails as RepoConflictFileDetails,
+  type ConflictVersionPreview as RepoConflictVersionPreview,
   type LineStat,
   type RepoMetadata,
   repoSnapshotFromStartup,
@@ -74,9 +76,11 @@ import {
 import {
   ResetMode,
   useAmendLastCommitMutation,
+  useAbortRepoOperationMutation,
   useCheckoutLocalBranchMutation,
   useCherryPickCommitMutation,
   useCommitStagedMutation,
+  useContinueRepoOperationMutation,
   useCreateBranchAtCommitMutation,
   useCreateBranchFromRemoteMutation,
   useCreateLocalBranchMutation,
@@ -93,12 +97,14 @@ import {
   usePushTagToOriginMutation,
   usePushToOriginMutation,
   useRebaseCurrentBranchOntoMutation,
+  useResolveConflictChoiceMutation,
   useResetCurrentBranchToCommitMutation,
   useRewordCommitMutation,
   useRemoveWorktreeMutation,
   useSetBranchSidebarSectionsMutation,
   useSetGraphBranchVisibilityMutation,
   useSetRemoteUrlMutation,
+  useSkipRepoOperationMutation,
   useStagePatchMutation,
   useStagePathsMutation,
   useStashDropMutation,
@@ -523,7 +529,7 @@ const StagePanelFileRow = memo(function StagePanelFileRow({
           {variant === "unstaged" && f.unstaged ? (
             <button
               type="button"
-              className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-xs btn-primary"
+              className="btn btn-square px-0 font-mono text-sm leading-none btn-xs btn-primary"
               disabled={busy}
               aria-label={`Stage ${f.path}`}
               title="Stage"
@@ -538,7 +544,7 @@ const StagePanelFileRow = memo(function StagePanelFileRow({
           {variant === "staged" && f.staged ? (
             <button
               type="button"
-              className="btn btn-square min-h-7 min-w-7 px-0 font-mono text-sm leading-none btn-ghost btn-xs"
+              className="btn btn-square px-0 font-mono text-sm leading-none btn-ghost btn-xs"
               disabled={busy}
               aria-label={`Unstage ${f.path}`}
               title="Unstage"
@@ -548,6 +554,81 @@ const StagePanelFileRow = memo(function StagePanelFileRow({
               }}
             >
               −
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </li>
+  );
+});
+
+const ConflictPanelFileRow = memo(function ConflictPanelFileRow({
+  f,
+  selected,
+  busy,
+  onSelect,
+  onChooseOurs,
+  onChooseTheirs,
+}: {
+  f: WorkingTreeFile;
+  selected: boolean;
+  busy: boolean;
+  onSelect: () => void;
+  onChooseOurs: () => void;
+  onChooseTheirs: () => void;
+}) {
+  const conflict = f.conflict;
+  if (!conflict) return null;
+  return (
+    <li
+      role="button"
+      tabIndex={0}
+      className={`rounded-md border bg-base-200/80 px-2 py-1 transition-colors hover:bg-base-300/50 ${
+        selected ? "border-warning ring-1 ring-warning/40" : "border-base-300"
+      }`}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <div className="flex flex-col gap-2">
+        <div className="flex min-h-7 items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <code className="block font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
+              {f.renameFrom ? `${f.renameFrom} → ${f.path}` : f.path}
+            </code>
+            <div className="mt-1 text-[0.65rem] leading-snug text-warning">{conflict.summary}</div>
+          </div>
+          <span className="badge shrink-0 badge-outline badge-warning">conflict</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {conflict.canChooseOurs ? (
+            <button
+              type="button"
+              className="btn btn-xs btn-primary"
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                onChooseOurs();
+              }}
+            >
+              {conflict.oursLabel}
+            </button>
+          ) : null}
+          {conflict.canChooseTheirs ? (
+            <button
+              type="button"
+              className="btn btn-outline btn-xs"
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                onChooseTheirs();
+              }}
+            >
+              {conflict.theirsLabel}
             </button>
           ) : null}
         </div>
@@ -640,6 +721,135 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
                 secondaryHunkAction={discardAction}
               />
             ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+function ConflictPreviewPanel({ preview }: { preview: RepoConflictVersionPreview }) {
+  return (
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-base-300/80 bg-base-200/35">
+      <div className="border-b border-base-300/80 px-3 py-2 text-[0.65rem] font-semibold tracking-wide text-base-content/60 uppercase">
+        {preview.label}
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        {preview.deleted ? (
+          <p className="m-0 text-sm text-base-content/60">This choice deletes the file.</p>
+        ) : preview.isBinary ? (
+          <p className="m-0 text-sm text-base-content/60">
+            Binary file preview is not available here.
+          </p>
+        ) : (
+          <pre className="m-0 font-mono text-[0.78rem] leading-relaxed wrap-break-word whitespace-pre-wrap text-base-content">
+            {preview.text ?? ""}
+          </pre>
+        )}
+      </div>
+    </section>
+  );
+}
+
+const ConflictResolutionPane = memo(function ConflictResolutionPane({
+  path,
+  repoOperationLabel,
+  loading,
+  error,
+  details,
+  busy,
+  oursLabel,
+  theirsLabel,
+  canChooseOurs,
+  canChooseTheirs,
+  onChooseOurs,
+  onChooseTheirs,
+  onOpenInCursor,
+  onBack,
+  onDismissError,
+}: {
+  path: string;
+  repoOperationLabel: string | null;
+  loading: boolean;
+  error: string | null;
+  details: RepoConflictFileDetails | null;
+  busy: boolean;
+  oursLabel: string;
+  theirsLabel: string;
+  canChooseOurs: boolean;
+  canChooseTheirs: boolean;
+  onChooseOurs: () => void;
+  onChooseTheirs: () => void;
+  onOpenInCursor: () => void;
+  onBack: () => void;
+  onDismissError: () => void;
+}) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 p-3">
+        <div className="min-w-0">
+          <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
+            {path}
+          </h2>
+          <p className="mt-1 mb-0 text-xs text-base-content/65">
+            {details?.summary ?? "Conflicted file"}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenInCursor}>
+            Open in Cursor
+          </button>
+          <button type="button" className="btn btn-sm btn-primary" onClick={onBack}>
+            Back to commits
+          </button>
+        </div>
+      </div>
+      <div className="shrink-0 border-b border-base-300/80 bg-base-200/30 p-3">
+        <p className="m-0 text-xs leading-relaxed text-base-content/70">
+          Choose the version to keep. Garlic will stage the selected result as resolved.
+          {repoOperationLabel ? ` ${repoOperationLabel}.` : ""}
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {canChooseOurs ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={busy}
+              onClick={onChooseOurs}
+            >
+              {oursLabel}
+            </button>
+          ) : null}
+          {canChooseTheirs ? (
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              disabled={busy}
+              onClick={onChooseTheirs}
+            >
+              {theirsLabel}
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {loading ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-20">
+            <span className="loading loading-md loading-spinner text-primary" />
+            <p className="m-0 text-sm text-base-content/70">Loading conflict choices...</p>
+          </div>
+        ) : error ? (
+          <DismissibleAlert className="alert text-sm alert-error" onDismiss={onDismissError}>
+            <span className="wrap-break-word">{error}</span>
+          </DismissibleAlert>
+        ) : details ? (
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto bg-base-200/40 p-3 xl:grid-cols-2">
+            <ConflictPreviewPanel preview={details.ours} />
+            <ConflictPreviewPanel preview={details.theirs} />
+          </div>
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-4 py-10">
+            <p className="m-0 text-sm text-base-content/60">No conflict details loaded.</p>
           </div>
         )}
       </div>
@@ -906,6 +1116,9 @@ export default function App({
   const [diffUnstagedText, setDiffUnstagedText] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const [conflictDetails, setConflictDetails] = useState<RepoConflictFileDetails | null>(null);
+  const [conflictLoading, setConflictLoading] = useState(false);
+  const [conflictError, setConflictError] = useState<string | null>(null);
   const [worktreeBrowseTarget, setWorktreeBrowseTarget] = useState<WorktreeEntry | null>(null);
   const [worktreeBrowseFiles, setWorktreeBrowseFiles] = useState<WorkingTreeFile[]>([]);
   const [worktreeBrowseLoading, setWorktreeBrowseLoading] = useState(false);
@@ -946,6 +1159,8 @@ export default function App({
   diffStagedTextRef.current = diffStagedText;
   const diffUnstagedTextRef = useRef<string | null>(diffUnstagedText);
   diffUnstagedTextRef.current = diffUnstagedText;
+  const conflictDetailsRef = useRef<RepoConflictFileDetails | null>(conflictDetails);
+  conflictDetailsRef.current = conflictDetails;
   const diffImagePreviewKeyRef = useRef<string | null>(null);
   const [stageCommitBusy, setStageCommitBusy] = useState(false);
   const [syncingStagePaths, setSyncingStagePaths] = useState<Set<string>>(() => new Set());
@@ -1000,6 +1215,9 @@ export default function App({
   const deleteLocalBranchMutation = useDeleteLocalBranchMutation();
   const deleteRemoteBranchMutation = useDeleteRemoteBranchMutation();
   const rebaseCurrentBranchOntoMutation = useRebaseCurrentBranchOntoMutation();
+  const continueRepoOperationMutation = useContinueRepoOperationMutation();
+  const abortRepoOperationMutation = useAbortRepoOperationMutation();
+  const skipRepoOperationMutation = useSkipRepoOperationMutation();
   const resetCurrentBranchToCommitMutation = useResetCurrentBranchToCommitMutation();
   const mergeBranchMutation = useMergeBranchMutation();
   const removeWorktreeMutation = useRemoveWorktreeMutation();
@@ -1021,6 +1239,7 @@ export default function App({
   const unstagePathsMutation = useUnstagePathsMutation();
   const stagePatchMutation = useStagePatchMutation();
   const unstagePatchMutation = useUnstagePatchMutation();
+  const resolveConflictChoiceMutation = useResolveConflictChoiceMutation();
   const discardPatchMutation = useDiscardPatchMutation();
   const amendLastCommitMutation = useAmendLastCommitMutation();
   const commitStagedMutation = useCommitStagedMutation();
@@ -1093,6 +1312,9 @@ export default function App({
     setDiffStagedText(null);
     setDiffUnstagedText(null);
     setDiffError(null);
+    setConflictDetails(null);
+    setConflictError(null);
+    setConflictLoading(false);
     clearDiffImagePreview();
   }, [clearDiffImagePreview]);
 
@@ -1636,6 +1858,58 @@ export default function App({
     graphExportIncludeMergeCommits,
   ]);
 
+  const loadConflictForFile = useCallback(
+    async (
+      f: WorkingTreeFile,
+      options?: { repoPath?: string; clearCommitBrowse?: boolean; preserveExisting?: boolean },
+    ) => {
+      const pathAtStart = options?.repoPath ?? repo?.path ?? null;
+      const guardActiveRepo = options?.repoPath == null;
+      if (!pathAtStart || !f.conflict) return;
+      const preserveExisting = Boolean(
+        options?.preserveExisting &&
+        selectedDiffRepoPathRef.current === pathAtStart &&
+        selectedDiffPathRef.current === f.path &&
+        selectedDiffSideRef.current === null &&
+        conflictDetailsRef.current !== null,
+      );
+      const seq = ++diffLoadSeqRef.current;
+      const isCurrentDiffRequest = () =>
+        seq === diffLoadSeqRef.current &&
+        (!guardActiveRepo || activeRepoPathRef.current === pathAtStart);
+      if (options?.clearCommitBrowse ?? true) {
+        clearCommitBrowse();
+      }
+      setSelectedDiffPath(f.path);
+      setSelectedDiffSide(null);
+      setSelectedDiffRepoPath(pathAtStart);
+      setDiffError(null);
+      setConflictError(null);
+      if (!preserveExisting) {
+        clearSelectedDiffContent();
+        setDiffLoading(false);
+        setConflictLoading(true);
+      }
+      try {
+        const details = await invoke<RepoConflictFileDetails>("get_conflict_file_details", {
+          path: pathAtStart,
+          filePath: f.path,
+        });
+        if (!isCurrentDiffRequest()) return;
+        setConflictDetails(details);
+      } catch (e) {
+        if (isCurrentDiffRequest()) {
+          setConflictError(invokeErrorMessage(e));
+        }
+      } finally {
+        if (isCurrentDiffRequest()) {
+          setConflictLoading(false);
+        }
+      }
+    },
+    [repo?.path, clearCommitBrowse, clearSelectedDiffContent],
+  );
+
   const loadDiffForFile = useCallback(
     async (
       f: WorkingTreeFile,
@@ -1645,6 +1919,10 @@ export default function App({
       const pathAtStart = options?.repoPath ?? repo?.path ?? null;
       const guardActiveRepo = options?.repoPath == null;
       if (!pathAtStart) return;
+      if (f.conflict) {
+        await loadConflictForFile(f, options);
+        return;
+      }
       if (side === "unstaged" && !f.unstaged) return;
       if (side === "staged" && !f.staged) return;
       const preserveExisting = Boolean(
@@ -1737,7 +2015,13 @@ export default function App({
         }
       }
     },
-    [repo?.path, clearCommitBrowse, clearDiffImagePreview, clearSelectedDiffContent],
+    [
+      repo?.path,
+      clearCommitBrowse,
+      clearDiffImagePreview,
+      clearSelectedDiffContent,
+      loadConflictForFile,
+    ],
   );
 
   const openWorktreeBrowse = useCallback(
@@ -1762,12 +2046,23 @@ export default function App({
                 path: worktree.path,
               });
         setWorktreeBrowseFiles(files);
-        const first = files.find((f) => f.unstaged) ?? files.find((f) => f.staged) ?? null;
+        const first =
+          files.find((f) => f.conflict) ??
+          files.find((f) => f.unstaged) ??
+          files.find((f) => f.staged) ??
+          null;
         if (first) {
-          void loadDiffForFile(first, first.unstaged ? "unstaged" : "staged", {
-            repoPath: worktree.path,
-            clearCommitBrowse: false,
-          });
+          if (first.conflict) {
+            void loadConflictForFile(first, {
+              repoPath: worktree.path,
+              clearCommitBrowse: false,
+            });
+          } else {
+            void loadDiffForFile(first, first.unstaged ? "unstaged" : "staged", {
+              repoPath: worktree.path,
+              clearCommitBrowse: false,
+            });
+          }
         }
       } catch (e) {
         setWorktreeBrowseFiles([]);
@@ -1779,6 +2074,7 @@ export default function App({
     [
       clearCommitBrowse,
       clearFileToolView,
+      loadConflictForFile,
       loadDiffForFile,
       clearSelectedDiffContent,
       repo?.path,
@@ -1917,6 +2213,7 @@ export default function App({
     setSelectedDiffRepoPath(null);
     clearSelectedDiffContent();
     setDiffLoading(false);
+    setConflictLoading(false);
     clearFileToolView();
   }, [clearFileToolView, clearSelectedDiffContent]);
 
@@ -1951,13 +2248,21 @@ export default function App({
     if (!repo?.path || selectedDiffRepoPath !== repo.path || !selectedDiffPath) return;
 
     const next = workingTreeFiles.find((file) => file.path === selectedDiffPath);
-    if (!next || (!next.staged && !next.unstaged)) {
+    if (!next || (!next.staged && !next.unstaged && !next.conflict)) {
       diffLoadSeqRef.current += 1;
       setSelectedDiffPath(null);
       setSelectedDiffSide(null);
       setSelectedDiffRepoPath(null);
       clearSelectedDiffContent();
       setDiffLoading(false);
+      setConflictLoading(false);
+      return;
+    }
+
+    if (next.conflict) {
+      if (conflictDetails === null) {
+        void loadConflictForFile(next, { clearCommitBrowse: false });
+      }
       return;
     }
 
@@ -1985,11 +2290,13 @@ export default function App({
     clearSelectedDiffContent,
     diffStagedText,
     diffUnstagedText,
+    conflictDetails,
     repo?.path,
     workingTreeFiles,
     selectedDiffPath,
     selectedDiffSide,
     selectedDiffRepoPath,
+    loadConflictForFile,
     loadDiffForFile,
   ]);
 
@@ -2296,29 +2603,36 @@ export default function App({
 
           if (selectedDiffRepoPath === pathAtStart && selectedDiffPath && files) {
             const next = files.find((w) => w.path === selectedDiffPath);
-            if (next && (next.staged || next.unstaged)) {
-              const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
-              if (preferredSide === "unstaged" && next.unstaged) {
-                void loadDiffForFile(next, "unstaged", {
+            if (next && (next.staged || next.unstaged || next.conflict)) {
+              if (next.conflict) {
+                void loadConflictForFile(next, {
                   clearCommitBrowse: false,
                   preserveExisting: true,
                 });
-              } else if (preferredSide === "staged" && next.staged) {
-                void loadDiffForFile(next, "staged", {
-                  clearCommitBrowse: false,
-                  preserveExisting: true,
-                });
-              } else if (next.unstaged) {
-                void loadDiffForFile(next, "unstaged", { clearCommitBrowse: false });
-              } else if (next.staged) {
-                void loadDiffForFile(next, "staged", { clearCommitBrowse: false });
               } else {
-                diffLoadSeqRef.current += 1;
-                setSelectedDiffPath(null);
-                setSelectedDiffSide(null);
-                setSelectedDiffRepoPath(null);
-                clearSelectedDiffContent();
-                setDiffLoading(false);
+                const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
+                if (preferredSide === "unstaged" && next.unstaged) {
+                  void loadDiffForFile(next, "unstaged", {
+                    clearCommitBrowse: false,
+                    preserveExisting: true,
+                  });
+                } else if (preferredSide === "staged" && next.staged) {
+                  void loadDiffForFile(next, "staged", {
+                    clearCommitBrowse: false,
+                    preserveExisting: true,
+                  });
+                } else if (next.unstaged) {
+                  void loadDiffForFile(next, "unstaged", { clearCommitBrowse: false });
+                } else if (next.staged) {
+                  void loadDiffForFile(next, "staged", { clearCommitBrowse: false });
+                } else {
+                  diffLoadSeqRef.current += 1;
+                  setSelectedDiffPath(null);
+                  setSelectedDiffSide(null);
+                  setSelectedDiffRepoPath(null);
+                  clearSelectedDiffContent();
+                  setDiffLoading(false);
+                }
               }
             } else {
               diffLoadSeqRef.current += 1;
@@ -2327,6 +2641,7 @@ export default function App({
               setSelectedDiffRepoPath(null);
               clearSelectedDiffContent();
               setDiffLoading(false);
+              setConflictLoading(false);
             }
           }
         }
@@ -2342,6 +2657,7 @@ export default function App({
       selectedDiffPath,
       selectedDiffRepoPath,
       selectedDiffSide,
+      loadConflictForFile,
       loadDiffForFile,
       clearSelectedDiffContent,
       clearCommitBrowse,
@@ -2816,6 +3132,73 @@ export default function App({
       }
     },
     [repo, commits, cherryPickCommitMutation],
+  );
+
+  const continueRepoOperation = useCallback(async () => {
+    if (!repo?.path || repo.error || !repo.operationState) return;
+    setBranchBusy("continue-operation");
+    setOperationError(null);
+    try {
+      await continueRepoOperationMutation.mutateAsync({ path: repo.path });
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }, [repo, continueRepoOperationMutation]);
+
+  const abortRepoOperation = useCallback(async () => {
+    if (!repo?.path || repo.error || !repo.operationState) return;
+    setBranchBusy("abort-operation");
+    setOperationError(null);
+    try {
+      await abortRepoOperationMutation.mutateAsync({ path: repo.path });
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }, [repo, abortRepoOperationMutation]);
+
+  const skipRepoOperation = useCallback(async () => {
+    if (!repo?.path || repo.error || !repo.operationState?.canSkip) return;
+    setBranchBusy("skip-operation");
+    setOperationError(null);
+    try {
+      await skipRepoOperationMutation.mutateAsync({ path: repo.path });
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }, [repo, skipRepoOperationMutation]);
+
+  const resolveConflictChoice = useCallback(
+    async (filePath: string, choice: "ours" | "theirs") => {
+      if (!repo?.path || repo.error) return;
+      if (syncingStagePaths.has(filePath)) return;
+      setOperationError(null);
+      setSyncingStagePaths((prev) => {
+        const next = new Set(prev);
+        next.add(filePath);
+        return next;
+      });
+      clearSelectedDiffContent();
+      setConflictLoading(true);
+      try {
+        await resolveConflictChoiceMutation.mutateAsync({ path: repo.path, filePath, choice });
+      } catch (e) {
+        setOperationError(invokeErrorMessage(e));
+      } finally {
+        setSyncingStagePaths((prev) => {
+          const next = new Set(prev);
+          next.delete(filePath);
+          return next;
+        });
+        setConflictLoading(false);
+      }
+    },
+    [repo, syncingStagePaths, clearSelectedDiffContent, resolveConflictChoiceMutation],
   );
 
   const rebaseCurrentBranchOntoCommit = useCallback(
@@ -3791,27 +4174,32 @@ export default function App({
         : "Detached HEAD"
       : (repo?.headShort ?? "Current branch"));
 
+  const conflictedFiles = useMemo(
+    () => workingTreeFiles.filter((file) => file.conflict),
+    [workingTreeFiles],
+  );
   const unstagedFiles = useMemo(
-    () => workingTreeFiles.filter((file) => file.unstaged),
+    () => workingTreeFiles.filter((file) => file.unstaged && !file.conflict),
     [workingTreeFiles],
   );
   const stagedFiles = useMemo(
-    () => workingTreeFiles.filter((file) => file.staged),
+    () => workingTreeFiles.filter((file) => file.staged && !file.conflict),
     [workingTreeFiles],
   );
+  const hasConflictedFiles = conflictedFiles.length > 0;
   const hasStagedFiles = stagedFiles.length > 0;
   const unstagedPaths = useMemo(() => worktreeFilesMutationPaths(unstagedFiles), [unstagedFiles]);
   const stagedPaths = useMemo(() => worktreeFilesMutationPaths(stagedFiles), [stagedFiles]);
   const wipChangedFileCount = useMemo(() => {
     const paths = new Set<string>();
     for (const f of workingTreeFiles) {
-      if (f.staged || f.unstaged) paths.add(f.path);
+      if (f.staged || f.unstaged || f.conflict) paths.add(f.path);
     }
     return paths.size;
   }, [workingTreeFiles]);
   const preferredWipFile = useMemo(
-    () => unstagedFiles[0] ?? stagedFiles[0] ?? null,
-    [stagedFiles, unstagedFiles],
+    () => conflictedFiles[0] ?? unstagedFiles[0] ?? stagedFiles[0] ?? null,
+    [conflictedFiles, stagedFiles, unstagedFiles],
   );
   const stageSyncBusy = syncingStagePaths.size > 0;
 
@@ -3876,9 +4264,42 @@ export default function App({
   );
   const browsingCurrentRepoWorktree = worktreeBrowseTarget?.path === repo?.path;
   const canEditSelectedDiff = selectedDiffRepoPath === repo?.path;
+  const selectedConflictFile = useMemo(() => {
+    if (!selectedDiffPath) return null;
+    const sourceFiles =
+      selectedDiffRepoPath === repo?.path
+        ? workingTreeFiles
+        : selectedDiffRepoPath === worktreeBrowseTarget?.path
+          ? worktreeBrowseFiles
+          : [];
+    return sourceFiles.find((file) => file.path === selectedDiffPath && file.conflict) ?? null;
+  }, [
+    repo?.path,
+    selectedDiffPath,
+    selectedDiffRepoPath,
+    workingTreeFiles,
+    worktreeBrowseFiles,
+    worktreeBrowseTarget?.path,
+  ]);
+  const openSelectedDiffInCursor = useCallback(async () => {
+    if (!selectedDiffRepoPath || !selectedDiffPath) return;
+    try {
+      await invoke("open_in_cursor", { path: selectedDiffRepoPath, filePath: selectedDiffPath });
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    }
+  }, [selectedDiffPath, selectedDiffRepoPath]);
   const selectedDiffBusy =
     selectedDiffPath !== null &&
     (stageCommitBusy || commitPushBusy || syncingStagePaths.has(selectedDiffPath));
+  const operationActionBusy =
+    branchBusy === "continue-operation" ||
+    branchBusy === "abort-operation" ||
+    branchBusy === "skip-operation";
+  const operationContinueDisabled =
+    operationActionBusy ||
+    Boolean(branchBusy && !branchBusy.endsWith("-operation")) ||
+    hasConflictedFiles;
   const stagedSelectedDiffImagePreview = useMemo(() => {
     if (
       selectedDiffSide !== "staged" ||
@@ -4928,6 +5349,72 @@ export default function App({
                               ) : null}
                             </div>
                           ) : null}
+                          {repo?.operationState ? (
+                            <div className="shrink-0 px-3 pt-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-3">
+                                <div className="min-w-0 flex-1">
+                                  <p className="m-0 text-sm font-semibold text-base-content">
+                                    {repo.operationState.label}
+                                  </p>
+                                  <p className="mt-1 mb-0 text-xs leading-relaxed text-base-content/70">
+                                    {hasConflictedFiles
+                                      ? `Resolve ${conflictedFiles.length} conflicted file${conflictedFiles.length === 1 ? "" : "s"}, then continue.`
+                                      : "Continue, skip, or abort this operation."}
+                                  </p>
+                                </div>
+                                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                  {repo.operationState.canAbort ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-outline btn-sm"
+                                      disabled={operationActionBusy}
+                                      onClick={() => {
+                                        void abortRepoOperation();
+                                      }}
+                                    >
+                                      {branchBusy === "abort-operation" ? (
+                                        <span className="loading loading-xs loading-spinner" />
+                                      ) : (
+                                        "Abort"
+                                      )}
+                                    </button>
+                                  ) : null}
+                                  {repo.operationState.canSkip ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      disabled={operationActionBusy}
+                                      onClick={() => {
+                                        void skipRepoOperation();
+                                      }}
+                                    >
+                                      {branchBusy === "skip-operation" ? (
+                                        <span className="loading loading-xs loading-spinner" />
+                                      ) : (
+                                        "Skip"
+                                      )}
+                                    </button>
+                                  ) : null}
+                                  {repo.operationState.canContinue ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-sm btn-primary"
+                                      disabled={operationContinueDisabled}
+                                      onClick={() => {
+                                        void continueRepoOperation();
+                                      }}
+                                    >
+                                      {branchBusy === "continue-operation" ? (
+                                        <span className="loading loading-xs loading-spinner" />
+                                      ) : (
+                                        "Continue"
+                                      )}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
 
                           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                             {!listsError && worktreeBrowseTarget ? (
@@ -4994,7 +5481,50 @@ export default function App({
                                       </div>
                                     ) : (
                                       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                                        {diffLoading ? (
+                                        {selectedConflictFile ? (
+                                          <ConflictResolutionPane
+                                            path={selectedConflictFile.path}
+                                            repoOperationLabel={repo?.operationState?.label ?? null}
+                                            loading={conflictLoading}
+                                            error={conflictError}
+                                            details={conflictDetails}
+                                            busy={!canEditSelectedDiff || selectedDiffBusy}
+                                            oursLabel={
+                                              selectedConflictFile.conflict?.oursLabel ??
+                                              "Keep ours"
+                                            }
+                                            theirsLabel={
+                                              selectedConflictFile.conflict?.theirsLabel ??
+                                              "Keep theirs"
+                                            }
+                                            canChooseOurs={
+                                              selectedConflictFile.conflict?.canChooseOurs ?? false
+                                            }
+                                            canChooseTheirs={
+                                              selectedConflictFile.conflict?.canChooseTheirs ??
+                                              false
+                                            }
+                                            onChooseOurs={() => {
+                                              void resolveConflictChoice(
+                                                selectedConflictFile.path,
+                                                "ours",
+                                              );
+                                            }}
+                                            onChooseTheirs={() => {
+                                              void resolveConflictChoice(
+                                                selectedConflictFile.path,
+                                                "theirs",
+                                              );
+                                            }}
+                                            onOpenInCursor={() => {
+                                              void openSelectedDiffInCursor();
+                                            }}
+                                            onBack={clearDiffSelection}
+                                            onDismissError={() => {
+                                              setConflictError(null);
+                                            }}
+                                          />
+                                        ) : diffLoading ? (
                                           <div className="flex flex-1 flex-col items-center justify-center gap-2 py-20">
                                             <span className="loading loading-md loading-spinner text-primary" />
                                             <p className="m-0 text-sm text-base-content/70">
@@ -5105,6 +5635,7 @@ export default function App({
                                                 const preferredSide = entry.file.unstaged
                                                   ? "unstaged"
                                                   : "staged";
+                                                const conflicted = Boolean(entry.file.conflict);
                                                 const selected =
                                                   selectedDiffRepoPath ===
                                                     worktreeBrowseTarget.path &&
@@ -5127,6 +5658,13 @@ export default function App({
                                                           : "border-base-300/40 bg-base-200/50 hover:border-base-300 hover:bg-base-300/45 active:bg-base-300/55"
                                                       }`}
                                                       onClick={() => {
+                                                        if (conflicted) {
+                                                          void loadConflictForFile(entry.file, {
+                                                            repoPath: worktreeBrowseTarget.path,
+                                                            clearCommitBrowse: false,
+                                                          });
+                                                          return;
+                                                        }
                                                         void loadDiffForFile(
                                                           entry.file,
                                                           preferredSide,
@@ -5137,7 +5675,7 @@ export default function App({
                                                         );
                                                       }}
                                                       onContextMenu={
-                                                        browsingCurrentRepoWorktree
+                                                        browsingCurrentRepoWorktree && !conflicted
                                                           ? (e) => {
                                                               if (!nativeContextMenusAvailable())
                                                                 return;
@@ -5159,6 +5697,11 @@ export default function App({
                                                       <code className="min-w-0 flex-1 font-mono wrap-break-word text-base-content/95">
                                                         {entry.file.path}
                                                       </code>
+                                                      {conflicted ? (
+                                                        <span className="badge shrink-0 badge-outline badge-warning">
+                                                          conflict
+                                                        </span>
+                                                      ) : null}
                                                       <DiffLineStatBadge stat={entry.stats} />
                                                     </button>
                                                   </div>
@@ -5172,23 +5715,59 @@ export default function App({
                                 </div>
                               </div>
                             ) : !listsError && selectedDiffPath ? (
-                              <StandaloneDiffPane
-                                path={selectedDiffPath}
-                                side={selectedDiffSide}
-                                diffLoading={diffLoading}
-                                diffError={diffError}
-                                onDismissDiffError={() => {
-                                  setDiffError(null);
-                                }}
-                                onBack={clearDiffSelection}
-                                stagedText={diffStagedText}
-                                unstagedText={diffUnstagedText}
-                                stagedImagePreview={stagedSelectedDiffImagePreview}
-                                unstagedImagePreview={unstagedSelectedDiffImagePreview}
-                                stagedAction={stagedSelectedDiffAction}
-                                unstagedAction={unstagedSelectedDiffAction}
-                                discardAction={discardSelectedDiffAction}
-                              />
+                              selectedConflictFile ? (
+                                <ConflictResolutionPane
+                                  path={selectedDiffPath}
+                                  repoOperationLabel={repo?.operationState?.label ?? null}
+                                  loading={conflictLoading}
+                                  error={conflictError}
+                                  details={conflictDetails}
+                                  busy={!canEditSelectedDiff || selectedDiffBusy}
+                                  oursLabel={
+                                    selectedConflictFile.conflict?.oursLabel ?? "Keep ours"
+                                  }
+                                  theirsLabel={
+                                    selectedConflictFile.conflict?.theirsLabel ?? "Keep theirs"
+                                  }
+                                  canChooseOurs={
+                                    selectedConflictFile.conflict?.canChooseOurs ?? false
+                                  }
+                                  canChooseTheirs={
+                                    selectedConflictFile.conflict?.canChooseTheirs ?? false
+                                  }
+                                  onChooseOurs={() => {
+                                    void resolveConflictChoice(selectedDiffPath, "ours");
+                                  }}
+                                  onChooseTheirs={() => {
+                                    void resolveConflictChoice(selectedDiffPath, "theirs");
+                                  }}
+                                  onOpenInCursor={() => {
+                                    void openSelectedDiffInCursor();
+                                  }}
+                                  onBack={clearDiffSelection}
+                                  onDismissError={() => {
+                                    setConflictError(null);
+                                  }}
+                                />
+                              ) : (
+                                <StandaloneDiffPane
+                                  path={selectedDiffPath}
+                                  side={selectedDiffSide}
+                                  diffLoading={diffLoading}
+                                  diffError={diffError}
+                                  onDismissDiffError={() => {
+                                    setDiffError(null);
+                                  }}
+                                  onBack={clearDiffSelection}
+                                  stagedText={diffStagedText}
+                                  unstagedText={diffUnstagedText}
+                                  stagedImagePreview={stagedSelectedDiffImagePreview}
+                                  unstagedImagePreview={unstagedSelectedDiffImagePreview}
+                                  stagedAction={stagedSelectedDiffAction}
+                                  unstagedAction={unstagedSelectedDiffAction}
+                                  discardAction={discardSelectedDiffAction}
+                                />
+                              )
                             ) : !listsError && fileBlamePath ? (
                               <FileBlamePane
                                 path={fileBlamePath}
@@ -5686,6 +6265,55 @@ export default function App({
           <div className="flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100">
             <div className="card-body min-h-0 gap-0 p-0">
               <section
+                className="flex min-h-0 flex-[0_0_auto] flex-col border-b border-base-300"
+                aria-labelledby="sidebar-conflicts-heading"
+              >
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
+                  <h2
+                    id="sidebar-conflicts-heading"
+                    className="m-0 min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-80"
+                  >
+                    Conflicts ({conflictedFiles.length})
+                  </h2>
+                </div>
+                <div className="max-h-52 overflow-y-auto p-2">
+                  {!canShowBranches ? (
+                    <p className="m-0 py-2 text-center text-xs text-base-content/50">
+                      Open a repository to manage conflicts
+                    </p>
+                  ) : conflictedFiles.length === 0 ? (
+                    <p className="m-0 py-2 text-center text-xs text-base-content/50">
+                      No conflicted files
+                    </p>
+                  ) : (
+                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                      {conflictedFiles.map((f) => (
+                        <ConflictPanelFileRow
+                          key={f.path}
+                          f={f}
+                          selected={selectedDiffPath === f.path && selectedDiffSide === null}
+                          busy={
+                            stageCommitBusy ||
+                            commitPushBusy ||
+                            worktreeFileBusy(syncingStagePaths, f)
+                          }
+                          onSelect={() => {
+                            void loadConflictForFile(f);
+                          }}
+                          onChooseOurs={() => {
+                            void resolveConflictChoice(f.path, "ours");
+                          }}
+                          onChooseTheirs={() => {
+                            void resolveConflictChoice(f.path, "theirs");
+                          }}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </section>
+
+              <section
                 className="flex min-h-0 flex-[1_1_0%] flex-col border-b border-base-300"
                 aria-labelledby="sidebar-unstaged-heading"
               >
@@ -5830,10 +6458,12 @@ export default function App({
                 repoDetached={Boolean(repo?.detached)}
                 canShowBranches={canShowBranches}
                 hasStagedFiles={hasStagedFiles}
+                hasConflictedFiles={hasConflictedFiles}
                 stageSyncBusy={stageSyncBusy}
                 stageCommitBusy={stageCommitBusy}
                 commitPushBusy={commitPushBusy}
                 pushBusy={pushBusy}
+                repoOperationLabel={repo?.operationState?.label ?? null}
                 openaiApiKey={openaiApiKey}
                 openaiModel={openaiModel}
                 onCommit={submitCommit}

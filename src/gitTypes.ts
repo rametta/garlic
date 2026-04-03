@@ -29,6 +29,7 @@ export interface RepoMetadata {
   workingTreeClean: boolean | null;
   ahead: number | null;
   behind: number | null;
+  operationState?: RepoOperationState | null;
 }
 
 /** Line counts from `git diff --numstat` / `--cached` (or file read for untracked). */
@@ -36,6 +37,37 @@ export interface LineStat {
   additions: number;
   deletions: number;
   isBinary: boolean;
+}
+
+export interface ConflictState {
+  statusCode: string;
+  summary: string;
+  canChooseOurs: boolean;
+  canChooseTheirs: boolean;
+  oursLabel: string;
+  theirsLabel: string;
+}
+
+export interface RepoOperationState {
+  kind: "merge" | "rebase" | "cherryPick";
+  label: string;
+  canContinue: boolean;
+  canAbort: boolean;
+  canSkip: boolean;
+}
+
+export interface ConflictVersionPreview {
+  label: string;
+  deleted: boolean;
+  isBinary: boolean;
+  text?: string | null;
+}
+
+export interface ConflictFileDetails {
+  statusCode: string;
+  summary: string;
+  ours: ConflictVersionPreview;
+  theirs: ConflictVersionPreview;
 }
 
 /** One path in the working tree from `list_working_tree_files` / bootstrap. */
@@ -46,6 +78,7 @@ export interface WorkingTreeFile {
   unstaged: boolean;
   stagedStats?: LineStat;
   unstagedStats?: LineStat;
+  conflict?: ConflictState | null;
 }
 
 /** Repo snapshot from `restore_app_bootstrap` (`repo` field). */
@@ -122,7 +155,7 @@ export function combineLineStats(a?: LineStat, b?: LineStat): LineStat | undefin
 }
 
 export function workingTreeCleanFromFiles(files: readonly WorkingTreeFile[]): boolean {
-  return files.every((file) => !file.staged && !file.unstaged);
+  return files.every((file) => !file.staged && !file.unstaged && !file.conflict);
 }
 
 export function withWorkingTreeFiles(
