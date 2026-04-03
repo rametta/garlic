@@ -565,17 +565,11 @@ const StagePanelFileRow = memo(function StagePanelFileRow({
 const ConflictPanelFileRow = memo(function ConflictPanelFileRow({
   f,
   selected,
-  busy,
   onSelect,
-  onChooseOurs,
-  onChooseTheirs,
 }: {
   f: WorkingTreeFile;
   selected: boolean;
-  busy: boolean;
   onSelect: () => void;
-  onChooseOurs: () => void;
-  onChooseTheirs: () => void;
 }) {
   const conflict = f.conflict;
   if (!conflict) return null;
@@ -594,44 +588,14 @@ const ConflictPanelFileRow = memo(function ConflictPanelFileRow({
         }
       }}
     >
-      <div className="flex flex-col gap-2">
-        <div className="flex min-h-7 items-start gap-2">
-          <div className="min-w-0 flex-1">
-            <code className="block font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
-              {f.renameFrom ? `${f.renameFrom} → ${f.path}` : f.path}
-            </code>
-            <div className="mt-1 text-[0.65rem] leading-snug text-warning">{conflict.summary}</div>
-          </div>
-          <span className="badge shrink-0 badge-outline badge-warning">conflict</span>
+      <div className="flex min-h-7 items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <code className="block font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
+            {f.renameFrom ? `${f.renameFrom} → ${f.path}` : f.path}
+          </code>
+          <div className="mt-1 text-[0.65rem] leading-snug text-warning">{conflict.summary}</div>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {conflict.canChooseOurs ? (
-            <button
-              type="button"
-              className="btn btn-xs btn-primary"
-              disabled={busy}
-              onClick={(e) => {
-                e.stopPropagation();
-                onChooseOurs();
-              }}
-            >
-              {conflict.oursLabel}
-            </button>
-          ) : null}
-          {conflict.canChooseTheirs ? (
-            <button
-              type="button"
-              className="btn btn-outline btn-xs"
-              disabled={busy}
-              onClick={(e) => {
-                e.stopPropagation();
-                onChooseTheirs();
-              }}
-            >
-              {conflict.theirsLabel}
-            </button>
-          ) : null}
-        </div>
+        <span className="badge shrink-0 badge-outline badge-warning">conflict</span>
       </div>
     </li>
   );
@@ -728,11 +692,35 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
   );
 });
 
-function ConflictPreviewPanel({ preview }: { preview: RepoConflictVersionPreview }) {
+function ConflictPreviewPanel({
+  preview,
+  actionLabel,
+  actionKind = "outline",
+  busy = false,
+  onAction,
+}: {
+  preview: RepoConflictVersionPreview;
+  actionLabel?: string;
+  actionKind?: "primary" | "outline";
+  busy?: boolean;
+  onAction?: () => void;
+}) {
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-base-300/80 bg-base-200/35">
-      <div className="border-b border-base-300/80 px-3 py-2 text-[0.65rem] font-semibold tracking-wide text-base-content/60 uppercase">
-        {preview.label}
+      <div className="flex items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
+        <div className="text-[0.65rem] font-semibold tracking-wide text-base-content/60 uppercase">
+          {preview.label}
+        </div>
+        {actionLabel && onAction ? (
+          <button
+            type="button"
+            className={`btn btn-xs ${actionKind === "primary" ? "btn-primary" : "btn-outline"}`}
+            disabled={busy}
+            onClick={onAction}
+          >
+            {actionLabel}
+          </button>
+        ) : null}
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {preview.deleted ? (
@@ -809,28 +797,6 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
           Choose the version to keep. Garlic will stage the selected result as resolved.
           {repoOperationLabel ? ` ${repoOperationLabel}.` : ""}
         </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {canChooseOurs ? (
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={busy}
-              onClick={onChooseOurs}
-            >
-              {oursLabel}
-            </button>
-          ) : null}
-          {canChooseTheirs ? (
-            <button
-              type="button"
-              className="btn btn-outline btn-sm"
-              disabled={busy}
-              onClick={onChooseTheirs}
-            >
-              {theirsLabel}
-            </button>
-          ) : null}
-        </div>
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {loading ? (
@@ -844,8 +810,20 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
           </DismissibleAlert>
         ) : details ? (
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto bg-base-200/40 p-3 xl:grid-cols-2">
-            <ConflictPreviewPanel preview={details.ours} />
-            <ConflictPreviewPanel preview={details.theirs} />
+            <ConflictPreviewPanel
+              preview={details.ours}
+              actionLabel={canChooseOurs ? oursLabel : undefined}
+              actionKind="primary"
+              busy={busy}
+              onAction={canChooseOurs ? onChooseOurs : undefined}
+            />
+            <ConflictPreviewPanel
+              preview={details.theirs}
+              actionLabel={canChooseTheirs ? theirsLabel : undefined}
+              actionKind="outline"
+              busy={busy}
+              onAction={canChooseTheirs ? onChooseTheirs : undefined}
+            />
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center px-4 py-10">
@@ -3484,6 +3462,37 @@ export default function App({
     (hash: string, clientX: number, clientY: number) => {
       const entry = commits.find((x) => x.hash === hash);
       const shortHash = entry?.shortHash ?? hash.slice(0, 7);
+      const mergeBranchItems = [
+        ...localBranches
+          .filter(
+            (branch) =>
+              branch.tipHash === hash && graphBranchVisible[`local:${branch.name}`] !== false,
+          )
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+          .map((branch, index) => ({
+            id: `commit_merge_local_${index}`,
+            text: `Merge "${branch.name}" into current branch`,
+            enabled:
+              !branchBusy && !repo?.detached && (!repo?.branch || branch.name !== repo.branch),
+            action: () => {
+              void mergeBranchIntoCurrent(branch.name);
+            },
+          })),
+        ...remoteBranches
+          .filter((branch) => {
+            if (branch.tipHash !== hash) return false;
+            return graphBranchVisible[`remote:${branch.name}`] ?? remoteGraphDefaultsVisible;
+          })
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+          .map((branch, index) => ({
+            id: `commit_merge_remote_${index}`,
+            text: `Merge "${branch.name}" into current branch`,
+            enabled: !branchBusy && !repo?.detached,
+            action: () => {
+              void mergeBranchIntoCurrent(branch.name);
+            },
+          })),
+      ];
       const amendDisabled =
         Boolean(branchBusy) ||
         Boolean(repo?.detached) ||
@@ -3539,18 +3548,24 @@ export default function App({
         },
         onCopyFull: () => void navigator.clipboard.writeText(hash),
         onCopyShort: () => void navigator.clipboard.writeText(shortHash),
+        mergeBranchItems,
       });
     },
     [
       branchBusy,
       repo,
       commits,
+      localBranches,
+      remoteBranches,
+      graphBranchVisible,
+      remoteGraphDefaultsVisible,
       graphHeadFirstParentHashes,
       openAmendCommitDialog,
       clearGraphCommitSelection,
       selectCommit,
       cherryPickCommit,
       dropCommit,
+      mergeBranchIntoCurrent,
       rebaseCurrentBranchOntoCommit,
       resetCurrentBranchToCommit,
     ],
@@ -4187,6 +4202,7 @@ export default function App({
     [workingTreeFiles],
   );
   const hasConflictedFiles = conflictedFiles.length > 0;
+  const showOperationErrorAlert = Boolean(operationError && !repo?.operationState);
   const hasStagedFiles = stagedFiles.length > 0;
   const unstagedPaths = useMemo(() => worktreeFilesMutationPaths(unstagedFiles), [unstagedFiles]);
   const stagedPaths = useMemo(() => worktreeFilesMutationPaths(stagedFiles), [stagedFiles]);
@@ -5323,7 +5339,7 @@ export default function App({
                         </div>
                       ) : (
                         <div className="flex min-h-0 flex-1 flex-col">
-                          {listsError || operationError ? (
+                          {listsError || showOperationErrorAlert ? (
                             <div className="shrink-0 space-y-2 px-3 pt-3">
                               {listsError ? (
                                 <DismissibleAlert
@@ -5335,7 +5351,7 @@ export default function App({
                                   <span>{listsError}</span>
                                 </DismissibleAlert>
                               ) : null}
-                              {operationError ? (
+                              {showOperationErrorAlert ? (
                                 <DismissibleAlert
                                   className="alert text-sm alert-error"
                                   onDismiss={() => {
@@ -6289,19 +6305,8 @@ export default function App({
                             key={f.path}
                             f={f}
                             selected={selectedDiffPath === f.path && selectedDiffSide === null}
-                            busy={
-                              stageCommitBusy ||
-                              commitPushBusy ||
-                              worktreeFileBusy(syncingStagePaths, f)
-                            }
                             onSelect={() => {
                               void loadConflictForFile(f);
-                            }}
-                            onChooseOurs={() => {
-                              void resolveConflictChoice(f.path, "ours");
-                            }}
-                            onChooseTheirs={() => {
-                              void resolveConflictChoice(f.path, "theirs");
                             }}
                           />
                         ))}

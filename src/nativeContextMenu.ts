@@ -345,11 +345,17 @@ export async function popupGraphCommitContextMenu(
     onCreateTag: () => void;
     onCopyFull: () => void;
     onCopyShort: () => void;
+    mergeBranchItems?: Array<{
+      id: string;
+      text: string;
+      enabled: boolean;
+      action: () => void;
+    }>;
   },
 ): Promise<void> {
   if (!isTauri()) return;
   try {
-    await showMenuAt(clientX, clientY, [
+    const items: MenuItemOptions[] = [
       {
         id: "commit_browse",
         text: "Browse commit",
@@ -358,6 +364,13 @@ export async function popupGraphCommitContextMenu(
           args.onBrowse();
         },
       },
+    ];
+
+    if (args.mergeBranchItems?.length) {
+      items.push(...args.mergeBranchItems);
+    }
+
+    items.push(
       {
         id: "commit_amend",
         text: "Edit Commit Message",
@@ -438,7 +451,9 @@ export async function popupGraphCommitContextMenu(
           args.onCopyShort();
         },
       },
-    ]);
+    );
+
+    await showMenuAt(clientX, clientY, items);
   } catch (e) {
     console.error("native commit context menu failed", e);
   }
