@@ -61,7 +61,7 @@ export const GitCommandPanel = memo(function GitCommandPanel({ repoPath }: GitCo
   }, [gitCommandStream]);
 
   return (
-    <div className="card shrink-0 border-base-300 bg-base-100 shadow-sm">
+    <div className="shrink-0 border-base-300 bg-base-100">
       <div className="card-body gap-0 p-0">
         <div
           className={`collapse border-0 bg-transparent shadow-none ${open ? "collapse-open" : ""}`}

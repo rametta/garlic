@@ -1093,7 +1093,7 @@ export const BranchSidebar = memo(function BranchSidebar({
   const stashesEmptyHint = stashes.length === 0 ? "No stashes" : "No stashes match filter";
 
   return (
-    <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm lg:min-h-0">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 lg:min-h-0">
       <div className="card-body min-h-0 gap-0 p-0">
         <BranchPanel
           title="Local branches"

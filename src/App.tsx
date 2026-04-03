@@ -4158,7 +4158,7 @@ export default function App({
   return (
     <main className="box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 text-base-content antialiased [font-synthesis:none]">
       <div
-        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 gap-2 lg:min-h-0 lg:grid-rows-1 lg:items-stretch"
+        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 lg:min-h-0 lg:grid-rows-1 lg:items-stretch"
         aria-live="polite"
         aria-busy={loading}
       >
@@ -4752,7 +4752,7 @@ export default function App({
                 : "lg:col-span-6"
           }`}
         >
-          <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-md">
+          <section className="flex min-h-0 w-full min-w-0 flex-1 flex-col border-x border-base-300 bg-base-100">
             <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
               {loading ? (
                 <div className="flex min-h-0 flex-1 flex-col justify-start 2 px-6 py-6">
@@ -5650,7 +5650,7 @@ export default function App({
             showFullWidthCommitBrowse ? "hidden" : ""
           }`}
         >
-          <div className="card flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-sm">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100">
             <div className="card-body min-h-0 gap-0 p-0">
               <section
                 className="flex min-h-0 flex-[1_1_0%] flex-col border-b border-base-300"

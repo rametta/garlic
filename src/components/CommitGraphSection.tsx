@@ -696,7 +696,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
             ) : null}
           </button>
           <div
-            className="dropdown-content z-100 mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg"
+            className="dropdown-content z-100 mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3"
             onMouseDown={(e) => {
               e.stopPropagation();
             }}
@@ -753,7 +753,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
             ) : null}
           </button>
           <div
-            className="dropdown-content dropdown-end z-100 mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg"
+            className="dropdown-content dropdown-end z-100 mt-0 w-64 max-w-[min(100vw-2rem,18rem)] rounded-box border border-base-300 bg-base-100 p-3"
             onMouseDown={(e) => {
               e.stopPropagation();
             }}
