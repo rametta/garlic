@@ -110,6 +110,7 @@ import {
 } from "./repoMutations";
 import {
   emptyRepoSnapshot,
+  getRepoSnapshot,
   loadRepoLists,
   loadRepoSnapshot,
   repoQueryKeys,
@@ -2475,12 +2476,11 @@ export default function App({
           path: pathAtStart,
           branch: branchName,
         });
+        await refreshAfterMutation();
         if (shouldFocusCurrentHead) {
-          const meta = await invoke<RepoMetadata>("get_repo_metadata", {
-            path: pathAtStart,
-          });
-          const headHash = meta.headHash?.trim() || null;
-          if (activeRepoPathRef.current === pathAtStart && !meta.error && headHash) {
+          const headHash =
+            getRepoSnapshot(queryClient, pathAtStart)?.metadata?.headHash?.trim() || null;
+          if (activeRepoPathRef.current === pathAtStart && headHash) {
             focusGraphOnCommitHash(headHash);
           }
         }
@@ -2490,7 +2490,7 @@ export default function App({
         setBranchBusy(null);
       }
     },
-    [repo, pullLocalBranchMutation, focusGraphOnCommitHash],
+    [repo, pullLocalBranchMutation, refreshAfterMutation, queryClient, focusGraphOnCommitHash],
   );
 
   const deleteLocalBranch = useCallback(

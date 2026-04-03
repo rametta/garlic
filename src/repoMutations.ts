@@ -256,6 +256,7 @@ export function usePullLocalBranchMutation() {
 
       return nextSnapshot;
     },
+    invalidateSnapshotOnSettled: false,
   });
 }
 
