@@ -1,12 +1,6 @@
-import { isTauri } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu } from "@tauri-apps/api/menu";
 import type { MenuItemOptions } from "@tauri-apps/api/menu";
-
-/** Context menus use the OS shell via Tauri; plain Vite dev keeps the browser default menu. */
-export function nativeContextMenusAvailable(): boolean {
-  return isTauri();
-}
 
 async function showMenuAt(
   clientX: number,
@@ -41,7 +35,6 @@ export async function popupBranchContextMenu(
     onEditOriginUrl?: () => void;
   },
 ): Promise<void> {
-  if (!isTauri()) return;
   const disableRebaseOnto = args.kind === "local" && args.branchName === args.currentBranchName;
   const isCurrentLocalBranch = args.kind === "local" && args.branchName === args.currentBranchName;
 
@@ -170,7 +163,6 @@ export async function popupStashContextMenu(
     onDrop: () => void;
   },
 ): Promise<void> {
-  if (!isTauri()) return;
   try {
     await showMenuAt(clientX, clientY, [
       {
@@ -195,6 +187,30 @@ export async function popupStashContextMenu(
   }
 }
 
+export async function popupWipContextMenu(
+  clientX: number,
+  clientY: number,
+  args: {
+    disabled: boolean;
+    onStash: () => void;
+  },
+): Promise<void> {
+  try {
+    await showMenuAt(clientX, clientY, [
+      {
+        id: "wip_stash",
+        text: "Stash changes…",
+        enabled: !args.disabled,
+        action: () => {
+          args.onStash();
+        },
+      },
+    ]);
+  } catch (e) {
+    console.error("native WIP context menu failed", e);
+  }
+}
+
 export async function popupWorktreeContextMenu(
   clientX: number,
   clientY: number,
@@ -210,7 +226,6 @@ export async function popupWorktreeContextMenu(
     onDelete: () => void;
   },
 ): Promise<void> {
-  if (!isTauri()) return;
   const items: MenuItemOptions[] = [
     {
       id: "worktree_open",
@@ -275,7 +290,6 @@ export async function popupFileRowContextMenu(
         onOpenInCursor: () => void;
       },
 ): Promise<void> {
-  if (!isTauri()) return;
   const items: MenuItemOptions[] = [
     {
       id: "file_history",
@@ -353,7 +367,6 @@ export async function popupGraphCommitContextMenu(
     }>;
   },
 ): Promise<void> {
-  if (!isTauri()) return;
   try {
     const items: MenuItemOptions[] = [
       {
@@ -471,7 +484,6 @@ export async function popupTagSidebarMenu(
     onPushToOrigin: () => void;
   },
 ): Promise<void> {
-  if (!isTauri()) return;
   const deleteRemoteEnabled = !args.disabled && args.hasOrigin && args.onOrigin;
   const pushEnabled = !args.disabled && args.hasOrigin && !args.onOrigin;
   try {
@@ -514,7 +526,6 @@ export async function popupGraphTagContextMenu(
     onPushToOrigin: () => void;
   },
 ): Promise<void> {
-  if (!isTauri()) return;
   try {
     await showMenuAt(clientX, clientY, [
       {

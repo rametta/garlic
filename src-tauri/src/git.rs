@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_repr::Deserialize_repr;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::Emitter;
+use tauri::Manager;
 
 /// Serialized Git object name from the UI: `%H`, abbreviated SHA-1, or full SHA-256 hex (64 chars max).
 type GitOidArg = ArrayString<64>;
@@ -97,6 +100,87 @@ fn next_git_stream_session_id() -> u64 {
     GIT_STREAM_SESSION_SEQ.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+#[cfg(not(target_os = "windows"))]
+const SSH_ASKPASS_SCRIPT: &str = r#"#!/bin/sh
+title="${GARLIC_ASKPASS_TITLE:-Garlic}"
+prompt="${1:-Authentication required}"
+
+if command -v osascript >/dev/null 2>&1; then
+  exec osascript - "$prompt" "$title" <<'APPLESCRIPT'
+on run argv
+  set promptText to item 1 of argv
+  set titleText to item 2 of argv
+  try
+    set response to display dialog promptText with title titleText default answer "" with hidden answer buttons {"Cancel", "OK"} default button "OK"
+    return text returned of response
+  on error number -128
+    error number 1
+  end try
+end run
+APPLESCRIPT
+fi
+
+if command -v ssh-askpass >/dev/null 2>&1; then
+  exec ssh-askpass "$prompt"
+fi
+
+if command -v zenity >/dev/null 2>&1; then
+  exec zenity --password --title="$title" --text="$prompt"
+fi
+
+if command -v kdialog >/dev/null 2>&1; then
+  exec kdialog --title "$title" --password "$prompt"
+fi
+
+printf '%s\n' "Garlic could not open a password prompt for SSH." >&2
+exit 1
+"#;
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_ssh_askpass_helper(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("ssh-askpass.sh");
+    let should_write = std::fs::read_to_string(&path)
+        .map(|existing| existing != SSH_ASKPASS_SCRIPT)
+        .unwrap_or(true);
+    if should_write {
+        std::fs::write(&path, SSH_ASKPASS_SCRIPT).map_err(|e| e.to_string())?;
+    }
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(&path)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        perms.set_mode(0o700);
+        std::fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+    }
+    Ok(path)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ssh_askpass_env(app: &AppHandle) -> Result<Vec<(String, String)>, String> {
+    let helper_path = ensure_ssh_askpass_helper(app)?;
+    let display = match std::env::var("DISPLAY") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => ":0".to_string(),
+    };
+    Ok(vec![
+        (
+            "SSH_ASKPASS".to_string(),
+            helper_path.to_string_lossy().to_string(),
+        ),
+        ("SSH_ASKPASS_REQUIRE".to_string(), "force".to_string()),
+        ("GARLIC_ASKPASS_TITLE".to_string(), "Garlic".to_string()),
+        ("DISPLAY".to_string(), display),
+    ])
+}
+
+#[cfg(target_os = "windows")]
+fn ssh_askpass_env(_app: &AppHandle) -> Result<Vec<(String, String)>, String> {
+    Ok(Vec::new())
+}
+
 /// Emitted when a hook-heavy `git` invocation begins (`git-command-stream-started`).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -157,11 +241,20 @@ fn run_git_streaming_with_input_and_env(
 
     let mut cmd = git_cmd(workdir);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
-    if !extra_envs.is_empty() {
-        cmd.envs(extra_envs.iter().copied());
-    }
     if stdin_text.is_some() {
         cmd.stdin(Stdio::piped());
+    } else {
+        // Force remote auth to use askpass instead of attempting a dead terminal prompt.
+        cmd.stdin(Stdio::null());
+    }
+    let mut merged_envs = ssh_askpass_env(app).unwrap_or_default();
+    merged_envs.extend(
+        extra_envs
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+    );
+    for (key, value) in &merged_envs {
+        cmd.env(key, value);
     }
     let mut child = cmd.spawn().map_err(|e| format!("Could not run git: {e}"))?;
     let stdout = child
@@ -1114,12 +1207,15 @@ fn run_git_clone_with_progress(
     url: String,
     dest: PathBuf,
 ) -> Result<String, String> {
-    let mut child = git_cmd(&parent)
-        .args(["clone", "--progress", &url])
+    let mut cmd = git_cmd(&parent);
+    cmd.args(["clone", "--progress", &url])
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Could not run git: {e}"))?;
+        .stderr(Stdio::piped());
+    for (key, value) in ssh_askpass_env(&app).unwrap_or_default() {
+        cmd.env(key, value);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("Could not run git: {e}"))?;
 
     let mut stderr = child
         .stderr

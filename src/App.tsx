@@ -45,6 +45,7 @@ import {
   popupGraphTagContextMenu,
   popupStashContextMenu,
   popupTagSidebarMenu,
+  popupWipContextMenu,
   popupWorktreeContextMenu,
 } from "./nativeContextMenu";
 import type {
@@ -4001,6 +4002,13 @@ export default function App({
     });
   }
 
+  function openGraphWipMenu(clientX: number, clientY: number) {
+    void popupWipContextMenu(clientX, clientY, {
+      disabled: Boolean(branchBusy) || stashBusy !== null,
+      onStash: () => void onStashPush(),
+    });
+  }
+
   async function onDeleteTag(tagName: string) {
     if (!repo?.path || repo.error) return;
     const ok = await ask(
@@ -6201,6 +6209,7 @@ export default function App({
                                   openGraphBranchLocalMenu={openGraphBranchLocalMenu}
                                   openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
                                   openGraphStashMenu={openGraphStashMenu}
+                                  openGraphWipMenu={openGraphWipMenu}
                                   openGraphCommitMenu={openGraphCommitMenu}
                                   openGraphTagMenu={openGraphTagMenu}
                                   pushBusy={pushBusy}

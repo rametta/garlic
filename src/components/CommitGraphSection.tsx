@@ -55,6 +55,7 @@ export interface CommitGraphSectionProps {
   openGraphBranchLocalMenu: (branchName: string, clientX: number, clientY: number) => void;
   openGraphBranchRemoteMenu: (fullRef: string, clientX: number, clientY: number) => void;
   openGraphStashMenu: (stashRef: string, clientX: number, clientY: number) => void;
+  openGraphWipMenu: (clientX: number, clientY: number) => void;
   openGraphCommitMenu: (hash: string, clientX: number, clientY: number) => void;
   openGraphTagMenu: (tagName: string, clientX: number, clientY: number) => void;
   graphAuthorFilter: string;
@@ -636,6 +637,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   exportGraphCommitsDisabled,
   wipChangedFileCount,
   onWipSelect,
+  openGraphWipMenu,
   graphLayoutDeferredPending = false,
   graphCommitsPageSize,
   onGraphCommitsPageSizeChange,
@@ -1139,6 +1141,12 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                             }
                           : undefined
                       }
+                      onContextMenu={(e) => {
+                        if (!nativeContextMenusAvailable()) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openGraphWipMenu(e.clientX, e.clientY);
+                      }}
                     >
                       <WipGraphRow
                         changedFileCount={wipChangedFileCount}
