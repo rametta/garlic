@@ -6264,54 +6264,52 @@ export default function App({
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col border-base-300 bg-base-100">
             <div className="card-body min-h-0 gap-0 p-0">
-              <section
-                className="flex min-h-0 flex-[0_0_auto] flex-col border-b border-base-300"
-                aria-labelledby="sidebar-conflicts-heading"
-              >
-                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
-                  <h2
-                    id="sidebar-conflicts-heading"
-                    className="m-0 min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-80"
-                  >
-                    Conflicts ({conflictedFiles.length})
-                  </h2>
-                </div>
-                <div className="max-h-52 overflow-y-auto p-2">
-                  {!canShowBranches ? (
-                    <p className="m-0 py-2 text-center text-xs text-base-content/50">
-                      Open a repository to manage conflicts
-                    </p>
-                  ) : conflictedFiles.length === 0 ? (
-                    <p className="m-0 py-2 text-center text-xs text-base-content/50">
-                      No conflicted files
-                    </p>
-                  ) : (
-                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                      {conflictedFiles.map((f) => (
-                        <ConflictPanelFileRow
-                          key={f.path}
-                          f={f}
-                          selected={selectedDiffPath === f.path && selectedDiffSide === null}
-                          busy={
-                            stageCommitBusy ||
-                            commitPushBusy ||
-                            worktreeFileBusy(syncingStagePaths, f)
-                          }
-                          onSelect={() => {
-                            void loadConflictForFile(f);
-                          }}
-                          onChooseOurs={() => {
-                            void resolveConflictChoice(f.path, "ours");
-                          }}
-                          onChooseTheirs={() => {
-                            void resolveConflictChoice(f.path, "theirs");
-                          }}
-                        />
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </section>
+              {conflictedFiles.length > 0 ? (
+                <section
+                  className="flex min-h-0 flex-[0_0_auto] flex-col border-b border-base-300"
+                  aria-labelledby="sidebar-conflicts-heading"
+                >
+                  <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
+                    <h2
+                      id="sidebar-conflicts-heading"
+                      className="m-0 min-w-0 flex-1 text-xs font-semibold tracking-wide uppercase opacity-80"
+                    >
+                      Conflicts ({conflictedFiles.length})
+                    </h2>
+                  </div>
+                  <div className="max-h-52 overflow-y-auto p-2">
+                    {!canShowBranches ? (
+                      <p className="m-0 py-2 text-center text-xs text-base-content/50">
+                        Open a repository to manage conflicts
+                      </p>
+                    ) : (
+                      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                        {conflictedFiles.map((f) => (
+                          <ConflictPanelFileRow
+                            key={f.path}
+                            f={f}
+                            selected={selectedDiffPath === f.path && selectedDiffSide === null}
+                            busy={
+                              stageCommitBusy ||
+                              commitPushBusy ||
+                              worktreeFileBusy(syncingStagePaths, f)
+                            }
+                            onSelect={() => {
+                              void loadConflictForFile(f);
+                            }}
+                            onChooseOurs={() => {
+                              void resolveConflictChoice(f.path, "ours");
+                            }}
+                            onChooseTheirs={() => {
+                              void resolveConflictChoice(f.path, "theirs");
+                            }}
+                          />
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </section>
+              ) : null}
 
               <section
                 className="flex min-h-0 flex-[1_1_0%] flex-col border-b border-base-300"
