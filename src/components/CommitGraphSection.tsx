@@ -614,7 +614,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   const virtualRows = rowVirtualizer.getVirtualItems();
 
   const graphFooter = (
-    <div className="mt-2 flex flex-wrap items-center justify-center gap-3 border-t border-base-300/50 pt-2">
+    <div className="mt-2 flex flex-wrap items-center justify-center gap-2 border-t border-base-300/50 pt-2">
       <label className="flex items-center gap-2 text-[0.7rem] text-base-content/70">
         <span className="shrink-0">Commits per page</span>
         <input

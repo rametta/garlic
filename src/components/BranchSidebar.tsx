@@ -77,7 +77,7 @@ function localBranchUpstreamLabel(ahead: number | null, behind: number | null): 
   return `↑${ahead} ↓${behind}`;
 }
 
-const BRANCH_TREE_INDENT_PX = 14;
+const BRANCH_TREE_INDENT_PX = 20;
 const BRANCH_ROW_ESTIMATE_PX = 36;
 const TAG_ROW_ESTIMATE_PX = 40;
 
@@ -136,7 +136,7 @@ function BranchPanel({
             open ? "border-b border-base-300/80" : ""
           }`}
         >
-          <div className="flex min-w-0 items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center justify-between gap-2">
             <h2 className="m-0 card-title min-w-0 text-xs font-semibold tracking-wide uppercase opacity-70">
               {title} <span className="tabular-nums opacity-90">({entityCount})</span>
             </h2>

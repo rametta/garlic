@@ -55,7 +55,7 @@ function BinaryImagePreview({ beforeUrl, afterUrl, fileLabel }: BinaryImagePrevi
         <span className="font-mono wrap-break-word">{fileLabel}</span>
         <span className="shrink-0 tracking-wide uppercase opacity-60">Image preview</span>
       </div>
-      <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
         <div className="flex min-h-0 min-w-0 flex-col gap-1">
           <span className="text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
             Before

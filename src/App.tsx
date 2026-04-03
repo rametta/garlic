@@ -595,7 +595,7 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
 }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 p-3">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 p-3">
         <div className="min-w-0">
           <h2 className="m-0 font-mono text-sm font-semibold tracking-wide text-base-content opacity-90">
             {path}
@@ -612,7 +612,7 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {diffLoading ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-20">
             <span className="loading loading-md loading-spinner text-primary" />
             <p className="m-0 text-sm text-base-content/70">Loading diff…</p>
           </div>
@@ -663,7 +663,7 @@ const FileBlamePane = memo(function FileBlamePane({
 }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-base-300 p-3">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 p-3">
         <div className="min-w-0">
           <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
             Blame
@@ -678,7 +678,7 @@ const FileBlamePane = memo(function FileBlamePane({
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {loading ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-20">
             <span className="loading loading-md loading-spinner text-primary" />
             <p className="m-0 text-sm text-base-content/70">Loading blame…</p>
           </div>
@@ -715,7 +715,7 @@ const FileHistoryPane = memo(function FileHistoryPane({
 }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 p-3">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 p-3">
         <div className="min-w-0">
           <h2 className="m-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
             File history
@@ -734,7 +734,7 @@ const FileHistoryPane = memo(function FileHistoryPane({
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {loading ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-20">
             <span className="loading loading-md loading-spinner text-primary" />
             <p className="m-0 text-sm text-base-content/70">Loading history…</p>
           </div>
@@ -4156,14 +4156,14 @@ export default function App({
   }, [currentBranchName, localBranches]);
 
   return (
-    <main className="box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 px-4 pt-4 pb-4 text-base-content antialiased [font-synthesis:none]">
+    <main className="box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 text-base-content antialiased [font-synthesis:none]">
       <div
-        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 gap-4 lg:min-h-0 lg:grid-rows-1 lg:items-stretch"
+        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 gap-2 lg:min-h-0 lg:grid-rows-1 lg:items-stretch"
         aria-live="polite"
         aria-busy={loading}
       >
         <aside
-          className={`col-span-12 flex min-h-0 min-w-0 flex-col gap-3 lg:col-span-3 lg:h-full lg:min-h-0 ${
+          className={`col-span-12 flex min-h-0 min-w-0 flex-col gap-2 lg:col-span-3 lg:h-full lg:min-h-0 ${
             showExpandedDiff ? "hidden" : ""
           }`}
         >
@@ -4744,7 +4744,7 @@ export default function App({
         </aside>
 
         <div
-          className={`col-span-12 flex min-h-0 min-w-0 flex-col gap-4 lg:h-full lg:min-h-0 ${
+          className={`col-span-12 flex min-h-0 min-w-0 flex-col gap-2 lg:h-full lg:min-h-0 ${
             showFullWidthCommitBrowse
               ? "lg:col-span-12"
               : showExpandedDiff
@@ -4755,10 +4755,10 @@ export default function App({
           <section className="card flex min-h-0 w-full min-w-0 flex-1 flex-col border-base-300 bg-base-100 shadow-md">
             <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
               {loading ? (
-                <div className="flex min-h-0 flex-1 flex-col justify-start gap-4 px-6 py-6">
+                <div className="flex min-h-0 flex-1 flex-col justify-start 2 px-6 py-6">
                   {cloneProgress ? (
                     <>
-                      <div className="mx-auto flex w-full max-w-lg shrink-0 flex-col gap-3">
+                      <div className="mx-auto flex w-full max-w-lg shrink-0 flex-col gap-2">
                         <p className="m-0 text-center text-[0.9375rem] font-medium text-base-content/90">
                           Cloning repository…
                         </p>
@@ -4790,7 +4790,7 @@ export default function App({
                       </div>
                     </>
                   ) : (
-                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
+                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2">
                       <span className="loading loading-md loading-spinner text-primary" />
                       <p className="m-0 text-center text-[0.9375rem] text-base-content/80">
                         Loading repository…
@@ -4962,7 +4962,7 @@ export default function App({
                                     ) : (
                                       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                                         {diffLoading ? (
-                                          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+                                          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-20">
                                             <span className="loading loading-md loading-spinner text-primary" />
                                             <p className="m-0 text-sm text-base-content/70">
                                               Loading diff...
@@ -5606,7 +5606,7 @@ export default function App({
                       )}
                     </>
                   ) : cloneReadyPath ? (
-                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 py-10">
+                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10">
                       <p className="m-0 text-center text-[0.9375rem] font-medium text-base-content/90">
                         Repository cloned
                       </p>

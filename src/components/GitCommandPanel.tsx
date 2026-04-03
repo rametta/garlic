@@ -75,7 +75,7 @@ export const GitCommandPanel = memo(function GitCommandPanel({ repoPath }: GitCo
             aria-label="Show or hide git command output"
           />
           <div className="collapse-title block! min-h-0 min-w-0 border-b border-base-300/80 px-3! py-2! text-left!">
-            <div className="flex min-w-0 items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start justify-between gap-2">
               <div className="min-w-0">
                 <h2 className="m-0 text-xs font-semibold tracking-wide uppercase opacity-70">
                   Git command
