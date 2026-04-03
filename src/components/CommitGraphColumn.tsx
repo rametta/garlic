@@ -14,7 +14,7 @@ interface CommitGraphColumnProps {
   wipRowAbove?: boolean;
 }
 
-/** SVG DAG column: edges and commit nodes aligned to `COMMIT_GRAPH_ROW_HEIGHT` rows. */
+/** SVG DAG column: edges aligned to `COMMIT_GRAPH_ROW_HEIGHT` rows. */
 export function CommitGraphColumn({
   layout,
   commitHashes,
@@ -125,48 +125,6 @@ export function CommitGraphColumn({
             />
           </g>
         ))}
-        {layout.lanes.map((lane, row) => {
-          const hash = commitHashes[row];
-          const nodeColor =
-            layout.rowColors[row] ??
-            layout.laneColors[lane % layout.laneColors.length] ??
-            "currentColor";
-          const isActiveBranchCommit =
-            showActiveBranch && hash ? activeFirstParentHashes.has(hash) : false;
-          const isActiveTip = hash !== undefined && hash === currentBranchTipHash;
-          return (
-            <g key={`n-${row}`}>
-              {isActiveBranchCommit ? (
-                <circle
-                  cx={cx(lane)}
-                  cy={cy(row)}
-                  r={isActiveTip ? 6.5 : 5.6}
-                  fill={nodeColor}
-                  fillOpacity={0.18}
-                />
-              ) : null}
-              <circle
-                cx={cx(lane)}
-                cy={cy(row)}
-                r={isActiveTip ? 4.95 : isActiveBranchCommit ? 4.55 : 4.25}
-                className={isActiveBranchCommit ? undefined : "fill-base-100"}
-                fill={isActiveBranchCommit ? nodeColor : undefined}
-                fillOpacity={isActiveBranchCommit ? (isActiveTip ? 0.98 : 0.88) : undefined}
-                stroke={nodeColor}
-                strokeWidth={isActiveBranchCommit ? 2.1 : 1.5}
-                strokeDasharray={layout.stashRows[row] ? "2 3" : undefined}
-              />
-              {isActiveBranchCommit ? (
-                <circle
-                  cx={cx(lane)}
-                  cy={cy(row)}
-                  r={isActiveTip ? 1.55 : 1.3}
-                  className="fill-base-100"
-                />
-              ) : null}
-            </g>
-          );
-        })}
       </g>
     </svg>
   );

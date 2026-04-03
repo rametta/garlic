@@ -4628,7 +4628,7 @@ export default function App({
   return (
     <main className="box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 text-base-content antialiased [font-synthesis:none]">
       <div
-        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 lg:min-h-0 lg:grid-rows-1 lg:items-stretch border-t border-base-300"
+        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 border-t border-base-300 lg:min-h-0 lg:grid-rows-1 lg:items-stretch"
         aria-live="polite"
         aria-busy={loading}
       >

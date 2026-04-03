@@ -2,13 +2,19 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { formatAuthorDisplay, formatDate, formatRelativeShort } from "../appFormat";
 import { CommitGraphColumn } from "./CommitGraphColumn";
-import { COMMIT_GRAPH_ROW_HEIGHT, type CommitGraphLayout } from "../commitGraphLayout";
+import {
+  COMMIT_GRAPH_LANE_WIDTH,
+  COMMIT_GRAPH_PAD_X,
+  COMMIT_GRAPH_ROW_HEIGHT,
+  type CommitGraphLayout,
+} from "../commitGraphLayout";
 import { nativeContextMenusAvailable } from "../nativeContextMenu";
 import {
   clampGraphCommitsPageSize,
   GRAPH_COMMITS_PAGE_SIZE_MAX,
   GRAPH_COMMITS_PAGE_SIZE_MIN,
 } from "../gitTypes";
+import { buildGravatarUrlCandidates } from "../gravatar";
 import type { CommitEntry, LocalBranchEntry, RemoteBranchEntry, TagEntry } from "../repoTypes";
 
 const GRAPH_GAP_PX = 6;
@@ -172,6 +178,116 @@ function getGraphRowBackgroundClass(args: {
   if (args.isActiveBranchCommitRow) return "bg-primary/8";
   return "";
 }
+
+function graphLaneCenterPx(lane: number): number {
+  return COMMIT_GRAPH_PAD_X + lane * COMMIT_GRAPH_LANE_WIDTH + COMMIT_GRAPH_LANE_WIDTH / 2;
+}
+
+function graphCommitNodeSizePx(isActiveBranchCommit: boolean, isActiveTip: boolean): number {
+  if (isActiveTip) return 24;
+  if (isActiveBranchCommit) return 22;
+  return 20;
+}
+
+type GraphCommitNodeAvatarProps = {
+  leftPx: number;
+  email: string;
+  nodeColor: string;
+  isActiveBranchCommit: boolean;
+  isActiveTip: boolean;
+  isStashRow: boolean;
+};
+
+const GraphCommitNodeAvatar = memo(function GraphCommitNodeAvatar({
+  leftPx,
+  email,
+  nodeColor,
+  isActiveBranchCommit,
+  isActiveTip,
+  isStashRow,
+}: GraphCommitNodeAvatarProps) {
+  const [candidateUrls, setCandidateUrls] = useState<string[]>([]);
+  const [candidateIndex, setCandidateIndex] = useState(0);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCandidateUrls([]);
+    setCandidateIndex(0);
+    setLoadFailed(false);
+    void buildGravatarUrlCandidates(email, 64).then((urls) => {
+      if (cancelled) return;
+      setCandidateUrls(urls);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [email]);
+
+  const src = candidateUrls[candidateIndex] ?? null;
+
+  const sizePx = graphCommitNodeSizePx(isActiveBranchCommit, isActiveTip);
+  const ringWidth = isActiveBranchCommit ? 2.1 : 1.5;
+  const fallbackClassName = isActiveBranchCommit ? "" : "bg-base-100";
+
+  return (
+    <span
+      className="pointer-events-none absolute rounded-full"
+      style={{
+        left: leftPx - sizePx / 2,
+        top: (COMMIT_GRAPH_ROW_HEIGHT - sizePx) / 2,
+        width: sizePx,
+        height: sizePx,
+      }}
+      aria-hidden
+    >
+      {isActiveBranchCommit ? (
+        <span
+          className="absolute inset-0 rounded-full"
+          style={{
+            backgroundColor: nodeColor,
+            opacity: isActiveTip ? 0.24 : 0.18,
+            transform: "scale(1.32)",
+          }}
+        />
+      ) : null}
+      {src && !loadFailed ? (
+        <img
+          src={src}
+          alt=""
+          className="absolute inset-0 h-full w-full rounded-full bg-base-100 object-cover"
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          referrerPolicy="no-referrer"
+          onError={() => {
+            const nextIndex = candidateIndex + 1;
+            if (nextIndex < candidateUrls.length) {
+              setCandidateIndex(nextIndex);
+              return;
+            }
+            setLoadFailed(true);
+          }}
+        />
+      ) : (
+        <span
+          className={`absolute inset-0 rounded-full ${fallbackClassName}`}
+          style={{
+            backgroundColor: isActiveBranchCommit ? nodeColor : undefined,
+            opacity: isActiveBranchCommit ? (isActiveTip ? 0.98 : 0.88) : undefined,
+          }}
+        />
+      )}
+      <span
+        className={`absolute inset-0 rounded-full border ${isStashRow ? "border-dashed" : ""}`}
+        style={{
+          borderColor: nodeColor,
+          borderWidth: ringWidth,
+        }}
+      />
+    </span>
+  );
+});
 
 type VirtualRowProps = {
   c: CommitEntry;
@@ -622,7 +738,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
           min={GRAPH_COMMITS_PAGE_SIZE_MIN}
           max={GRAPH_COMMITS_PAGE_SIZE_MAX}
           step={1}
-          className="input-bordered input input-xs w-[4.5rem] font-mono tabular-nums"
+          className="input-bordered input input-xs w-18 font-mono tabular-nums"
           aria-label="Commits loaded per graph log request"
           value={pageSizeDraft}
           onChange={(e) => {
@@ -950,6 +1066,15 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                 const commitIdx = v.index - wipOffset;
                 const c = commits[commitIdx];
                 if (!c) return null;
+                const lane = commitGraphLayout.lanes[commitIdx] ?? 0;
+                const nodeColor =
+                  commitGraphLayout.rowColors[commitIdx] ??
+                  commitGraphLayout.laneColors[lane % commitGraphLayout.laneColors.length] ??
+                  "currentColor";
+                const isActiveBranchCommit =
+                  currentBranchTipHash !== null && activeFirstParentHashes.has(c.hash);
+                const isActiveTip =
+                  currentBranchTipHash !== null && c.hash === currentBranchTipHash;
                 return (
                   <div
                     key={`graph-ctx-${c.hash}`}
@@ -967,7 +1092,16 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                       e.stopPropagation();
                       openGraphCommitMenu(c.hash, e.clientX, e.clientY);
                     }}
-                  />
+                  >
+                    <GraphCommitNodeAvatar
+                      leftPx={graphLaneCenterPx(lane)}
+                      email={c.authorEmail}
+                      nodeColor={nodeColor}
+                      isActiveBranchCommit={isActiveBranchCommit}
+                      isActiveTip={isActiveTip}
+                      isStashRow={Boolean(commitGraphLayout.stashRows[commitIdx])}
+                    />
+                  </div>
                 );
               })}
               {virtualRows.map((v) => {
