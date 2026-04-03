@@ -5,9 +5,7 @@ mod repo_watch;
 mod settings;
 mod window_title;
 
-use tauri::menu::{
-    CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
-};
+use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::Wry;
@@ -17,6 +15,8 @@ const RECENT_MENU_SLOTS: usize = settings::MAX_RECENT_REPO_PATHS;
 
 #[derive(Clone)]
 struct RecentMenuState {
+    file_menu: Submenu<Wry>,
+    separator: PredefinedMenuItem<Wry>,
     items: Vec<MenuItem<Wry>>,
 }
 
@@ -50,6 +50,10 @@ fn sync_recent_menu(app: &tauri::AppHandle) {
     let Some(state) = app.try_state::<RecentMenuState>() else {
         return;
     };
+    let _ = state.file_menu.remove(&state.separator);
+    for item in &state.items {
+        let _ = state.file_menu.remove(item);
+    }
     for (i, item) in state.items.iter().enumerate() {
         if let Some(p) = paths.get(i) {
             let _ = item.set_text(format_recent_menu_label(p));
@@ -57,6 +61,12 @@ fn sync_recent_menu(app: &tauri::AppHandle) {
         } else {
             let _ = item.set_text(" ");
             let _ = item.set_enabled(false);
+        }
+    }
+    if !paths.is_empty() {
+        let _ = state.file_menu.append(&state.separator);
+        for item in state.items.iter().take(paths.len()) {
+            let _ = state.file_menu.append(item);
         }
     }
 }
@@ -195,18 +205,7 @@ pub fn run() {
                 let item = MenuItem::with_id(app, id, " ", false, None::<&str>)?;
                 recent_items.push(item);
             }
-            let recent_submenu = Submenu::with_items(
-                app,
-                "Open Recent",
-                true,
-                &[
-                    &recent_items[0] as &dyn IsMenuItem<Wry>,
-                    &recent_items[1] as &dyn IsMenuItem<Wry>,
-                    &recent_items[2] as &dyn IsMenuItem<Wry>,
-                    &recent_items[3] as &dyn IsMenuItem<Wry>,
-                    &recent_items[4] as &dyn IsMenuItem<Wry>,
-                ],
-            )?;
+            let recent_separator = PredefinedMenuItem::separator(app)?;
 
             let configure_openai_key = MenuItem::with_id(
                 app,
@@ -247,8 +246,7 @@ pub fn run() {
                 ],
             )?;
 
-            let file_menu =
-                Submenu::with_items(app, "File", true, &[&open_repo, &clone_repo, &recent_submenu])?;
+            let file_menu = Submenu::with_items(app, "File", true, &[&open_repo, &clone_repo])?;
 
             let edit_menu = Submenu::with_items(
                 app,
@@ -333,6 +331,8 @@ pub fn run() {
                 highlight_active_branch_rows,
             });
             app.manage(RecentMenuState {
+                file_menu: file_menu.clone(),
+                separator: recent_separator,
                 items: recent_items,
             });
             sync_recent_menu(app.handle());

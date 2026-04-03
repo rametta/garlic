@@ -3201,7 +3201,11 @@ pub fn merge_branch(app: AppHandle, path: String, branch_or_ref: String) -> Resu
 
 /// Cherry-pick a single commit onto the current branch.
 #[tauri::command]
-pub fn cherry_pick_commit(app: AppHandle, path: String, commit_hash: GitOidArg) -> Result<(), String> {
+pub fn cherry_pick_commit(
+    app: AppHandle,
+    path: String,
+    commit_hash: GitOidArg,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let hash = commit_hash.trim();
@@ -3812,7 +3816,10 @@ fn git_fetch_all_quiet(workdir: &Path) -> Result<(), String> {
 
 /// Queues `git fetch --all` on the async runtime’s blocking pool and returns immediately.
 /// Used by the periodic auto-fetch timer in [`crate::repo_watch`].
-pub fn schedule_fetch_all_remotes(path: PathBuf, in_flight: &AutoFetchInFlight) -> Result<(), String> {
+pub fn schedule_fetch_all_remotes(
+    path: PathBuf,
+    in_flight: &AutoFetchInFlight,
+) -> Result<(), String> {
     if path.to_string_lossy().trim().is_empty() {
         return Err("Path is empty.".to_string());
     }
@@ -3831,7 +3838,8 @@ pub fn schedule_fetch_all_remotes(path: PathBuf, in_flight: &AutoFetchInFlight) 
     let in_flight_arc = in_flight.0.clone();
     let path_for_git = path;
     tauri::async_runtime::spawn(async move {
-        let _ = tauri::async_runtime::spawn_blocking(move || git_fetch_all_quiet(&path_for_git)).await;
+        let _ =
+            tauri::async_runtime::spawn_blocking(move || git_fetch_all_quiet(&path_for_git)).await;
         if let Ok(mut guard) = in_flight_arc.lock() {
             guard.remove(&path_key);
         }

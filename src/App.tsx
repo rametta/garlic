@@ -1149,6 +1149,10 @@ export default function App({
   }, [localBranches, remoteBranches, graphBranchVisible, remoteGraphDefaultsVisible]);
 
   const graphRefsKey = useMemo(() => graphRefs.join("\0"), [graphRefs]);
+  const stashRefsKey = useMemo(
+    () => stashes.map((stash) => `${stash.refName}:${stash.commitHash}`).join("\0"),
+    [stashes],
+  );
 
   const commitBrowseMeta = useMemo(
     () => (commitBrowseHash ? commits.find((c) => c.hash === commitBrowseHash) : undefined),
@@ -1183,7 +1187,15 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [repo?.path, repo?.error, repo?.headHash, graphRefsKey, graphRefs, graphCommitsPageSize]);
+  }, [
+    repo?.path,
+    repo?.error,
+    repo?.headHash,
+    graphRefsKey,
+    stashRefsKey,
+    graphRefs,
+    graphCommitsPageSize,
+  ]);
 
   const handleGraphCommitsPageSizeChange = useCallback((next: number) => {
     const clamped = clampGraphCommitsPageSize(next);
@@ -3528,6 +3540,23 @@ export default function App({
     }
   }
 
+  function pruneStashFromLoadedGraph(stashRef: string) {
+    const normalizedStashRef = stashRef.trim();
+    if (!normalizedStashRef) return;
+    setCommits((prev) => {
+      const removedHashes = new Set<string>();
+      for (const commit of prev) {
+        if (commit.stashRef?.trim() !== normalizedStashRef) continue;
+        removedHashes.add(commit.hash);
+        for (const helperHash of commit.parentHashes.slice(1)) {
+          removedHashes.add(helperHash);
+        }
+      }
+      if (removedHashes.size === 0) return prev;
+      return prev.filter((commit) => !removedHashes.has(commit.hash));
+    });
+  }
+
   async function onStashPop(stashRef: string) {
     if (!repo?.path || repo.error) return;
     const ok = await ask(`Pop ${stashRef} and apply its changes to the working tree?`, {
@@ -3539,6 +3568,7 @@ export default function App({
     setOperationError(null);
     try {
       await stashPopMutation.mutateAsync({ path: repo.path, stashRef });
+      pruneStashFromLoadedGraph(stashRef);
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -3557,6 +3587,7 @@ export default function App({
     setOperationError(null);
     try {
       await stashDropMutation.mutateAsync({ path: repo.path, stashRef });
+      pruneStashFromLoadedGraph(stashRef);
     } catch (e) {
       setOperationError(invokeErrorMessage(e));
     } finally {
@@ -4757,7 +4788,7 @@ export default function App({
           <section className="flex min-h-0 w-full min-w-0 flex-1 flex-col border-x border-base-300 bg-base-100">
             <div className="card-body flex min-h-0 flex-1 flex-col gap-0 p-0">
               {loading ? (
-                <div className="flex min-h-0 flex-1 flex-col justify-start 2 px-6 py-6">
+                <div className="2 flex min-h-0 flex-1 flex-col justify-start px-6 py-6">
                   {cloneProgress ? (
                     <>
                       <div className="mx-auto flex w-full max-w-lg shrink-0 flex-col gap-2">

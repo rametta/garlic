@@ -82,7 +82,7 @@ pub fn persisted_theme_preference(app: &AppHandle) -> String {
     resolve_persisted_theme_preference(&s.theme)
 }
 
-/// Most recently opened repo paths (newest first), capped for the File → Open Recent menu.
+/// Most recently opened repo paths (newest first), shown at the top level of the File menu.
 pub const MAX_RECENT_REPO_PATHS: usize = 5;
 
 fn default_graph_commits_page_size() -> u32 {
@@ -353,7 +353,9 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
         branch_sidebar_sections: settings.branch_sidebar_sections.clone(),
         graph_branch_visible,
         highlight_active_branch_rows: settings.highlight_active_branch_rows,
-        graph_commits_page_size: git::clamp_graph_commits_page_size(settings.graph_commits_page_size),
+        graph_commits_page_size: git::clamp_graph_commits_page_size(
+            settings.graph_commits_page_size,
+        ),
     })
 }
 
@@ -416,7 +418,7 @@ pub fn persist_last_repo_path(app: &AppHandle, path: Option<String>) -> Result<(
     save_settings(app, &s)
 }
 
-/// Paths for the Open Recent menu (newest first, at most [`MAX_RECENT_REPO_PATHS`]).
+/// Paths for the File menu recent-repo section (newest first, at most [`MAX_RECENT_REPO_PATHS`]).
 pub fn recent_repo_paths(app: &AppHandle) -> Vec<String> {
     load_settings(app)
         .map(|s| s.recent_repo_paths)

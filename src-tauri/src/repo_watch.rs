@@ -101,13 +101,11 @@ pub fn start_repo_watch(app: AppHandle, path: String) -> Result<(), String> {
     let in_flight = app.state::<AutoFetchInFlight>().inner().clone();
     // Fresh remote refs as soon as a repo is opened or switched (same as periodic auto-fetch).
     let _ = schedule_fetch_all_remotes(root.clone(), &in_flight);
-    std::thread::spawn(move || {
-        loop {
-            match auto_fetch_stop_rx.recv_timeout(AUTO_FETCH_INTERVAL) {
-                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let _ = schedule_fetch_all_remotes(path_for_auto_fetch.clone(), &in_flight);
-                }
+    std::thread::spawn(move || loop {
+        match auto_fetch_stop_rx.recv_timeout(AUTO_FETCH_INTERVAL) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = schedule_fetch_all_remotes(path_for_auto_fetch.clone(), &in_flight);
             }
         }
     });
