@@ -159,13 +159,78 @@ fn ensure_ssh_askpass_helper(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn ssh_askpass_env(app: &AppHandle) -> Result<Vec<(String, String)>, String> {
+fn ensure_ssh_agent_env() -> Result<Vec<(String, String)>, String> {
+    if let Ok(sock) = std::env::var("SSH_AUTH_SOCK") {
+        let sock = sock.trim();
+        if !sock.is_empty() {
+            let mut envs = vec![("SSH_AUTH_SOCK".to_string(), sock.to_string())];
+            if let Ok(pid) = std::env::var("SSH_AGENT_PID") {
+                let pid = pid.trim();
+                if !pid.is_empty() {
+                    envs.push(("SSH_AGENT_PID".to_string(), pid.to_string()));
+                }
+            }
+            return Ok(envs);
+        }
+    }
+
+    if let Ok(guard) = SSH_AGENT_ENV_OVERRIDES.lock() {
+        if let Some(cached) = guard.as_ref() {
+            return Ok(cached.clone());
+        }
+    }
+
+    let output = Command::new("ssh-agent")
+        .arg("-s")
+        .output()
+        .map_err(|e| format!("Could not start ssh-agent: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            "Could not start ssh-agent.".to_string()
+        } else {
+            format!("Could not start ssh-agent: {stderr}")
+        };
+        return Err(msg);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut envs = Vec::new();
+    for chunk in stdout.split(';') {
+        let entry = chunk.trim();
+        if let Some(value) = entry.strip_prefix("SSH_AUTH_SOCK=") {
+            let value = value.trim();
+            if !value.is_empty() {
+                envs.push(("SSH_AUTH_SOCK".to_string(), value.to_string()));
+            }
+        } else if let Some(value) = entry.strip_prefix("SSH_AGENT_PID=") {
+            let value = value.trim();
+            if !value.is_empty() {
+                envs.push(("SSH_AGENT_PID".to_string(), value.to_string()));
+            }
+        }
+    }
+    if envs.is_empty() {
+        return Err("Could not parse ssh-agent environment.".to_string());
+    }
+
+    if let Ok(mut guard) = SSH_AGENT_ENV_OVERRIDES.lock() {
+        if guard.is_none() {
+            *guard = Some(envs.clone());
+        }
+    }
+    Ok(envs)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ssh_session_env(app: &AppHandle) -> Result<Vec<(String, String)>, String> {
     let helper_path = ensure_ssh_askpass_helper(app)?;
     let display = match std::env::var("DISPLAY") {
         Ok(value) if !value.trim().is_empty() => value,
         _ => ":0".to_string(),
     };
-    Ok(vec![
+    let mut envs = ensure_ssh_agent_env().unwrap_or_default();
+    envs.extend([
         (
             "SSH_ASKPASS".to_string(),
             helper_path.to_string_lossy().to_string(),
@@ -173,12 +238,164 @@ fn ssh_askpass_env(app: &AppHandle) -> Result<Vec<(String, String)>, String> {
         ("SSH_ASKPASS_REQUIRE".to_string(), "force".to_string()),
         ("GARLIC_ASKPASS_TITLE".to_string(), "Garlic".to_string()),
         ("DISPLAY".to_string(), display),
-    ])
+        (
+            "GIT_SSH_COMMAND".to_string(),
+            "ssh -o BatchMode=no -o AddKeysToAgent=yes".to_string(),
+        ),
+    ]);
+    Ok(envs)
 }
 
 #[cfg(target_os = "windows")]
-fn ssh_askpass_env(_app: &AppHandle) -> Result<Vec<(String, String)>, String> {
+fn ssh_session_env(_app: &AppHandle) -> Result<Vec<(String, String)>, String> {
     Ok(Vec::new())
+}
+
+#[derive(Default)]
+struct SshSigningPreparation {
+    envs: Vec<(String, String)>,
+    git_config_overrides: Vec<String>,
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ssh_agent_has_public_key(
+    agent_envs: &[(String, String)],
+    public_key_path: &Path,
+) -> Result<bool, String> {
+    if !agent_envs
+        .iter()
+        .any(|(key, value)| key == "SSH_AUTH_SOCK" && !value.trim().is_empty())
+    {
+        return Ok(false);
+    }
+    let expected = std::fs::read_to_string(public_key_path)
+        .map_err(|e| format!("Could not read SSH public key: {e}"))?;
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return Ok(false);
+    }
+
+    let mut cmd = Command::new("ssh-add");
+    cmd.arg("-L").stdin(Stdio::null());
+    for (key, value) in agent_envs {
+        cmd.env(key, value);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Could not inspect ssh-agent identities: {e}"))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let listed = String::from_utf8_lossy(&output.stdout);
+    Ok(listed.lines().map(str::trim).any(|line| line == expected))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_ssh_key_added_to_agent(
+    agent_envs: &[(String, String)],
+    private_key_path: &Path,
+    public_key_path: &Path,
+) -> Result<(), String> {
+    if ssh_agent_has_public_key(agent_envs, public_key_path)? || !private_key_path.is_file() {
+        return Ok(());
+    }
+
+    let mut cmd = Command::new("ssh-add");
+    cmd.arg(private_key_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in agent_envs {
+        cmd.env(key, value);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Could not run ssh-add: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stderr.is_empty() && stdout.is_empty() {
+        Err("Could not add the SSH signing key to ssh-agent.".to_string())
+    } else if !stderr.is_empty() {
+        Err(stderr)
+    } else {
+        Err(stdout)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ssh_signing_preparation(
+    app: &AppHandle,
+    workdir: &Path,
+) -> Result<SshSigningPreparation, String> {
+    let gpg_format =
+        git_output_allow_fail(workdir, &["config", "--get", "gpg.format"]).unwrap_or_default();
+    if gpg_format.trim() != "ssh" {
+        return Ok(SshSigningPreparation::default());
+    }
+
+    let signing_key =
+        match git_output_allow_fail(workdir, &["config", "--path", "--get", "user.signingkey"]) {
+            Some(value) => value,
+            None => return Ok(SshSigningPreparation::default()),
+        };
+    let signing_key = signing_key.trim();
+    if signing_key.is_empty() {
+        return Ok(SshSigningPreparation::default());
+    }
+
+    let envs = ssh_session_env(app)?;
+    if signing_key.starts_with("key::") {
+        return Ok(SshSigningPreparation {
+            envs,
+            git_config_overrides: Vec::new(),
+        });
+    }
+
+    let configured_path = PathBuf::from(signing_key);
+    let configured_is_public = signing_key.ends_with(".pub");
+    let public_key_path = if configured_is_public {
+        configured_path.clone()
+    } else {
+        PathBuf::from(format!("{signing_key}.pub"))
+    };
+    let private_key_path = if configured_is_public {
+        configured_path.with_extension("")
+    } else {
+        configured_path
+    };
+
+    if public_key_path.is_file() {
+        ensure_ssh_key_added_to_agent(&envs, &private_key_path, &public_key_path)?;
+        let git_config_overrides = if configured_is_public {
+            Vec::new()
+        } else {
+            vec![
+                "-c".to_string(),
+                format!("user.signingkey={}", public_key_path.to_string_lossy()),
+            ]
+        };
+        return Ok(SshSigningPreparation {
+            envs,
+            git_config_overrides,
+        });
+    }
+
+    Ok(SshSigningPreparation {
+        envs,
+        git_config_overrides: Vec::new(),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn ssh_signing_preparation(
+    _app: &AppHandle,
+    _workdir: &Path,
+) -> Result<SshSigningPreparation, String> {
+    Ok(SshSigningPreparation::default())
 }
 
 /// Emitted when a hook-heavy `git` invocation begins (`git-command-stream-started`).
@@ -247,7 +464,7 @@ fn run_git_streaming_with_input_and_env(
         // Force remote auth to use askpass instead of attempting a dead terminal prompt.
         cmd.stdin(Stdio::null());
     }
-    let mut merged_envs = ssh_askpass_env(app).unwrap_or_default();
+    let mut merged_envs = ssh_session_env(app).unwrap_or_default();
     merged_envs.extend(
         extra_envs
             .iter()
@@ -680,6 +897,8 @@ pub struct RepoMetadata {
 
 static GIT_AUDIT_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 static GIT_HOOK_ENV_OVERRIDES: Mutex<Option<Vec<(String, String)>>> = Mutex::new(None);
+#[cfg(not(target_os = "windows"))]
+static SSH_AGENT_ENV_OVERRIDES: Mutex<Option<Vec<(String, String)>>> = Mutex::new(None);
 
 /// Rotate before the log exceeds this size (append of one line can push slightly over until next write).
 const GIT_AUDIT_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
@@ -1212,7 +1431,7 @@ fn run_git_clone_with_progress(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    for (key, value) in ssh_askpass_env(&app).unwrap_or_default() {
+    for (key, value) in ssh_session_env(&app).unwrap_or_default() {
         cmd.env(key, value);
     }
     let mut child = cmd.spawn().map_err(|e| format!("Could not run git: {e}"))?;
@@ -3358,7 +3577,11 @@ fn commit_staged_blocking(app: AppHandle, path: String, message: String) -> Resu
     if msg.is_empty() {
         return Err("Commit message cannot be empty.".to_string());
     }
-    run_git_streaming(&app, &path, &path_buf, &["commit", "-m", msg], "commit")?;
+    let prep = ssh_signing_preparation(&app, &path_buf)?;
+    let mut args = prep.git_config_overrides;
+    args.extend(["commit".to_string(), "-m".to_string(), msg.to_string()]);
+    let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_streaming(&app, &path, &path_buf, &args_ref, "commit")?;
     Ok(())
 }
 
@@ -3377,24 +3600,28 @@ fn amend_last_commit_blocking(
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let trimmed = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let prep = ssh_signing_preparation(&app, &path_buf)?;
     match trimmed {
         Some(m) => {
-            run_git_streaming(
-                &app,
-                &path,
-                &path_buf,
-                &["commit", "--amend", "-m", m],
-                "commit --amend",
-            )?;
+            let mut args = prep.git_config_overrides.clone();
+            args.extend([
+                "commit".to_string(),
+                "--amend".to_string(),
+                "-m".to_string(),
+                m.to_string(),
+            ]);
+            let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
+            run_git_streaming(&app, &path, &path_buf, &args_ref, "commit --amend")?;
         }
         None => {
-            run_git_streaming(
-                &app,
-                &path,
-                &path_buf,
-                &["commit", "--amend", "--no-edit"],
-                "commit --amend",
-            )?;
+            let mut args = prep.git_config_overrides;
+            args.extend([
+                "commit".to_string(),
+                "--amend".to_string(),
+                "--no-edit".to_string(),
+            ]);
+            let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
+            run_git_streaming(&app, &path, &path_buf, &args_ref, "commit --amend")?;
         }
     }
     Ok(())
@@ -3512,7 +3739,14 @@ pub fn reword_commit(
         ("GIT_AUTHOR_EMAIL", author_email.as_str()),
         ("GIT_AUTHOR_DATE", author_date.as_str()),
     ];
-    let mut commit_tree_args = vec!["commit-tree".to_string(), tree_hash];
+    let signing_prep = if sign_rewritten_commits {
+        ssh_signing_preparation(&app, &path_buf)?
+    } else {
+        SshSigningPreparation::default()
+    };
+    let mut commit_tree_args = signing_prep.git_config_overrides.clone();
+    commit_tree_args.push("commit-tree".to_string());
+    commit_tree_args.push(tree_hash);
     if sign_rewritten_commits {
         commit_tree_args.push("-S".to_string());
     }
@@ -3524,11 +3758,21 @@ pub fn reword_commit(
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
+    let mut commit_tree_envs = signing_prep.envs.clone();
+    commit_tree_envs.extend(
+        author_env
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+    );
+    let commit_tree_envs_ref = commit_tree_envs
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
     let rewritten_hash = git_output_with_input_and_env(
         &path_buf,
         &commit_tree_args_ref,
         Some(trimmed_message),
-        &author_env,
+        &commit_tree_envs_ref,
     )?;
 
     if is_head {
@@ -3542,23 +3786,22 @@ pub fn reword_commit(
         return Ok(());
     }
 
-    let rebase_args = if sign_rewritten_commits {
-        vec![
-            "rebase",
-            "--gpg-sign",
-            "--onto",
-            rewritten_hash.as_str(),
-            resolved_hash.as_str(),
-        ]
-    } else {
-        vec![
-            "rebase",
-            "--onto",
-            rewritten_hash.as_str(),
-            resolved_hash.as_str(),
-        ]
-    };
-    run_git_streaming(&app, &path, &path_buf, &rebase_args, "edit commit message")?;
+    let mut rebase_args = signing_prep.git_config_overrides;
+    rebase_args.push("rebase".to_string());
+    if sign_rewritten_commits {
+        rebase_args.push("--gpg-sign".to_string());
+    }
+    rebase_args.push("--onto".to_string());
+    rebase_args.push(rewritten_hash.clone());
+    rebase_args.push(resolved_hash.clone());
+    let rebase_args_ref = rebase_args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_streaming(
+        &app,
+        &path,
+        &path_buf,
+        &rebase_args_ref,
+        "edit commit message",
+    )?;
     Ok(())
 }
 
