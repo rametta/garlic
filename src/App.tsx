@@ -25,7 +25,6 @@ import { CommitComposer } from "./components/CommitComposer";
 import { CommitGraphSection } from "./components/CommitGraphSection";
 import { ConflictVersionPanel } from "./components/ConflictVersionPanel";
 import { GitCommandPanel } from "./components/GitCommandPanel";
-import { OpenAiSettingsDialog } from "./components/OpenAiSettingsDialog";
 import { SettingsPage } from "./components/SettingsPage";
 import {
   UnifiedDiff,
@@ -1187,7 +1186,6 @@ export default function App({
   const [openaiModel, setOpenaiModel] = useState(
     () => initialOpenaiModel.trim() || DEFAULT_OPENAI_MODEL,
   );
-  const [openaiSettingsOpen, setOpenaiSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const stashPushMutation = useStashPushMutation();
   const setBranchSidebarSectionsMutation = useSetBranchSidebarSectionsMutation();
@@ -1250,13 +1248,6 @@ export default function App({
     },
     [persistGraphBranchVisible, replaceGraphBranchVisible],
   );
-  const closeOpenAiSettingsDialog = useCallback(() => {
-    setOpenaiSettingsOpen(false);
-  }, []);
-
-  const openOpenAiSettingsDialog = useCallback(() => {
-    setOpenaiSettingsOpen(true);
-  }, []);
   const openAppSettings = useCallback(() => {
     setAppSettingsOpen(true);
   }, []);
@@ -3633,7 +3624,6 @@ export default function App({
   const loadRepoListenerRef = useLatest(loadRepo);
   const onStashPushListenerRef = useLatest(onStashPush);
   const openCreateBranchDialogListenerRef = useLatest(openCreateBranchDialog);
-  const openOpenAiSettingsDialogListenerRef = useLatest(openOpenAiSettingsDialog);
   const openAppSettingsListenerRef = useLatest(openAppSettings);
   const refreshAfterMutationListenerRef = useLatest(refreshAfterMutation);
   const handleCloneCompletePayloadListenerRef = useLatest(handleCloneCompletePayload);
@@ -3692,9 +3682,6 @@ export default function App({
 
   useEffect(() => {
     const promise = Promise.all([
-      listen("open-openai-settings", () => {
-        openOpenAiSettingsDialogListenerRef.current();
-      }),
       listen("open-app-settings", () => {
         openAppSettingsListenerRef.current();
       }),
@@ -3811,7 +3798,6 @@ export default function App({
     onStashPushListenerRef,
     openCloneRepoDialogListenerRef,
     openCreateBranchDialogListenerRef,
-    openOpenAiSettingsDialogListenerRef,
     openAppSettingsListenerRef,
     runCheckForUpdatesListenerRef,
     scheduleRepositoryMutationRefresh,
@@ -6668,18 +6654,6 @@ export default function App({
             onError={setOperationError}
           />
         </div>
-      ) : null}
-      {openaiSettingsOpen ? (
-        <OpenAiSettingsDialog
-          apiKey={openaiApiKey}
-          model={openaiModel}
-          onClose={closeOpenAiSettingsDialog}
-          onSaved={({ apiKey, model }) => {
-            setOpenaiApiKey(apiKey);
-            setOpenaiModel(model);
-          }}
-          onError={setOperationError}
-        />
       ) : null}
     </main>
   );

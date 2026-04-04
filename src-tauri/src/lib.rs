@@ -220,13 +220,6 @@ pub fn run() {
                 true,
                 Some("CmdOrCtrl+,"),
             )?;
-            let configure_openai_key = MenuItem::with_id(
-                app,
-                "configure_openai_key",
-                "Configure OpenAI API Key…",
-                true,
-                None::<&str>,
-            )?;
             let check_for_updates = MenuItem::with_id(
                 app,
                 "check_for_updates",
@@ -253,7 +246,6 @@ pub fn run() {
                     &check_for_updates,
                     &PredefinedMenuItem::separator(app)?,
                     &app_settings,
-                    &configure_openai_key,
                     &reveal_settings_file,
                     &PredefinedMenuItem::separator(app)?,
                     &quit_app,
@@ -375,15 +367,6 @@ pub fn run() {
                 let handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let _ = handle.emit("open-app-settings", ());
-                });
-                return;
-            }
-            if menu_id_is(&event, "configure_openai_key") {
-                // Defer emit so the native menu handler returns before the webview runs JS
-                // (`showModal` + focus); synchronous emit from the menu callback can deadlock on macOS.
-                let handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = handle.emit("open-openai-settings", ());
                 });
                 return;
             }
