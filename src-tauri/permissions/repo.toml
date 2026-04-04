@@ -74,6 +74,7 @@ commands.allow = [
   "set_graph_branch_visibility",
   "set_openai_settings",
   "set_graph_commits_page_size",
+  "set_graph_commit_title_font_size",
   "write_export_text_file",
   "open_in_cursor",
   "start_repo_watch",

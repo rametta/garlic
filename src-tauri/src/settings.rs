@@ -89,6 +89,15 @@ fn default_graph_commits_page_size() -> u32 {
     git::DEFAULT_GRAPH_COMMITS_PAGE_SIZE
 }
 
+fn default_graph_commit_title_font_size_px() -> u32 {
+    11
+}
+
+/// Clamp persisted commit-title font size for the main graph (px).
+pub fn clamp_graph_commit_title_font_size_px(px: u32) -> u32 {
+    px.clamp(9, 20)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct AppSettings {
     #[serde(default)]
@@ -112,6 +121,9 @@ struct AppSettings {
     /// `git log -n` page size for the main commit graph (each fetch and "load more" chunk).
     #[serde(default = "default_graph_commits_page_size")]
     graph_commits_page_size: u32,
+    /// Pixel font size for commit subject lines in the main graph (default 11).
+    #[serde(default = "default_graph_commit_title_font_size_px")]
+    graph_commit_title_font_size_px: u32,
 }
 
 impl Default for AppSettings {
@@ -126,6 +138,7 @@ impl Default for AppSettings {
             graph_branch_visibility_by_repo: BTreeMap::new(),
             highlight_active_branch_rows: false,
             graph_commits_page_size: git::DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
+            graph_commit_title_font_size_px: default_graph_commit_title_font_size_px(),
         }
     }
 }
@@ -144,6 +157,8 @@ fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut s: AppSettings = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     s.graph_commits_page_size = git::clamp_graph_commits_page_size(s.graph_commits_page_size);
+    s.graph_commit_title_font_size_px =
+        clamp_graph_commit_title_font_size_px(s.graph_commit_title_font_size_px);
     if s.recent_repo_paths.is_empty() {
         if let Some(ref p) = s.last_repo_path {
             s.recent_repo_paths.push(p.clone());
@@ -327,6 +342,8 @@ pub struct AppBootstrap {
     pub highlight_active_branch_rows: bool,
     /// `git log -n` page size for the commit graph (default 500).
     pub graph_commits_page_size: u32,
+    /// Commit subject font size in the main graph (px, default 11).
+    pub graph_commit_title_font_size_px: u32,
 }
 
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
@@ -355,6 +372,9 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
         highlight_active_branch_rows: settings.highlight_active_branch_rows,
         graph_commits_page_size: git::clamp_graph_commits_page_size(
             settings.graph_commits_page_size,
+        ),
+        graph_commit_title_font_size_px: clamp_graph_commit_title_font_size_px(
+            settings.graph_commit_title_font_size_px,
         ),
     })
 }
@@ -491,6 +511,14 @@ pub fn set_highlight_active_branch_rows(app: &AppHandle, enabled: bool) -> Resul
 pub fn set_graph_commits_page_size(app: AppHandle, page_size: u32) -> Result<(), String> {
     let mut s = load_settings(&app)?;
     s.graph_commits_page_size = git::clamp_graph_commits_page_size(page_size);
+    save_settings(&app, &s)
+}
+
+/// Persists commit subject font size (px) for the main graph.
+#[tauri::command]
+pub fn set_graph_commit_title_font_size(app: AppHandle, font_size_px: u32) -> Result<(), String> {
+    let mut s = load_settings(&app)?;
+    s.graph_commit_title_font_size_px = clamp_graph_commit_title_font_size_px(font_size_px);
     save_settings(&app, &s)
 }
 

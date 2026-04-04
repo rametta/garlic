@@ -26,6 +26,7 @@ import { CommitGraphSection } from "./components/CommitGraphSection";
 import { ConflictVersionPanel } from "./components/ConflictVersionPanel";
 import { GitCommandPanel } from "./components/GitCommandPanel";
 import { OpenAiSettingsDialog } from "./components/OpenAiSettingsDialog";
+import { SettingsPage } from "./components/SettingsPage";
 import {
   UnifiedDiff,
   type BinaryImagePreview,
@@ -33,6 +34,8 @@ import {
   type PartialDiffAction,
 } from "./components/UnifiedDiff";
 import {
+  clampGraphCommitTitleFontSizePx,
+  commitGraphRowHeightPx,
   computeCommitGraphLayout,
   type BranchTip,
   type CommitGraphLayout,
@@ -941,6 +944,7 @@ export default function App({
   initialGraphBranchVisible,
   highlightActiveBranchRows: initialHighlightActiveBranchRows,
   graphCommitsPageSize: initialGraphCommitsPageSize,
+  graphCommitTitleFontSizePx: initialGraphCommitTitleFontSizePx,
 }: {
   startup: RestoreLastRepo;
   /** Persisted value: `auto` or a DaisyUI theme name. */
@@ -957,6 +961,8 @@ export default function App({
   highlightActiveBranchRows: boolean;
   /** Commits per `git log` page for the main graph (default 500). */
   graphCommitsPageSize: number;
+  /** Commit subject font size in the main graph (px). */
+  graphCommitTitleFontSizePx: number;
 }) {
   const [themePreference, setThemePreference] = useState(initialThemePreference);
   const [branchSidebarSections, setBranchSidebarSections] = useState<BranchSidebarSectionsState>(
@@ -967,6 +973,9 @@ export default function App({
   );
   const [graphCommitsPageSize, setGraphCommitsPageSize] = useState(() =>
     clampGraphCommitsPageSize(initialGraphCommitsPageSize),
+  );
+  const [graphCommitTitleFontSizePx, setGraphCommitTitleFontSizePx] = useState(() =>
+    clampGraphCommitTitleFontSizePx(initialGraphCommitTitleFontSizePx),
   );
   const queryClient = useQueryClient();
   const [currentRepoPath, setCurrentRepoPath] = useState<string | null>(
@@ -1152,6 +1161,7 @@ export default function App({
     () => initialOpenaiModel.trim() || DEFAULT_OPENAI_MODEL,
   );
   const [openaiSettingsOpen, setOpenaiSettingsOpen] = useState(false);
+  const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const stashPushMutation = useStashPushMutation();
   const setBranchSidebarSectionsMutation = useSetBranchSidebarSectionsMutation();
   const setGraphBranchVisibilityMutation = useSetGraphBranchVisibilityMutation();
@@ -1219,6 +1229,12 @@ export default function App({
 
   const openOpenAiSettingsDialog = useCallback(() => {
     setOpenaiSettingsOpen(true);
+  }, []);
+  const openAppSettings = useCallback(() => {
+    setAppSettingsOpen(true);
+  }, []);
+  const closeAppSettings = useCallback(() => {
+    setAppSettingsOpen(false);
   }, []);
   const [editOriginUrl, setEditOriginUrl] = useState("");
   /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
@@ -3591,6 +3607,7 @@ export default function App({
   const onStashPushListenerRef = useLatest(onStashPush);
   const openCreateBranchDialogListenerRef = useLatest(openCreateBranchDialog);
   const openOpenAiSettingsDialogListenerRef = useLatest(openOpenAiSettingsDialog);
+  const openAppSettingsListenerRef = useLatest(openAppSettings);
   const refreshAfterMutationListenerRef = useLatest(refreshAfterMutation);
   const handleCloneCompletePayloadListenerRef = useLatest(handleCloneCompletePayload);
   const openCloneRepoDialogListenerRef = useLatest(openCloneRepoDialog);
@@ -3650,6 +3667,9 @@ export default function App({
     const promise = Promise.all([
       listen("open-openai-settings", () => {
         openOpenAiSettingsDialogListenerRef.current();
+      }),
+      listen("open-app-settings", () => {
+        openAppSettingsListenerRef.current();
       }),
       listen("check-for-updates-request", () => {
         void runCheckForUpdatesListenerRef.current();
@@ -3765,6 +3785,7 @@ export default function App({
     openCloneRepoDialogListenerRef,
     openCreateBranchDialogListenerRef,
     openOpenAiSettingsDialogListenerRef,
+    openAppSettingsListenerRef,
     runCheckForUpdatesListenerRef,
     scheduleRepositoryMutationRefresh,
     scheduleCloneProgressUiFlushListenerRef,
@@ -4642,6 +4663,7 @@ export default function App({
       })),
       graphBranchTips,
       currentBranchName,
+      commitGraphRowHeightPx(graphCommitTitleFontSizePx),
     );
   }, [
     worktreeBrowseTarget,
@@ -4652,6 +4674,7 @@ export default function App({
     deferredGraphDisplayCommits,
     graphBranchTips,
     currentBranchName,
+    graphCommitTitleFontSizePx,
   ]);
 
   /** Tip commit of the checked-out branch — used to highlight that row in the graph. */
@@ -4701,7 +4724,7 @@ export default function App({
   }, [latestStashRef, onStashPop]);
 
   return (
-    <main className="box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 text-base-content antialiased [font-synthesis:none]">
+    <main className="relative box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 text-base-content antialiased [font-synthesis:none]">
       <div
         className="grid min-h-0 min-w-0 flex-1 grid-cols-12 border-t border-base-300 lg:min-h-0 lg:grid-rows-1 lg:items-stretch"
         aria-live="polite"
@@ -6300,6 +6323,7 @@ export default function App({
                                   onWipSelect={handleSelectWipRow}
                                   graphCommitsPageSize={graphCommitsPageSize}
                                   onGraphCommitsPageSizeChange={handleGraphCommitsPageSizeChange}
+                                  graphCommitTitleFontSizePx={graphCommitTitleFontSizePx}
                                   pullActionDisabled={pullActionDisabled}
                                   onPullAction={handleGraphPullAction}
                                   pushActionDisabled={pushActionDisabled}
@@ -6565,6 +6589,24 @@ export default function App({
           </div>
         </aside>
       </div>
+      {appSettingsOpen ? (
+        <div className="absolute inset-0 z-50 flex min-h-0 flex-col bg-base-200">
+          <SettingsPage
+            onClose={closeAppSettings}
+            themePreference={themePreference}
+            onThemePreferenceChange={setThemePreference}
+            openaiApiKey={openaiApiKey}
+            openaiModel={openaiModel}
+            onOpenAiChange={({ apiKey, model }) => {
+              setOpenaiApiKey(apiKey);
+              setOpenaiModel(model);
+            }}
+            graphCommitTitleFontSizePx={graphCommitTitleFontSizePx}
+            onGraphCommitTitleFontSizeChange={setGraphCommitTitleFontSizePx}
+            onError={setOperationError}
+          />
+        </div>
+      ) : null}
       {openaiSettingsOpen ? (
         <OpenAiSettingsDialog
           apiKey={openaiApiKey}

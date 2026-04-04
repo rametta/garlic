@@ -175,6 +175,7 @@ pub fn run() {
             settings::set_graph_branch_visibility,
             settings::set_openai_settings,
             settings::set_graph_commits_page_size,
+            settings::set_graph_commit_title_font_size,
             write_export_text_file,
             open_in_cursor::open_in_cursor,
             repo_watch::start_repo_watch,
@@ -212,6 +213,13 @@ pub fn run() {
             }
             let recent_separator = PredefinedMenuItem::separator(app)?;
 
+            let app_settings = MenuItem::with_id(
+                app,
+                "app_settings",
+                "Settings…",
+                true,
+                Some("CmdOrCtrl+,"),
+            )?;
             let configure_openai_key = MenuItem::with_id(
                 app,
                 "configure_openai_key",
@@ -244,6 +252,7 @@ pub fn run() {
                     &PredefinedMenuItem::separator(app)?,
                     &check_for_updates,
                     &PredefinedMenuItem::separator(app)?,
+                    &app_settings,
                     &configure_openai_key,
                     &reveal_settings_file,
                     &PredefinedMenuItem::separator(app)?,
@@ -360,6 +369,13 @@ pub fn run() {
                         }
                     }
                 }
+                return;
+            }
+            if menu_id_is(&event, "app_settings") {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = handle.emit("open-app-settings", ());
+                });
                 return;
             }
             if menu_id_is(&event, "configure_openai_key") {

@@ -213,6 +213,22 @@ export function useSetOpenAiSettingsMutation() {
   });
 }
 
+export function useSetThemeMutation() {
+  return useMutation<void, unknown, string>({
+    mutationFn: async (theme) => {
+      await invoke("set_theme", { theme });
+    },
+  });
+}
+
+export function useSetGraphCommitTitleFontSizeMutation() {
+  return useMutation<void, unknown, number>({
+    mutationFn: async (fontSizePx) => {
+      await invoke("set_graph_commit_title_font_size", { fontSizePx });
+    },
+  });
+}
+
 export function useStashPushMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; message: string | null }) =>

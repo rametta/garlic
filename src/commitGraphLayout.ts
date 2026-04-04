@@ -1,6 +1,28 @@
 /** Layout constants for the commit DAG column. */
 
 export const COMMIT_GRAPH_ROW_HEIGHT = 28;
+
+/** Default commit subject font size in the main graph (px); matches previous `text-[0.6875rem]` at 16px root. */
+export const DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX = 11;
+export const GRAPH_COMMIT_TITLE_FONT_SIZE_MIN = 9;
+export const GRAPH_COMMIT_TITLE_FONT_SIZE_MAX = 20;
+
+export function clampGraphCommitTitleFontSizePx(px: number): number {
+  const n = Math.round(px);
+  return Math.min(GRAPH_COMMIT_TITLE_FONT_SIZE_MAX, Math.max(GRAPH_COMMIT_TITLE_FONT_SIZE_MIN, n));
+}
+
+/** Row height for the virtualized graph from the commit-title font size (keeps density similar to the default). */
+export function commitGraphRowHeightPx(titleFontSizePx: number): number {
+  const fs = clampGraphCommitTitleFontSizePx(titleFontSizePx);
+  return Math.min(
+    44,
+    Math.max(
+      24,
+      Math.round((fs * COMMIT_GRAPH_ROW_HEIGHT) / DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX),
+    ),
+  );
+}
 export const COMMIT_GRAPH_LANE_WIDTH = 14;
 export const COMMIT_GRAPH_PAD_X = 6;
 
@@ -302,6 +324,7 @@ export function computeCommitGraphLayout(
   commits: CommitGraphCommit[],
   tips: BranchTip[],
   currentBranchName: string | null,
+  rowHeightPx: number = COMMIT_GRAPH_ROW_HEIGHT,
 ): CommitGraphLayout {
   const branchNamesSorted = [...new Set(tips.map((t) => t.name))].sort((a, b) =>
     a.localeCompare(b),
@@ -334,7 +357,7 @@ export function computeCommitGraphLayout(
 
   const laneColors = Array.from({ length: laneCount }, (_, i) => branchLaneHue(i));
 
-  const rowH = COMMIT_GRAPH_ROW_HEIGHT;
+  const rowH = rowHeightPx;
   const laneW = COMMIT_GRAPH_LANE_WIDTH;
   const pad = COMMIT_GRAPH_PAD_X;
   const graphWidthPx = pad * 2 + laneCount * laneW;

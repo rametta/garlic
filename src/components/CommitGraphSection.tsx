@@ -5,7 +5,7 @@ import { CommitGraphColumn } from "./CommitGraphColumn";
 import {
   COMMIT_GRAPH_LANE_WIDTH,
   COMMIT_GRAPH_PAD_X,
-  COMMIT_GRAPH_ROW_HEIGHT,
+  commitGraphRowHeightPx,
   type CommitGraphLayout,
 } from "../commitGraphLayout";
 import {
@@ -210,6 +210,8 @@ export interface CommitGraphSectionProps {
   /** `git log -n` page size for each graph fetch (persisted app setting). */
   graphCommitsPageSize: number;
   onGraphCommitsPageSizeChange: (value: number) => void;
+  /** Commit subject font size in the main graph (persisted app setting, px). */
+  graphCommitTitleFontSizePx: number;
   pullActionDisabled: boolean;
   onPullAction: () => void;
   pushActionDisabled: boolean;
@@ -337,6 +339,7 @@ type GraphCommitNodeAvatarProps = {
   isActiveBranchCommit: boolean;
   isActiveTip: boolean;
   isStashRow: boolean;
+  rowHeightPx: number;
 };
 
 const GraphCommitNodeAvatar = memo(function GraphCommitNodeAvatar({
@@ -346,6 +349,7 @@ const GraphCommitNodeAvatar = memo(function GraphCommitNodeAvatar({
   isActiveBranchCommit,
   isActiveTip,
   isStashRow,
+  rowHeightPx,
 }: GraphCommitNodeAvatarProps) {
   const [candidateUrls, setCandidateUrls] = useState<string[]>([]);
   const [candidateIndex, setCandidateIndex] = useState(0);
@@ -376,7 +380,7 @@ const GraphCommitNodeAvatar = memo(function GraphCommitNodeAvatar({
       className="pointer-events-none absolute rounded-full"
       style={{
         left: leftPx - sizePx / 2,
-        top: (COMMIT_GRAPH_ROW_HEIGHT - sizePx) / 2,
+        top: (rowHeightPx - sizePx) / 2,
         width: sizePx,
         height: sizePx,
       }}
@@ -457,6 +461,7 @@ type VirtualRowProps = {
   openGraphStashMenu: (stashRef: string, clientX: number, clientY: number) => void;
   openGraphCommitMenu: (hash: string, clientX: number, clientY: number) => void;
   openGraphTagMenu: (tagName: string, clientX: number, clientY: number) => void;
+  commitTitleFontSizePx: number;
 };
 
 const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
@@ -483,6 +488,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   openGraphStashMenu,
   openGraphCommitMenu,
   openGraphTagMenu,
+  commitTitleFontSizePx,
 }: VirtualRowProps) {
   const stashRef = c.stashRef?.trim() || null;
   const { laneColor, visibleLocalTips, visibleRemoteTips, visibleTags } = laneMeta;
@@ -610,7 +616,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
       <button
         type="button"
         title={fullTitle}
-        className={`grid h-full min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left text-[0.6875rem] leading-tight transition-colors ${rowRule} ${
+        className={`grid h-full min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,6.5rem)_minmax(0,3.25rem)] items-center gap-x-1.5 px-1 text-left leading-tight transition-colors ${rowRule} ${
           isBrowsing
             ? "bg-primary/20 ring-1 ring-primary/35 ring-inset"
             : isSelected
@@ -636,7 +642,12 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
         }}
       >
         <span className="flex min-w-0 items-center gap-x-1.5">
-          <span className="min-w-0 flex-1 truncate text-base-content/90">{c.subject}</span>
+          <span
+            className="min-w-0 flex-1 truncate text-base-content/90"
+            style={{ fontSize: commitTitleFontSizePx }}
+          >
+            {c.subject}
+          </span>
           {visibleTags.length > 0 ? (
             <span className="flex shrink-0 items-center gap-1">
               {visibleTags.map((t) => (
@@ -775,6 +786,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   graphLayoutDeferredPending = false,
   graphCommitsPageSize,
   onGraphCommitsPageSizeChange,
+  graphCommitTitleFontSizePx,
   pullActionDisabled,
   onPullAction,
   pushActionDisabled,
@@ -799,6 +811,8 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   useEffect(() => {
     setPageSizeDraft(String(graphCommitsPageSize));
   }, [graphCommitsPageSize]);
+
+  const graphRowHeightPx = commitGraphRowHeightPx(graphCommitTitleFontSizePx);
 
   useEffect(() => {
     if (!authorFilterOpen && !whenFilterOpen) return;
@@ -859,9 +873,13 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   const rowVirtualizer = useVirtualizer({
     count: virtualRowCount,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => COMMIT_GRAPH_ROW_HEIGHT,
+    estimateSize: () => graphRowHeightPx,
     overscan: VIRTUAL_OVERSCAN,
   });
+
+  useEffect(() => {
+    rowVirtualizer.measure();
+  }, [graphRowHeightPx, rowVirtualizer]);
 
   useEffect(() => {
     if (!graphFocusHash) return;
@@ -1312,6 +1330,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                     activeFirstParentHashes={activeFirstParentHashes}
                     currentBranchTipHash={currentBranchTipHash}
                     wipRowAbove={showWipRow}
+                    rowHeightPx={graphRowHeightPx}
                   />
                 </div>
               </div>
@@ -1367,6 +1386,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                       isActiveBranchCommit={isActiveBranchCommit}
                       isActiveTip={isActiveTip}
                       isStashRow={Boolean(commitGraphLayout.stashRows[commitIdx])}
+                      rowHeightPx={graphRowHeightPx}
                     />
                   </div>
                 );
@@ -1455,6 +1475,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
                       openGraphStashMenu={openGraphStashMenu}
                       openGraphCommitMenu={openGraphCommitMenu}
                       openGraphTagMenu={openGraphTagMenu}
+                      commitTitleFontSizePx={graphCommitTitleFontSizePx}
                     />
                   </div>
                 );

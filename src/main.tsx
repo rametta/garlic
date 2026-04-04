@@ -8,6 +8,7 @@ import type { BranchSidebarSectionsState } from "./repoTypes";
 import { queryClient } from "./queryClient";
 import "./index.css";
 import { DEFAULT_OPENAI_MODEL } from "./generateCommitMessage";
+import { DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX } from "./commitGraphLayout";
 import { resolveThemePreference } from "./theme";
 
 export interface AppBootstrap {
@@ -19,6 +20,7 @@ export interface AppBootstrap {
   graphBranchVisible: Record<string, boolean>;
   highlightActiveBranchRows: boolean;
   graphCommitsPageSize: number;
+  graphCommitTitleFontSizePx: number;
 }
 
 export const emptyAppBootstrap: AppBootstrap = {
@@ -48,6 +50,7 @@ export const emptyAppBootstrap: AppBootstrap = {
   graphBranchVisible: {},
   highlightActiveBranchRows: false,
   graphCommitsPageSize: DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
+  graphCommitTitleFontSizePx: DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX,
 };
 
 async function bootstrap() {
@@ -72,6 +75,9 @@ async function bootstrap() {
           initialGraphBranchVisible={data.graphBranchVisible}
           highlightActiveBranchRows={data.highlightActiveBranchRows}
           graphCommitsPageSize={data.graphCommitsPageSize ?? DEFAULT_GRAPH_COMMITS_PAGE_SIZE}
+          graphCommitTitleFontSizePx={
+            data.graphCommitTitleFontSizePx ?? DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX
+          }
         />
       </QueryClientProvider>
     </React.StrictMode>,

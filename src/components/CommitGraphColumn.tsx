@@ -12,18 +12,21 @@ interface CommitGraphColumnProps {
   currentBranchTipHash: string | null;
   /** Extra row above the DAG for uncommitted working-tree changes (GitKraken-style WIP). */
   wipRowAbove?: boolean;
+  /** Vertical pitch of each commit row (must match virtualizer and layout computation). */
+  rowHeightPx?: number;
 }
 
-/** SVG DAG column: edges aligned to `COMMIT_GRAPH_ROW_HEIGHT` rows. */
+/** SVG DAG column: edges aligned to commit graph row height. */
 export function CommitGraphColumn({
   layout,
   commitHashes,
   activeFirstParentHashes,
   currentBranchTipHash,
   wipRowAbove = false,
+  rowHeightPx = COMMIT_GRAPH_ROW_HEIGHT,
 }: CommitGraphColumnProps) {
   const commitCount = commitHashes.length;
-  const rowH = COMMIT_GRAPH_ROW_HEIGHT;
+  const rowH = rowHeightPx;
   const laneW = COMMIT_GRAPH_LANE_WIDTH;
   const pad = COMMIT_GRAPH_PAD_X;
   const rowShift = wipRowAbove ? 1 : 0;
