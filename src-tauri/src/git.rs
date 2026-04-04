@@ -816,6 +816,8 @@ pub struct ConflictFileDetails {
     pub summary: String,
     pub ours: ConflictVersionPreview,
     pub theirs: ConflictVersionPreview,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4081,6 +4083,10 @@ fn conflict_preview_from_bytes(label: &str, bytes: Option<Vec<u8>>) -> ConflictV
     }
 }
 
+fn utf8_text_from_bytes(bytes: Option<Vec<u8>>) -> Option<String> {
+    bytes.and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
 #[tauri::command]
 pub fn get_conflict_file_details(
     path: String,
@@ -4117,11 +4123,13 @@ pub fn get_conflict_file_details(
         .ok_or_else(|| "This path is not currently conflicted.".to_string())?;
     let ours = git_show_blob_bytes(&path_buf, &format!(":2:{rel}"))?;
     let theirs = git_show_blob_bytes(&path_buf, &format!(":3:{rel}"))?;
+    let worktree_text = utf8_text_from_bytes(read_working_tree_bytes(&path_buf, rel)?);
     Ok(ConflictFileDetails {
         status_code: conflict.status_code,
         summary: conflict.summary,
         ours: conflict_preview_from_bytes("Ours", ours),
         theirs: conflict_preview_from_bytes("Theirs", theirs),
+        worktree_text,
     })
 }
 

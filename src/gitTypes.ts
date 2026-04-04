@@ -68,6 +68,7 @@ export interface ConflictFileDetails {
   summary: string;
   ours: ConflictVersionPreview;
   theirs: ConflictVersionPreview;
+  worktreeText?: string | null;
 }
 
 /** One path in the working tree from `list_working_tree_files` / bootstrap. */

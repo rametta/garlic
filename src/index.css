@@ -65,12 +65,20 @@ body,
   background-color: var(--diff-gutter-delete-background-color);
 }
 
+.unified-diff-grid .diff-gutter-selected {
+  background-color: var(--diff-gutter-selected-background-color);
+}
+
 .unified-diff-grid .diff-code-insert {
   background-color: var(--diff-code-insert-background-color);
 }
 
 .unified-diff-grid .diff-code-delete {
   background-color: var(--diff-code-delete-background-color);
+}
+
+.unified-diff-grid .diff-code-selected {
+  background-color: var(--diff-code-selected-background-color);
 }
 
 .unified-diff-grid .diff-code-normal {

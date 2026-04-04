@@ -23,6 +23,7 @@ import { collectLocalBranchNamesInSubtree, collectRemoteRefsInSubtree } from "./
 import { BranchSidebar, type BranchGraphControls } from "./components/BranchSidebar";
 import { CommitComposer } from "./components/CommitComposer";
 import { CommitGraphSection } from "./components/CommitGraphSection";
+import { ConflictVersionPanel } from "./components/ConflictVersionPanel";
 import { GitCommandPanel } from "./components/GitCommandPanel";
 import { OpenAiSettingsDialog } from "./components/OpenAiSettingsDialog";
 import {
@@ -68,7 +69,6 @@ import {
   combineLineStats,
   clampGraphCommitsPageSize,
   type ConflictFileDetails as RepoConflictFileDetails,
-  type ConflictVersionPreview as RepoConflictVersionPreview,
   type LineStat,
   type RepoMetadata,
   repoSnapshotFromStartup,
@@ -700,53 +700,6 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
   );
 });
 
-function ConflictPreviewPanel({
-  preview,
-  actionLabel,
-  actionKind = "outline",
-  busy = false,
-  onAction,
-}: {
-  preview: RepoConflictVersionPreview;
-  actionLabel?: string;
-  actionKind?: "primary" | "outline";
-  busy?: boolean;
-  onAction?: () => void;
-}) {
-  return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-base-300/80 bg-base-200/35">
-      <div className="flex items-center justify-between gap-2 border-b border-base-300/80 px-3 py-2">
-        <div className="text-[0.65rem] font-semibold tracking-wide text-base-content/60 uppercase">
-          {preview.label}
-        </div>
-        {actionLabel && onAction ? (
-          <button
-            type="button"
-            className={`btn btn-xs ${actionKind === "primary" ? "btn-primary" : "btn-outline"}`}
-            disabled={busy}
-            onClick={onAction}
-          >
-            {actionLabel}
-          </button>
-        ) : null}
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
-        {preview.deleted ? (
-          <p className="m-0 text-sm text-base-content/60">This choice deletes the file.</p>
-        ) : preview.isBinary ? (
-          <p className="m-0 text-sm text-base-content/60">
-            Binary file preview is not available here.
-          </p>
-        ) : (
-          <pre className="m-0 font-mono text-[0.78rem] leading-relaxed wrap-break-word whitespace-pre-wrap text-base-content">
-            {preview.text ?? ""}
-          </pre>
-        )}
-      </div>
-    </section>
-  );
-}
-
 const ConflictResolutionPane = memo(function ConflictResolutionPane({
   path,
   repoOperationLabel,
@@ -818,15 +771,21 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
           </DismissibleAlert>
         ) : details ? (
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto bg-base-200/40 p-3 xl:grid-cols-2">
-            <ConflictPreviewPanel
+            <ConflictVersionPanel
+              path={path}
               preview={details.ours}
+              side="ours"
+              worktreeText={details.worktreeText}
               actionLabel={canChooseOurs ? oursLabel : undefined}
               actionKind="primary"
               busy={busy}
               onAction={canChooseOurs ? onChooseOurs : undefined}
             />
-            <ConflictPreviewPanel
+            <ConflictVersionPanel
+              path={path}
               preview={details.theirs}
+              side="theirs"
+              worktreeText={details.worktreeText}
               actionLabel={canChooseTheirs ? theirsLabel : undefined}
               actionKind="outline"
               busy={busy}
