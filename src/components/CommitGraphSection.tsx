@@ -147,6 +147,26 @@ function IconExport({ className }: { className?: string }) {
   );
 }
 
+function IconSettings({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+    </svg>
+  );
+}
+
 export interface CommitGraphSectionProps {
   commits: CommitEntry[];
   commitGraphLayout: CommitGraphLayout;
@@ -201,6 +221,8 @@ export interface CommitGraphSectionProps {
   onClearGraphFilters: () => void;
   onExportGraphCommits: () => void;
   exportGraphCommitsDisabled: boolean;
+  /** Opens the app settings page (theme, graph font, OpenAI, …). */
+  onOpenAppSettings: () => void;
   /** Count of paths with staged or unstaged changes; when &gt; 0, a WIP row is shown above the graph. */
   wipChangedFileCount: number;
   /** Opens the first available working-tree diff when the WIP row is activated. */
@@ -780,6 +802,7 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   onClearGraphFilters,
   onExportGraphCommits,
   exportGraphCommitsDisabled,
+  onOpenAppSettings,
   wipChangedFileCount,
   onWipSelect,
   openGraphWipMenu,
@@ -1065,6 +1088,17 @@ export const CommitGraphSection = memo(function CommitGraphSection({
             >
               <IconExport className="h-3.5 w-3.5 shrink-0" />
               <span>Export</span>
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              className="flex items-center gap-1.5"
+              title="Open app settings"
+              onClick={onOpenAppSettings}
+            >
+              <IconSettings className="h-3.5 w-3.5 shrink-0" />
+              <span>Settings</span>
             </button>
           </li>
         </ul>

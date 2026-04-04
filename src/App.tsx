@@ -6319,6 +6319,7 @@ export default function App({
                                   onClearGraphFilters={clearGraphFilters}
                                   onExportGraphCommits={handleExportGraphCommits}
                                   exportGraphCommitsDisabled={graphExportListCommits.length === 0}
+                                  onOpenAppSettings={openAppSettings}
                                   wipChangedFileCount={wipChangedFileCount}
                                   onWipSelect={handleSelectWipRow}
                                   graphCommitsPageSize={graphCommitsPageSize}
