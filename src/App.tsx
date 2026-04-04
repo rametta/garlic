@@ -80,6 +80,7 @@ import {
 } from "./gitTypes";
 import {
   ResetMode,
+  ResolveConflictChoice,
   useAmendLastCommitMutation,
   useAbortRepoOperationMutation,
   useCheckoutLocalBranchMutation,
@@ -716,6 +717,7 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
   canChooseTheirs,
   onChooseOurs,
   onChooseTheirs,
+  onChooseBoth,
   onOpenInCursor,
   onBack,
   onDismissError,
@@ -732,10 +734,19 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
   canChooseTheirs: boolean;
   onChooseOurs: () => void;
   onChooseTheirs: () => void;
+  onChooseBoth: () => void;
   onOpenInCursor: () => void;
   onBack: () => void;
   onDismissError: () => void;
 }) {
+  const canChooseBoth =
+    details !== null &&
+    details.worktreeText != null &&
+    !details.ours.deleted &&
+    !details.theirs.deleted &&
+    !details.ours.isBinary &&
+    !details.theirs.isBinary;
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 p-3">
@@ -758,9 +769,21 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
       </div>
       <div className="shrink-0 border-b border-base-300/80 bg-base-200/30 p-3">
         <p className="m-0 text-xs leading-relaxed text-base-content/70">
-          Choose the version to keep. Garlic will stage the selected result as resolved.
+          Choose the result to stage. Garlic will mark the file as resolved with your selection.
           {repoOperationLabel ? ` ${repoOperationLabel}.` : ""}
         </p>
+        {canChooseBoth ? (
+          <div className="mt-3">
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              disabled={busy}
+              onClick={onChooseBoth}
+            >
+              Select both
+            </button>
+          </div>
+        ) : null}
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {loading ? (
@@ -3158,7 +3181,7 @@ export default function App({
   }, [repo, skipRepoOperationMutation]);
 
   const resolveConflictChoice = useCallback(
-    async (filePath: string, choice: "ours" | "theirs") => {
+    async (filePath: string, choice: ResolveConflictChoice) => {
       if (!repo?.path || repo.error) return;
       if (syncingStagePaths.has(filePath)) return;
       setOperationError(null);
@@ -5622,13 +5645,19 @@ export default function App({
                                             onChooseOurs={() => {
                                               void resolveConflictChoice(
                                                 selectedConflictFile.path,
-                                                "ours",
+                                                ResolveConflictChoice.Ours,
                                               );
                                             }}
                                             onChooseTheirs={() => {
                                               void resolveConflictChoice(
                                                 selectedConflictFile.path,
-                                                "theirs",
+                                                ResolveConflictChoice.Theirs,
+                                              );
+                                            }}
+                                            onChooseBoth={() => {
+                                              void resolveConflictChoice(
+                                                selectedConflictFile.path,
+                                                ResolveConflictChoice.Both,
                                               );
                                             }}
                                             onOpenInCursor={() => {
@@ -5849,10 +5878,22 @@ export default function App({
                                     selectedConflictFile.conflict?.canChooseTheirs ?? false
                                   }
                                   onChooseOurs={() => {
-                                    void resolveConflictChoice(selectedDiffPath, "ours");
+                                    void resolveConflictChoice(
+                                      selectedDiffPath,
+                                      ResolveConflictChoice.Ours,
+                                    );
                                   }}
                                   onChooseTheirs={() => {
-                                    void resolveConflictChoice(selectedDiffPath, "theirs");
+                                    void resolveConflictChoice(
+                                      selectedDiffPath,
+                                      ResolveConflictChoice.Theirs,
+                                    );
+                                  }}
+                                  onChooseBoth={() => {
+                                    void resolveConflictChoice(
+                                      selectedDiffPath,
+                                      ResolveConflictChoice.Both,
+                                    );
                                   }}
                                   onOpenInCursor={() => {
                                     void openSelectedDiffInCursor();

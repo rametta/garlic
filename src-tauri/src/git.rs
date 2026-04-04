@@ -2506,6 +2506,14 @@ pub enum ResetMode {
     Hard = 1,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize_repr)]
+#[repr(u8)]
+pub enum ResolveConflictChoice {
+    Ours = 0,
+    Theirs = 1,
+    Both = 2,
+}
+
 /// Reset the checked-out branch to `commit_hash` using `git reset --soft` or `git reset --hard`.
 #[tauri::command]
 pub fn reset_current_branch_to_commit(
@@ -3375,7 +3383,7 @@ pub fn resolve_conflict_choice(
     app: AppHandle,
     path: String,
     file_path: String,
-    choice: String,
+    choice: ResolveConflictChoice,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
@@ -3383,18 +3391,28 @@ pub fn resolve_conflict_choice(
     if rel.is_empty() {
         return Err("File path cannot be empty.".to_string());
     }
-    let choice = choice.trim();
-    if choice != "ours" && choice != "theirs" {
-        return Err("Conflict choice must be \"ours\" or \"theirs\".".to_string());
-    }
     let unmerged = parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
     let Some(stages) = unmerged.get(rel).copied() else {
         return Err("This path is not currently conflicted.".to_string());
     };
+    if choice == ResolveConflictChoice::Both {
+        if !stages.has_ours || !stages.has_theirs {
+            return Err("Select both is only available when both sides have file contents.".to_string());
+        }
+        let worktree_text = utf8_text_from_bytes(read_working_tree_bytes(&path_buf, rel)?)
+            .ok_or_else(|| "Select both is only available for text conflicts.".to_string())?;
+        let resolved = resolve_conflict_markers_keep_both(&worktree_text).ok_or_else(|| {
+            "Could not combine both sides for this conflict automatically.".to_string()
+        })?;
+        std::fs::write(path_buf.join(rel), resolved)
+            .map_err(|e| format!("Could not write resolved file: {e}"))?;
+        git_output(&path_buf, &["add", "--", rel])?;
+        return Ok(());
+    }
     let delete_path = match choice {
-        "ours" => !stages.has_ours,
-        "theirs" => !stages.has_theirs,
-        _ => false,
+        ResolveConflictChoice::Ours => !stages.has_ours,
+        ResolveConflictChoice::Theirs => !stages.has_theirs,
+        ResolveConflictChoice::Both => false,
     };
     if delete_path {
         run_git_streaming(
@@ -3406,7 +3424,7 @@ pub fn resolve_conflict_choice(
         )?;
         return Ok(());
     }
-    let checkout_args = if choice == "ours" {
+    let checkout_args = if choice == ResolveConflictChoice::Ours {
         ["checkout", "--ours", "--", rel]
     } else {
         ["checkout", "--theirs", "--", rel]
@@ -4085,6 +4103,63 @@ fn conflict_preview_from_bytes(label: &str, bytes: Option<Vec<u8>>) -> ConflictV
 
 fn utf8_text_from_bytes(bytes: Option<Vec<u8>>) -> Option<String> {
     bytes.and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
+fn trim_line_ending(line: &str) -> &str {
+    line.trim_end_matches(['\n', '\r'])
+}
+
+fn resolve_conflict_markers_keep_both(worktree_text: &str) -> Option<String> {
+    let lines = worktree_text.split_inclusive('\n').collect::<Vec<_>>();
+    let mut output = String::with_capacity(worktree_text.len());
+    let mut i = 0usize;
+    let mut found_conflict = false;
+
+    while i < lines.len() {
+        let line = lines[i];
+        if !trim_line_ending(line).starts_with("<<<<<<<") {
+            output.push_str(line);
+            i += 1;
+            continue;
+        }
+
+        found_conflict = true;
+        i += 1;
+
+        while i < lines.len() {
+            let marker = trim_line_ending(lines[i]);
+            if marker.starts_with("|||||||") || marker.starts_with("=======") {
+                break;
+            }
+            output.push_str(lines[i]);
+            i += 1;
+        }
+
+        if i < lines.len() && trim_line_ending(lines[i]).starts_with("|||||||") {
+            i += 1;
+            while i < lines.len() && !trim_line_ending(lines[i]).starts_with("=======") {
+                i += 1;
+            }
+        }
+
+        if i >= lines.len() || !trim_line_ending(lines[i]).starts_with("=======") {
+            return None;
+        }
+
+        i += 1;
+        while i < lines.len() && !trim_line_ending(lines[i]).starts_with(">>>>>>>") {
+            output.push_str(lines[i]);
+            i += 1;
+        }
+
+        if i >= lines.len() {
+            return None;
+        }
+
+        i += 1;
+    }
+
+    found_conflict.then_some(output)
 }
 
 #[tauri::command]

@@ -312,6 +312,13 @@ export enum ResetMode {
   Hard,
 }
 
+/** Matches `ResolveConflictChoice` in `git.rs` (`#[repr(u8)]`). */
+export enum ResolveConflictChoice {
+  Ours = 0,
+  Theirs = 1,
+  Both = 2,
+}
+
 export function useResetCurrentBranchToCommitMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHash: string; mode: ResetMode }) =>
@@ -603,7 +610,7 @@ export function useUnstagePatchMutation() {
 
 export function useResolveConflictChoiceMutation() {
   return useRepoCommandMutation({
-    mutationFn: (variables: { path: string; filePath: string; choice: "ours" | "theirs" }) =>
+    mutationFn: (variables: { path: string; filePath: string; choice: ResolveConflictChoice }) =>
       invokeRepoMutation("resolve_conflict_choice", variables),
   });
 }
