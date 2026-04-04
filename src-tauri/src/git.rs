@@ -1668,7 +1668,13 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         ..base
     };
     crate::active_repo::set_path(&app, Some(path.clone()));
-    crate::window_title::set_main_window_title(&app, &meta.name);
+    crate::window_title::set_main_window_title_for_repo_head(
+        &app,
+        &meta.name,
+        meta.detached,
+        meta.branch.as_deref(),
+        meta.head_short.as_deref(),
+    );
     Ok(meta)
 }
 
@@ -3397,7 +3403,9 @@ pub fn resolve_conflict_choice(
     };
     if choice == ResolveConflictChoice::Both {
         if !stages.has_ours || !stages.has_theirs {
-            return Err("Select both is only available when both sides have file contents.".to_string());
+            return Err(
+                "Select both is only available when both sides have file contents.".to_string(),
+            );
         }
         let worktree_text = utf8_text_from_bytes(read_working_tree_bytes(&path_buf, rel)?)
             .ok_or_else(|| "Select both is only available for text conflicts.".to_string())?;
