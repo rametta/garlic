@@ -4216,11 +4216,84 @@ pub fn get_conflict_file_details(
     })
 }
 
+const MAX_COMMIT_FILE_PATH_DISPLAY: usize = 40;
+
+fn split_repo_path_for_display(path: &str) -> (&str, &str) {
+    match path.rfind('/') {
+        Some(i) => (&path[..i + 1], &path[i + 1..]),
+        None => ("", path),
+    }
+}
+
+fn truncate_middle(s: &str, max_len: usize) -> String {
+    if max_len == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    if len <= max_len {
+        return s.to_string();
+    }
+    if max_len <= 3 {
+        return chars.iter().take(max_len).collect();
+    }
+    let left = (max_len - 3) / 2;
+    let right = max_len - 3 - left;
+    let mut out = String::with_capacity(max_len);
+    out.extend(chars.iter().take(left));
+    out.push_str("...");
+    out.extend(chars[len - right..].iter());
+    out
+}
+
+fn commit_path_display_parts(path: &str) -> (Option<String>, String, Option<String>) {
+    let (dir, base) = split_repo_path_for_display(path);
+    if path.chars().count() <= MAX_COMMIT_FILE_PATH_DISPLAY {
+        return (
+            if dir.is_empty() {
+                None
+            } else {
+                Some(dir.to_string())
+            },
+            base.to_string(),
+            None,
+        );
+    }
+    if base.chars().count() <= MAX_COMMIT_FILE_PATH_DISPLAY {
+        let max_dir = MAX_COMMIT_FILE_PATH_DISPLAY.saturating_sub(base.chars().count());
+        let dir_trunc = if max_dir > 0 {
+            truncate_middle(dir, max_dir)
+        } else {
+            String::new()
+        };
+        return (
+            if dir_trunc.is_empty() {
+                None
+            } else {
+                Some(dir_trunc)
+            },
+            base.to_string(),
+            Some(path.to_string()),
+        );
+    }
+    (
+        None,
+        truncate_middle(base, MAX_COMMIT_FILE_PATH_DISPLAY),
+        Some(path.to_string()),
+    )
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitFileEntry {
     pub path: String,
     pub stats: LineStat,
+    /// Muted directory segment (may be middle-truncated); `None` if only the basename is shown.
+    pub path_display_dir: Option<String>,
+    /// Emphasized filename segment (may be middle-truncated when the basename alone exceeds the cap).
+    pub path_display_base: String,
+    /// Full path for native tooltip when any truncation applies.
+    pub path_display_title: Option<String>,
 }
 
 /// Paths changed in a single commit with line stats (`git show --numstat`).
@@ -4242,13 +4315,20 @@ pub fn list_commit_files(
     paths.sort();
     Ok(paths
         .into_iter()
-        .map(|p| CommitFileEntry {
-            stats: stat_map.get(&p).cloned().unwrap_or(LineStat {
-                additions: 0,
-                deletions: 0,
-                is_binary: false,
-            }),
-            path: p,
+        .map(|p| {
+            let (path_display_dir, path_display_base, path_display_title) =
+                commit_path_display_parts(&p);
+            CommitFileEntry {
+                stats: stat_map.get(&p).cloned().unwrap_or(LineStat {
+                    additions: 0,
+                    deletions: 0,
+                    is_binary: false,
+                }),
+                path: p,
+                path_display_dir,
+                path_display_base,
+                path_display_title,
+            }
         })
         .collect())
 }
@@ -4898,7 +4978,31 @@ pub async fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_porcelain_v1_z, parse_porcelain_xy, parse_unmerged_index_z};
+    use super::{
+        commit_path_display_parts, parse_porcelain_v1_z, parse_porcelain_xy, parse_unmerged_index_z,
+    };
+
+    #[test]
+    fn commit_path_display_short_path_no_title() {
+        let (dir, base, title) = commit_path_display_parts("src/foo.ts");
+        assert_eq!(dir.as_deref(), Some("src/"));
+        assert_eq!(base, "foo.ts");
+        assert!(title.is_none());
+    }
+
+    #[test]
+    fn commit_path_display_truncates_dir_middle() {
+        let long = "abcdefghijklmnopqrstuvwxyz0123456789/extra/segments/here/file.rs";
+        let (dir, base, title) = commit_path_display_parts(long);
+        assert_eq!(base, "file.rs");
+        assert!(dir.as_ref().is_some_and(|d| d.contains("...")));
+        assert_eq!(title.as_deref(), Some(long));
+        let shown = dir
+            .as_ref()
+            .map(|d| d.chars().count() + base.chars().count())
+            .unwrap_or(base.chars().count());
+        assert!(shown <= 40, "shown={shown}");
+    }
 
     #[test]
     fn porcelain_xy_marks_untracked_as_unstaged() {

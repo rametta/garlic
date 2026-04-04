@@ -256,6 +256,10 @@ interface CommitSignatureResultPayload {
 export interface CommitFileEntry {
   path: string;
   stats: LineStat;
+  /** Muted directory segment from Rust (`list_commit_files`). */
+  pathDisplayDir: string | null;
+  pathDisplayBase: string;
+  pathDisplayTitle: string | null;
 }
 
 interface CommitCoAuthor {
@@ -6254,8 +6258,24 @@ export default function App({
                                                         );
                                                       }}
                                                     >
-                                                      <code className="list-col-grow min-w-0 font-mono wrap-break-word text-base-content/95">
-                                                        {entry.path}
+                                                      <code
+                                                        className="list-col-grow min-w-0 font-mono wrap-break-word"
+                                                        title={entry.pathDisplayTitle ?? undefined}
+                                                      >
+                                                        {entry.pathDisplayDir ? (
+                                                          <>
+                                                            <span className="text-base-content/45">
+                                                              {entry.pathDisplayDir}
+                                                            </span>
+                                                            <span className="text-base-content">
+                                                              {entry.pathDisplayBase}
+                                                            </span>
+                                                          </>
+                                                        ) : (
+                                                          <span className="text-base-content">
+                                                            {entry.pathDisplayBase}
+                                                          </span>
+                                                        )}
                                                       </code>
                                                       <DiffLineStatBadge stat={entry.stats} />
                                                     </div>
