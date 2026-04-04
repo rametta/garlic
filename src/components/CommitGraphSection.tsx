@@ -1,5 +1,15 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { formatAuthorDisplay, formatDate, formatRelativeShort } from "../appFormat";
 import { CommitGraphColumn } from "./CommitGraphColumn";
 import {
@@ -329,6 +339,304 @@ function computeRowLaneMeta(
   };
 }
 
+type GraphBranchTipsCellProps = {
+  laneColor: string | undefined;
+  currentBranchName: string | null;
+  visibleLocalTips: LocalBranchEntry[];
+  visibleRemoteTips: RemoteBranchEntry[];
+  branchBusy: string | null;
+  openGraphBranchLocalMenu: (branchName: string, clientX: number, clientY: number) => void;
+  openGraphBranchRemoteMenu: (fullRef: string, clientX: number, clientY: number) => void;
+};
+
+const GraphBranchTipsCell = memo(function GraphBranchTipsCell({
+  laneColor,
+  currentBranchName,
+  visibleLocalTips,
+  visibleRemoteTips,
+  branchBusy,
+  openGraphBranchLocalMenu,
+  openGraphBranchRemoteMenu,
+}: GraphBranchTipsCellProps) {
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
+
+  const {
+    primaryLocal,
+    primaryRemoteOnly,
+    extraLocals,
+    overflowRemotes,
+    showCurrentCheck,
+    tipsTitle,
+  } = useMemo(() => {
+    const locals = visibleLocalTips;
+    const remotes = visibleRemoteTips;
+    const showCurrentCheck =
+      currentBranchName !== null && locals.some((b) => b.name === currentBranchName);
+    const tipsTitle = [...locals.map((b) => b.name), ...remotes.map((r) => r.name)].join(", ");
+
+    if (locals.length > 0) {
+      const primary =
+        (currentBranchName ? locals.find((b) => b.name === currentBranchName) : null) ?? locals[0];
+      const extraLocals = locals.filter((b) => b.name !== primary.name);
+      return {
+        primaryLocal: primary,
+        primaryRemoteOnly: null as RemoteBranchEntry | null,
+        extraLocals,
+        overflowRemotes: remotes,
+        showCurrentCheck,
+        tipsTitle,
+      };
+    }
+    if (remotes.length > 0) {
+      const primary = remotes[0];
+      return {
+        primaryLocal: null,
+        primaryRemoteOnly: primary,
+        extraLocals: [] as LocalBranchEntry[],
+        overflowRemotes: remotes.slice(1),
+        showCurrentCheck,
+        tipsTitle,
+      };
+    }
+    return {
+      primaryLocal: null,
+      primaryRemoteOnly: null,
+      extraLocals: [],
+      overflowRemotes: [],
+      showCurrentCheck,
+      tipsTitle,
+    };
+  }, [visibleLocalTips, visibleRemoteTips, currentBranchName]);
+
+  const overflowCount = extraLocals.length + overflowRemotes.length;
+  const hasOverflow = overflowCount > 0;
+
+  const cancelClose = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleClose = useCallback(() => {
+    cancelClose();
+    closeTimerRef.current = setTimeout(() => {
+      setPopoverOpen(false);
+      closeTimerRef.current = null;
+    }, 220);
+  }, [cancelClose]);
+
+  const syncPopoverPosition = useCallback(() => {
+    const anchor = anchorRef.current;
+    const pop = popoverRef.current;
+    if (!anchor) return;
+    const r = anchor.getBoundingClientRect();
+    let left = r.left;
+    const top = r.bottom + 4;
+    if (pop) {
+      const pw = pop.getBoundingClientRect().width;
+      const margin = 8;
+      if (left + pw > window.innerWidth - margin) {
+        left = window.innerWidth - margin - pw;
+      }
+      if (left < margin) {
+        left = margin;
+      }
+    }
+    setPopoverPos({ top, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!popoverOpen) return;
+    syncPopoverPosition();
+    const raf = requestAnimationFrame(() => {
+      syncPopoverPosition();
+    });
+    const onScrollOrResize = () => {
+      syncPopoverPosition();
+    };
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [popoverOpen, syncPopoverPosition, overflowCount]);
+
+  const borderStyle =
+    laneColor !== undefined
+      ? {
+          borderLeft: `2px solid ${laneColor}`,
+          paddingLeft: 4,
+        }
+      : undefined;
+
+  const onEnterAnchor = useCallback(() => {
+    if (!hasOverflow) return;
+    cancelClose();
+    syncPopoverPosition();
+    setPopoverOpen(true);
+  }, [hasOverflow, cancelClose, syncPopoverPosition]);
+
+  const onLocalContext = useCallback(
+    (name: string, e: ReactMouseEvent) => {
+      if (branchBusy) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openGraphBranchLocalMenu(name, e.clientX, e.clientY);
+    },
+    [branchBusy, openGraphBranchLocalMenu],
+  );
+
+  const onRemoteContext = useCallback(
+    (name: string, e: ReactMouseEvent) => {
+      if (branchBusy) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openGraphBranchRemoteMenu(name, e.clientX, e.clientY);
+    },
+    [branchBusy, openGraphBranchRemoteMenu],
+  );
+
+  if (!primaryLocal && !primaryRemoteOnly) {
+    return null;
+  }
+
+  const primaryIsCurrent =
+    primaryLocal !== null && currentBranchName !== null && primaryLocal.name === currentBranchName;
+
+  const primarySpan = primaryLocal ? (
+    <span
+      className={`min-w-0 flex-1 cursor-context-menu truncate font-medium ${
+        primaryIsCurrent ? "rounded-sm bg-primary/14 px-1 text-primary" : ""
+      }`}
+      onContextMenu={(e) => {
+        onLocalContext(primaryLocal.name, e);
+      }}
+    >
+      {primaryLocal.name}
+    </span>
+  ) : (
+    <span
+      className="min-w-0 flex-1 cursor-context-menu truncate font-medium text-secondary"
+      onContextMenu={(e) => {
+        if (primaryRemoteOnly) onRemoteContext(primaryRemoteOnly.name, e);
+      }}
+    >
+      {primaryRemoteOnly.name}
+    </span>
+  );
+
+  const overflowPanel =
+    hasOverflow && popoverOpen && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={popoverRef}
+            role="group"
+            aria-label="More branch tips at this commit"
+            className="fixed z-[9999] max-h-48 max-w-[min(20rem,calc(100vw-1rem))] min-w-[10rem] overflow-y-auto rounded-md border border-base-300 bg-base-100 py-1 shadow-lg"
+            style={{ top: popoverPos.top, left: popoverPos.left }}
+            onMouseEnter={cancelClose}
+            onMouseLeave={scheduleClose}
+          >
+            {extraLocals.length > 0 ? (
+              <div className="px-1.5 pb-0.5">
+                <div className="px-1 pb-0.5 text-[0.55rem] font-medium tracking-wide text-base-content/50 uppercase">
+                  Local
+                </div>
+                <ul className="m-0 flex list-none flex-col gap-0 p-0">
+                  {extraLocals.map((b) => (
+                    <li key={`overflow-l:${b.name}`}>
+                      <button
+                        type="button"
+                        className={`btn h-auto min-h-0 w-full cursor-context-menu justify-start rounded px-2 py-1 text-left text-[0.62rem] leading-tight font-medium btn-ghost btn-xs ${
+                          currentBranchName === b.name ? "bg-primary/12 text-primary" : ""
+                        }`}
+                        title={b.name}
+                        onContextMenu={(e) => {
+                          onLocalContext(b.name, e);
+                        }}
+                        onClick={(e) => {
+                          e.preventDefault();
+                        }}
+                      >
+                        {b.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {overflowRemotes.length > 0 ? (
+              <div className="px-1.5 pb-0.5">
+                <div className="px-1 pb-0.5 text-[0.55rem] font-medium tracking-wide text-base-content/50 uppercase">
+                  Remote
+                </div>
+                <ul className="m-0 flex list-none flex-col gap-0 p-0">
+                  {overflowRemotes.map((r) => (
+                    <li key={`overflow-r:${r.name}`}>
+                      <button
+                        type="button"
+                        className="btn h-auto min-h-0 w-full cursor-context-menu justify-start rounded px-2 py-1 text-left text-[0.62rem] leading-tight font-medium text-secondary btn-ghost btn-xs"
+                        title={r.name}
+                        onContextMenu={(e) => {
+                          onRemoteContext(r.name, e);
+                        }}
+                        onClick={(e) => {
+                          e.preventDefault();
+                        }}
+                      >
+                        {r.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>,
+          document.body,
+        )
+      : null;
+
+  return (
+    <>
+      <span
+        ref={anchorRef}
+        className={`flex min-w-0 flex-1 items-center gap-x-0.5 text-[0.62rem] leading-tight text-base-content ${
+          hasOverflow ? "cursor-default" : ""
+        }`}
+        style={borderStyle}
+        title={hasOverflow ? `${tipsTitle} — hover for more` : tipsTitle}
+        aria-expanded={hasOverflow ? popoverOpen : undefined}
+        aria-haspopup={hasOverflow ? "menu" : undefined}
+        onMouseEnter={onEnterAnchor}
+        onMouseLeave={scheduleClose}
+      >
+        {showCurrentCheck ? (
+          <span className="shrink-0 text-primary" aria-hidden>
+            ✓
+          </span>
+        ) : null}
+        {primarySpan}
+        {hasOverflow ? (
+          <span
+            className="shrink-0 rounded px-0.5 text-[0.55rem] font-medium text-base-content/55 tabular-nums hover:bg-base-300/60 hover:text-base-content"
+            aria-hidden
+          >
+            +{overflowCount}
+          </span>
+        ) : null}
+      </span>
+      {overflowPanel}
+    </>
+  );
+});
+
 function getGraphRowBackgroundClass(args: {
   isBrowsing: boolean;
   isSelected: boolean;
@@ -515,63 +823,17 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   const stashRef = c.stashRef?.trim() || null;
   const { laneColor, visibleLocalTips, visibleRemoteTips, visibleTags } = laneMeta;
   const hasBranchTips = visibleLocalTips.length > 0 || visibleRemoteTips.length > 0;
-  const tipsHereNames = [
-    ...visibleLocalTips.map((b) => b.name),
-    ...visibleRemoteTips.map((r) => r.name),
-  ];
 
   const branchCell = hasBranchTips ? (
-    <span
-      className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[0.62rem] leading-tight text-base-content"
-      title={tipsHereNames.join(", ")}
-      style={
-        laneColor
-          ? {
-              borderLeft: `2px solid ${laneColor}`,
-              paddingLeft: 4,
-            }
-          : undefined
-      }
-    >
-      {visibleLocalTips.some((b) => b.name === currentBranchName) ? (
-        <span className="shrink-0 text-primary" aria-hidden>
-          ✓
-        </span>
-      ) : null}
-      {visibleLocalTips.map((b) => (
-        <span
-          key={`l:${b.name}`}
-          className={`max-w-full min-w-0 cursor-context-menu truncate font-medium ${
-            b.name === currentBranchName ? "rounded-sm bg-primary/14 px-1 text-primary" : ""
-          }`}
-          onContextMenu={(e) => {
-            if (branchBusy) return;
-            e.preventDefault();
-            e.stopPropagation();
-            openGraphBranchLocalMenu(b.name, e.clientX, e.clientY);
-          }}
-        >
-          {b.name}
-        </span>
-      ))}
-      {visibleLocalTips.length > 0 && visibleRemoteTips.length > 0 ? (
-        <span className="shrink-0 text-[0.55rem] text-base-content/45" aria-hidden />
-      ) : null}
-      {visibleRemoteTips.map((r) => (
-        <span
-          key={`r:${r.name}`}
-          className="max-w-full min-w-0 cursor-context-menu truncate font-medium text-secondary"
-          onContextMenu={(e) => {
-            if (branchBusy) return;
-            e.preventDefault();
-            e.stopPropagation();
-            openGraphBranchRemoteMenu(r.name, e.clientX, e.clientY);
-          }}
-        >
-          {r.name}
-        </span>
-      ))}
-    </span>
+    <GraphBranchTipsCell
+      laneColor={laneColor}
+      currentBranchName={currentBranchName}
+      visibleLocalTips={visibleLocalTips}
+      visibleRemoteTips={visibleRemoteTips}
+      branchBusy={branchBusy}
+      openGraphBranchLocalMenu={openGraphBranchLocalMenu}
+      openGraphBranchRemoteMenu={openGraphBranchRemoteMenu}
+    />
   ) : stashRef ? (
     <span
       className="flex min-w-0 cursor-context-menu flex-wrap items-center gap-1 text-[0.62rem] leading-tight text-base-content"
