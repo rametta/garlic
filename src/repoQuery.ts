@@ -23,6 +23,24 @@ export interface RepoLists {
   workingTreeFiles: WorkingTreeFile[];
 }
 
+export interface RepoListSelection {
+  localBranches?: boolean;
+  remoteBranches?: boolean;
+  worktrees?: boolean;
+  tags?: boolean;
+  stashes?: boolean;
+  workingTreeFiles?: boolean;
+}
+
+export const ALL_REPO_LISTS: Required<RepoListSelection> = {
+  localBranches: true,
+  remoteBranches: true,
+  worktrees: true,
+  tags: true,
+  stashes: true,
+  workingTreeFiles: true,
+};
+
 export const repoQueryKeys = {
   root: (repoPath: string) => ["repo", repoPath] as const,
   snapshot: (repoPath: string) => ["repo", repoPath, "snapshot"] as const,
@@ -47,24 +65,64 @@ export function withRepoLists(snapshot: RepoSnapshot, lists: RepoLists): RepoSna
   };
 }
 
-export async function loadRepoLists(path: string): Promise<RepoLists> {
-  const [localBranches, remoteBranches, worktrees, tags, workingTreeFiles, stashes] =
-    await Promise.all([
-      invoke<LocalBranchEntry[]>("list_local_branches", { path }),
-      invoke<RemoteBranchEntry[]>("list_remote_branches", { path }),
-      invoke<WorktreeEntry[]>("list_worktrees", { path }),
-      invoke<TagEntry[]>("list_tags", { path }),
-      invoke<WorkingTreeFile[]>("list_working_tree_files", { path }),
-      invoke<StashEntry[]>("list_stashes", { path }),
-    ]);
+export function mergeRepoLists(
+  snapshot: RepoSnapshot,
+  lists: RepoLists,
+  selection: RepoListSelection = ALL_REPO_LISTS,
+): RepoSnapshot {
+  return {
+    ...snapshot,
+    ...(selection.localBranches !== false ? { localBranches: lists.localBranches } : {}),
+    ...(selection.remoteBranches !== false ? { remoteBranches: lists.remoteBranches } : {}),
+    ...(selection.worktrees !== false ? { worktrees: lists.worktrees } : {}),
+    ...(selection.tags !== false ? { tags: lists.tags } : {}),
+    ...(selection.stashes !== false ? { stashes: lists.stashes } : {}),
+    ...(selection.workingTreeFiles !== false ? { workingTreeFiles: lists.workingTreeFiles } : {}),
+  };
+}
+
+export async function loadRepoLists(
+  path: string,
+  selection: RepoListSelection = ALL_REPO_LISTS,
+): Promise<RepoLists> {
+  const requested = { ...ALL_REPO_LISTS, ...selection };
+  const requests: Promise<unknown>[] = [];
+
+  if (requested.localBranches) {
+    requests.push(invoke<LocalBranchEntry[]>("list_local_branches", { path }));
+  }
+  if (requested.remoteBranches) {
+    requests.push(invoke<RemoteBranchEntry[]>("list_remote_branches", { path }));
+  }
+  if (requested.worktrees) {
+    requests.push(invoke<WorktreeEntry[]>("list_worktrees", { path }));
+  }
+  if (requested.tags) {
+    requests.push(invoke<TagEntry[]>("list_tags", { path }));
+  }
+  if (requested.workingTreeFiles) {
+    requests.push(invoke<WorkingTreeFile[]>("list_working_tree_files", { path }));
+  }
+  if (requested.stashes) {
+    requests.push(invoke<StashEntry[]>("list_stashes", { path }));
+  }
+
+  const results = await Promise.all(requests);
+  let offset = 0;
+  const take = <T>(enabled: boolean, fallback: T): T => {
+    if (!enabled) return fallback;
+    const value = results[offset] as T;
+    offset += 1;
+    return value;
+  };
 
   return {
-    localBranches,
-    remoteBranches,
-    worktrees,
-    tags,
-    stashes,
-    workingTreeFiles,
+    localBranches: take(requested.localBranches, []),
+    remoteBranches: take(requested.remoteBranches, []),
+    worktrees: take(requested.worktrees, []),
+    tags: take(requested.tags, []),
+    workingTreeFiles: take(requested.workingTreeFiles, []),
+    stashes: take(requested.stashes, []),
   };
 }
 

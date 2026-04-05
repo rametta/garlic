@@ -121,10 +121,12 @@ import {
   useUnstagePathsMutation,
 } from "./repoMutations";
 import {
+  type RepoListSelection,
   emptyRepoSnapshot,
   getRepoSnapshot,
   loadRepoLists,
   loadRepoSnapshot,
+  mergeRepoLists,
   repoQueryKeys,
   setRepoSnapshot,
   updateRepoSnapshot,
@@ -1273,13 +1275,18 @@ export default function App({
     "create" | "create-and-push" | null
   >(null);
   const refreshLists = useCallback(
-    async (repoPath: string): Promise<WorkingTreeFile[] | null> => {
+    async (
+      repoPath: string,
+      selection: RepoListSelection = {},
+    ): Promise<WorkingTreeFile[] | null> => {
       setListsError(null);
       try {
-        const lists = await loadRepoLists(repoPath);
+        const lists = await loadRepoLists(repoPath, selection);
         if (activeRepoPathRef.current !== repoPath) return null;
-        updateRepoSnapshot(queryClient, repoPath, (snapshot) => withRepoLists(snapshot, lists));
-        return lists.workingTreeFiles;
+        updateRepoSnapshot(queryClient, repoPath, (snapshot) =>
+          mergeRepoLists(snapshot, lists, selection),
+        );
+        return selection.workingTreeFiles === false ? null : lists.workingTreeFiles;
       } catch (e) {
         setListsError(invokeErrorMessage(e));
         return null;
@@ -2552,7 +2559,14 @@ export default function App({
             }
           } else if (!fromFocus) {
             lastFullBranchListRefreshAtRef.current = Date.now();
-            files = await refreshLists(pathAtStart);
+            files = await refreshLists(pathAtStart, {
+              localBranches: true,
+              remoteBranches: true,
+              workingTreeFiles: true,
+              worktrees: false,
+              tags: false,
+              stashes: false,
+            });
           } else {
             const now = Date.now();
             const needFullBranchList =

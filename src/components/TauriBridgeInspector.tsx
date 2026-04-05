@@ -52,7 +52,7 @@ function formatBridgeDebugExport(entries: readonly TauriBridgeLogEntry[]) {
     lines.push("```");
     lines.push(formatValue(entry.args));
     lines.push("```");
-    lines.push(`- ${entry.status }`);
+    lines.push(`- ${entry.status}`);
     lines.push("");
   }
 
