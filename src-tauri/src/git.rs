@@ -4759,38 +4759,30 @@ fn is_valid_stash_ref(s: &str) -> bool {
 pub fn list_stashes(path: String) -> Result<Vec<StashEntry>, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let text = git_output(&path_buf, &["stash", "list"])?;
-    let mut out = Vec::new();
+    let text = git_output(&path_buf, &["stash", "list", "--format=%gd%x1f%H%x1f%gs"])?;
+    let mut out = Vec::with_capacity(text.lines().size_hint().0);
     for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+        let line = line.trim();
+        if line.is_empty() {
             continue;
         }
-        let Some(rest) = trimmed.strip_prefix("stash@{") else {
+        let mut parts = line.splitn(3, '\x1f');
+        let Some(ref_name) = parts.next().map(str::trim) else {
             continue;
         };
-        let Some(end) = rest.find('}') else {
+        let Some(commit_hash) = parts.next().map(str::trim) else {
             continue;
         };
-        let idx_str = &rest[..end];
-        if idx_str.is_empty() || !idx_str.chars().all(|c| c.is_ascii_digit()) {
+        let Some(message) = parts.next().map(str::trim) else {
+            continue;
+        };
+        if !is_valid_stash_ref(ref_name) || commit_hash.is_empty() {
             continue;
         }
-        let after = rest.get(end + 1..).unwrap_or("");
-        let message = if let Some(m) = after.strip_prefix(": ") {
-            m.to_string()
-        } else {
-            after.trim_start().to_string()
-        };
-        let ref_name = format!("stash@{{{idx_str}}}");
-        let commit_hash = match git_output(&path_buf, &["rev-parse", &ref_name]) {
-            Ok(h) => h,
-            Err(_) => continue,
-        };
         out.push(StashEntry {
-            ref_name,
-            message,
-            commit_hash,
+            ref_name: ref_name.to_string(),
+            message: message.to_string(),
+            commit_hash: commit_hash.to_string(),
         });
     }
     Ok(out)
