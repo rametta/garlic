@@ -395,6 +395,7 @@ fn persisted_graph_branch_visibility(settings: &AppSettings, path: &str) -> Grap
         .graph_branch_visibility_by_repo
         .get(path)
         .cloned()
+        .map(normalize_graph_branch_visibility)
         .unwrap_or_default()
 }
 
@@ -406,7 +407,10 @@ fn normalize_graph_branch_visibility(visibility: GraphBranchVisibility) -> Graph
             if key.is_empty() {
                 return None;
             }
-            Some((key.to_string(), value))
+            if value {
+                return None;
+            }
+            Some((key.to_string(), false))
         })
         .collect()
 }

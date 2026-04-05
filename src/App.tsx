@@ -156,9 +156,6 @@ const COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX = 44;
  * many ms have passed since the last full branch list refresh (reduces subprocess churn).
  */
 const BRANCH_LIST_FULL_REFRESH_INTERVAL_MS = 45_000;
-/** Hide remote refs from the graph by default once the repo gets very large. */
-const LARGE_REMOTE_GRAPH_REF_THRESHOLD = 250;
-
 /** Remote name before `remote/branch` (e.g. `origin/main` → `origin`). */
 function remoteNameFromRemoteRef(fullRef: string): string | null {
   const i = fullRef.indexOf("/");
@@ -1345,7 +1342,7 @@ export default function App({
     });
   }, [localBranches, remoteBranches, updateGraphBranchVisible]);
 
-  const remoteGraphDefaultsVisible = remoteBranches.length <= LARGE_REMOTE_GRAPH_REF_THRESHOLD;
+  const remoteGraphDefaultsVisible = true;
 
   const graphRefs = useMemo(() => {
     const refs: string[] = [];

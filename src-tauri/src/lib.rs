@@ -200,7 +200,8 @@ pub fn run() {
             repo_watch::start_repo_watch,
         ])
         .setup(|app| {
-            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             app.manage(active_repo::ActiveRepoPath::default());
             app.manage(repo_watch::RepoWatchState::default());
             app.manage(git::AutoFetchInFlight::default());
@@ -216,13 +217,8 @@ pub fn run() {
                 true,
                 Some("CmdOrCtrl+O"),
             )?;
-            let clone_repo = MenuItem::with_id(
-                app,
-                "clone_repo",
-                "Clone Repository…",
-                true,
-                None::<&str>,
-            )?;
+            let clone_repo =
+                MenuItem::with_id(app, "clone_repo", "Clone Repository…", true, None::<&str>)?;
 
             let mut recent_items: Vec<MenuItem<Wry>> = Vec::new();
             for i in 0..RECENT_MENU_SLOTS {
@@ -232,13 +228,8 @@ pub fn run() {
             }
             let recent_separator = PredefinedMenuItem::separator(app)?;
 
-            let app_settings = MenuItem::with_id(
-                app,
-                "app_settings",
-                "Settings…",
-                true,
-                Some("CmdOrCtrl+,"),
-            )?;
+            let app_settings =
+                MenuItem::with_id(app, "app_settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
             let check_for_updates = MenuItem::with_id(
                 app,
                 "check_for_updates",
@@ -340,7 +331,13 @@ pub fn run() {
 
             let menu = Menu::with_items(
                 app,
-                &[&garlic_menu, &file_menu, &edit_menu, &view_menu, &theme_submenu],
+                &[
+                    &garlic_menu,
+                    &file_menu,
+                    &edit_menu,
+                    &view_menu,
+                    &theme_submenu,
+                ],
             )?;
             menu.set_as_app_menu()?;
             Ok(())

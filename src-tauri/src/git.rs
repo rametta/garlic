@@ -1706,7 +1706,6 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
     Ok(meta)
 }
 
-
 /// Ahead/behind vs `@{upstream}` using two-dot ranges (same idea as `git status -sb`).
 fn head_upstream_ahead_behind(workdir: &Path) -> Option<(u32, u32)> {
     git_output_allow_fail(workdir, &["rev-parse", "--verify", "@{upstream}"])?;
