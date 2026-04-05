@@ -1,5 +1,4 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import type {
   BranchSidebarSectionsState,
   LocalBranchEntry,
@@ -15,6 +14,7 @@ import {
   withWorkingTreeFiles,
 } from "./gitTypes";
 import { getRepoSnapshot, repoQueryKeys, setRepoSnapshot } from "./repoQuery";
+import { invoke } from "./tauriBridgeDebug";
 
 type RepoMutationVariables = {
   path: string;

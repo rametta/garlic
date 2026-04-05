@@ -1,9 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   DEFAULT_OPENAI_MODEL,
   generateCommitMessageFromStagedDiff,
 } from "../generateCommitMessage";
+import { invoke } from "../tauriBridgeDebug";
 
 function composeCommitMessage(title: string, description: string): string {
   const trimmedTitle = title.trim();

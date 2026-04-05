@@ -1,11 +1,12 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
-import { invoke } from "@tauri-apps/api/core";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { TauriBridgeInspector } from "./components/TauriBridgeInspector";
 import { type RestoreLastRepo, DEFAULT_GRAPH_COMMITS_PAGE_SIZE } from "./gitTypes";
 import type { BranchSidebarSectionsState } from "./repoTypes";
+import { invoke } from "./tauriBridgeDebug";
 import { queryClient } from "./queryClient";
 import "./index.css";
 import { DEFAULT_OPENAI_MODEL } from "./generateCommitMessage";
@@ -80,7 +81,8 @@ async function bootstrap() {
             data.graphCommitTitleFontSizePx ?? DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX
           }
         />
-        {import.meta.env.DEV ? <ReactQueryDevtools initialIsOpen={false} /> : null}
+        {import.meta.env.DEV ? <ReactQueryDevtools buttonPosition="bottom-left" /> : null}
+        {import.meta.env.DEV ? <TauriBridgeInspector /> : null}
       </QueryClientProvider>
     </React.StrictMode>,
   );

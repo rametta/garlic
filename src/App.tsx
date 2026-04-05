@@ -12,7 +12,6 @@ import {
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BranchSidebarSectionsState } from "./repoTypes";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
@@ -130,6 +129,7 @@ import {
   updateRepoSnapshot,
   withRepoLists,
 } from "./repoQuery";
+import { invoke } from "./tauriBridgeDebug";
 
 export type {
   BranchSidebarSectionsState,
@@ -5982,7 +5982,7 @@ export default function App({
                                   </div>
                                   <div className="flex w-96 min-w-0 shrink-0 flex-col border-t border-l border-base-300/80">
                                     <div className="shrink-0 border-b border-base-300/80 bg-base-200 px-3 py-3">
-                                      <div className="flex justify-between items-baseline gap-3">
+                                      <div className="flex items-baseline justify-between gap-3">
                                         <p className="m-0 font-mono text-[0.65rem] text-base-content/50">
                                           {formatDate(
                                             commitDetails?.authorDate ??

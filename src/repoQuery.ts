@@ -1,5 +1,4 @@
 import { type QueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import type {
   LocalBranchEntry,
   RemoteBranchEntry,
@@ -7,6 +6,7 @@ import type {
   TagEntry,
   WorktreeEntry,
 } from "./repoTypes";
+import { invoke } from "./tauriBridgeDebug";
 import {
   EMPTY_REPO_SNAPSHOT,
   type RepoMetadata,
