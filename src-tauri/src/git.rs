@@ -401,11 +401,11 @@ fn ssh_signing_preparation(
 /// Emitted when a hook-heavy `git` invocation begins (`git-command-stream-started`).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GitCommandStreamStartedEvent<'a> {
+pub struct GitCommandStreamStartedEvent {
     pub session_id: u64,
-    pub repo_path: &'a str,
-    pub operation: &'a str,
-    pub command_line: &'a str,
+    pub repo_path: String,
+    pub operation: String,
+    pub command_line: String,
 }
 
 /// One line from stdout or stderr (`git-command-stream-line`).
@@ -466,9 +466,9 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
         "git-command-stream-started",
         GitCommandStreamStartedEvent {
             session_id,
-            repo_path: &repo_owned,
-            operation: &op_owned,
-            command_line: &command_line,
+            repo_path: repo_owned.clone(),
+            operation: op_owned.clone(),
+            command_line: command_line.clone(),
         },
     );
 
