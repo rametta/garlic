@@ -1,3 +1,7 @@
+/**
+ * Maps diff file paths to Shiki language ids for syntax highlighting.
+ * Search tags: diff language detection, extension map, basename map, shiki language.
+ */
 import type { FileData } from "react-diff-view";
 
 /** Path used for language detection (prefer new path for renames). */

@@ -1,3 +1,7 @@
+/**
+ * React Query cache helpers for loading, merging, and updating a repository snapshot.
+ * Search tags: repo query keys, snapshot cache, list reload, optimistic cache update.
+ */
 import { type QueryClient } from "@tanstack/react-query";
 import type {
   LocalBranchEntry,
@@ -86,6 +90,8 @@ export async function loadRepoLists(
   selection: RepoListSelection = ALL_REPO_LISTS,
 ): Promise<RepoLists> {
   const requested = { ...ALL_REPO_LISTS, ...selection };
+  // Keep request push order aligned with the `take()` reads below so we can batch the selected
+  // Tauri calls without having to build a keyed result object for every combination.
   const requests: Promise<unknown>[] = [];
 
   if (requested.localBranches) {

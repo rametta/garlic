@@ -1,3 +1,7 @@
+/**
+ * Native context-menu builders for branch, graph, file, stash, tag, and worktree actions.
+ * Search tags: context menu, branch menu, graph menu, stash menu, tag menu, worktree menu.
+ */
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu } from "@tauri-apps/api/menu";
 import type { MenuItemOptions } from "@tauri-apps/api/menu";

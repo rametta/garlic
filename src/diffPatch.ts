@@ -1,3 +1,7 @@
+/**
+ * Builds minimal patch text for staging or discarding individual hunks/blocks from parsed diffs.
+ * Search tags: patch builder, hunk patch, zero-context patch, partial stage, partial discard.
+ */
 import { getChangeKey, isDelete, isInsert, type ChangeData, type HunkData } from "react-diff-view";
 
 function normalizePatchLine(change: ChangeData): string {

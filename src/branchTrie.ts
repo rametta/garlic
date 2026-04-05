@@ -1,3 +1,7 @@
+/**
+ * Tree helpers for grouping slash-delimited branch and remote names in the sidebar.
+ * Search tags: branch trie, remote trie, grouped sidebar branches, subtree collection.
+ */
 import type { LocalBranchEntry } from "./repoTypes";
 
 export type BranchTrieNode = {

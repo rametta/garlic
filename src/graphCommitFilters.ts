@@ -1,3 +1,7 @@
+/**
+ * Client-side filtering and export helpers for the commit graph list.
+ * Search tags: author filter, date filter, commit export, graph export filename, txt export.
+ */
 import { formatShortDateOnly } from "./appFormat";
 import type { CommitEntry } from "./repoTypes";
 

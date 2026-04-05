@@ -1,3 +1,7 @@
+/**
+ * Main desktop app shell for a single open repository.
+ * Search tags: repo bootstrap, branch sidebar, commit graph, working tree, commit, push, rebase, stash, settings.
+ */
 import {
   memo,
   type MouseEvent,
@@ -4741,6 +4745,8 @@ export default function App({
     Boolean(commitBrowseHash) && !listsError && Boolean(repo && !repo.error);
 
   const commitGraphLayout = useMemo((): CommitGraphLayout | null => {
+    // When the center panel is repurposed for a diff/history/blame/detail view, skip graph layout
+    // entirely so we do not spend time computing lanes the user cannot currently see.
     if (
       worktreeBrowseTarget ||
       commitBrowseHash ||

@@ -1,3 +1,7 @@
+/**
+ * Frontend graph/list entry shapes for branches, tags, stashes, worktrees, and commits.
+ * Search tags: commit entry, branch entry, tag entry, stash entry, wire commit normalization.
+ */
 /** One commit row from `list_graph_commits` / bootstrap. */
 export interface CommitEntry {
   hash: string;

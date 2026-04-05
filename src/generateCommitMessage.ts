@@ -1,3 +1,7 @@
+/**
+ * OpenAI-backed helper for generating commit message drafts from the staged diff.
+ * Search tags: AI commit message, OpenAI model, staged diff prompt, generateText.
+ */
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText } from "ai";
 

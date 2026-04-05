@@ -1,3 +1,7 @@
+/**
+ * Settings modal for theme selection, AI commit settings, and graph display preferences.
+ * Search tags: settings page, theme picker, OpenAI API key, graph font size.
+ */
 import { memo, useCallback, useEffect, useState } from "react";
 import { THEME_SELECT_OPTIONS } from "../appThemes";
 import {

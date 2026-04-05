@@ -1,3 +1,8 @@
+/**
+ * Theme option metadata shared by the settings UI.
+ * Search tags: DaisyUI themes, theme select options, auto theme, settings theme picker.
+ */
+
 /** DaisyUI theme names (excluding `auto`, handled in the UI). Mirrors `settings::DAISY_THEMES` in Rust. */
 export const DAISY_UI_THEME_NAMES = [
   "light",

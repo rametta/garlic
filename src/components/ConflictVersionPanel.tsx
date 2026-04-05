@@ -1,3 +1,7 @@
+/**
+ * Conflict-side preview panel that highlights the chosen version around merge/rebase conflicts.
+ * Search tags: conflict preview, ours vs theirs, conflict ranges, shiki conflict snippet.
+ */
 import { getTokenStyleObject } from "@shikijs/core";
 import { memo, useMemo, type CSSProperties } from "react";
 import type { BundledLanguage, Highlighter } from "shiki";

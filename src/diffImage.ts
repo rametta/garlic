@@ -1,4 +1,7 @@
-/** Paths we can show in the diff viewer with `<img>` (browser-decodable). */
+/**
+ * Helpers for previewing image diffs by MIME type and object URL conversion.
+ * Search tags: image diff preview, mime type, base64 object url, renderable image path.
+ */
 export function pathLooksLikeRenderableImage(filePath: string): boolean {
   const lower = filePath.toLowerCase();
   return /\.(png|jpe?g|gif|webp|bmp|ico|svg)$/.test(lower);

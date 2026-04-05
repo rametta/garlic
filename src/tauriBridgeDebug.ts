@@ -1,3 +1,7 @@
+/**
+ * Thin `invoke` wrapper plus an in-memory log for inspecting frontend-to-Tauri command traffic.
+ * Search tags: tauri invoke logging, bridge inspector, command timing, debug export.
+ */
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 export interface TauriBridgeLogEntry {

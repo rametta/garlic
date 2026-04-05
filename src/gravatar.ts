@@ -1,3 +1,7 @@
+/**
+ * Lightweight Gravatar helpers, including a local MD5 implementation for email hashing.
+ * Search tags: gravatar, md5, avatar url, author avatar fallback.
+ */
 const MD5_SHIFT_AMOUNTS = [
   7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14,
   20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6,

@@ -1,3 +1,7 @@
+/**
+ * Virtualized sidebar for local branches, remotes, worktrees, tags, and stashes.
+ * Search tags: branch sidebar, remote sidebar, tag sidebar, stash sidebar, graph branch visibility.
+ */
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, type ReactNode, type Ref, useEffect, useMemo, useRef, useState } from "react";
 import type { BranchTrieNode, RemoteTrieNode } from "../branchTrie";

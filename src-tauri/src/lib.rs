@@ -1,3 +1,6 @@
+//! Tauri application wiring: command registration, native menus, and app startup state.
+//! Search tags: tauri builder, invoke handler, file menu, theme menu, recent repos, restore_app_bootstrap.
+
 mod active_repo;
 mod git;
 mod open_in_cursor;
@@ -51,6 +54,8 @@ fn sync_recent_menu(app: &tauri::AppHandle) {
     let Some(state) = app.try_state::<RecentMenuState>() else {
         return;
     };
+    // Rebuild the dynamic tail of the File menu on every change so disabled placeholders never
+    // linger after the recent-repo list shrinks or reorders.
     let _ = state.file_menu.remove(&state.separator);
     for item in &state.items {
         let _ = state.file_menu.remove(item);
@@ -119,6 +124,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        // Keep command registration centralized here so the frontend can grep one place to see the
+        // available Tauri surface area.
         .invoke_handler(tauri::generate_handler![
             window_title::reset_main_window_title,
             git::get_repo_metadata,

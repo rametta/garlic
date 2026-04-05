@@ -1,3 +1,7 @@
+/**
+ * React Query mutations that wrap Tauri Git commands and keep the repo snapshot in sync.
+ * Search tags: optimistic updates, checkout, branch create, commit, push, rebase, stash, settings mutations.
+ */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
   BranchSidebarSectionsState,
@@ -155,6 +159,8 @@ function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
   return useMutation<void, unknown, TVariables, RepoMutationContext>({
     mutationFn,
     onMutate: async (variables) => {
+      // Most Git mutations share the same lifecycle: pause overlapping reads, apply an optional
+      // optimistic snapshot, roll back on failure, then refetch to reconcile with the backend.
       await queryClient.cancelQueries({
         queryKey: repoQueryKeys.root(variables.path),
       });

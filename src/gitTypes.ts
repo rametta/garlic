@@ -1,3 +1,7 @@
+/**
+ * Shared frontend types and snapshot helpers for repository state returned by Tauri commands.
+ * Search tags: repo metadata, working tree files, conflict details, bootstrap snapshot, optimistic updates.
+ */
 import type {
   CommitEntry,
   LocalBranchEntry,

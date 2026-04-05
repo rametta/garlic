@@ -1,3 +1,6 @@
+//! Native command for opening a repo-relative file in Cursor from the UI.
+//! Search tags: open in cursor, reveal file, cursor cli, editor integration.
+
 use std::path::Path;
 use std::process::Command;
 

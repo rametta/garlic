@@ -1,3 +1,7 @@
+/**
+ * Shared Shiki highlighter lifecycle and theme state for diff/code previews.
+ * Search tags: shiki highlighter, syntax highlighting, diff theme, external store.
+ */
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { getSingletonHighlighter, type Highlighter } from "shiki";
 

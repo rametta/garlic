@@ -1,3 +1,6 @@
+//! Persistence for app-level settings stored under the Tauri app config directory.
+//! Search tags: settings.json, theme preference, recent repos, OpenAI key, graph preferences, bootstrap.
+
 use crate::git;
 use crate::window_title;
 use serde::{Deserialize, Serialize};
@@ -156,6 +159,8 @@ fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
     }
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut s: AppSettings = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    // Clamp persisted UI settings on read so older or hand-edited config files cannot push the
+    // frontend outside the supported graph ranges.
     s.graph_commits_page_size = git::clamp_graph_commits_page_size(s.graph_commits_page_size);
     s.graph_commit_title_font_size_px =
         clamp_graph_commit_title_font_size_px(s.graph_commit_title_font_size_px);
@@ -363,6 +368,8 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
     let theme = settings.theme.clone();
     let openai_api_key = settings.openai_api_key.clone();
     let openai_model = resolve_openai_model(&settings);
+    // Repo-scoped visibility is keyed off the last opened repo so the graph can remember which
+    // branches were hidden without mixing preferences across repositories.
     let graph_branch_visible = settings
         .last_repo_path
         .as_deref()

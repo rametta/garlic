@@ -1,3 +1,7 @@
+//! Tauri command implementations and helpers for Git operations, diff loading, commit graph data,
+//! long-running command streaming, and repository mutations.
+//! Search tags: list_graph_commits, checkout, branch, tag, stash, push, rebase, diff, conflict, git stream.
+
 use arrayvec::ArrayString;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,7 @@
+/**
+ * Commit message editor plus AI-assisted draft generation from the staged diff.
+ * Search tags: commit composer, staged diff AI, amend commit, commit message draft.
+ */
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   DEFAULT_OPENAI_MODEL,

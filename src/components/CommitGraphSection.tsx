@@ -1,3 +1,7 @@
+/**
+ * Virtualized main commit graph panel with commit rows, badges, selection, and infinite paging.
+ * Search tags: commit graph section, virtualized graph, commit rows, branch badges, graph pagination.
+ */
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { createPortal } from "react-dom";
 import {

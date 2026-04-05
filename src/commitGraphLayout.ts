@@ -1,3 +1,8 @@
+/**
+ * Computes the lane/edge layout for the commit DAG shown in the main graph.
+ * Search tags: commit graph layout, lane assignment, merge edges, branch tips, row height.
+ */
+
 /** Layout constants for the commit DAG column. */
 
 export const COMMIT_GRAPH_ROW_HEIGHT = 28;

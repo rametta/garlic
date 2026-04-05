@@ -1,3 +1,7 @@
+/**
+ * Debug-only UI for inspecting frontend-to-Tauri command calls and payloads.
+ * Search tags: bridge inspector, tauri invoke logs, command debug panel, export bridge logs.
+ */
 import { useMemo, useState, useSyncExternalStore } from "react";
 import {
   clearTauriBridgeLogs,

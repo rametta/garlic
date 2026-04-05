@@ -1,3 +1,7 @@
+/**
+ * Expandable panel for live stdout/stderr from long-running Git operations.
+ * Search tags: git command output, command panel, merge request url, streaming logs.
+ */
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clearGitCommandStream, useGitCommandStream } from "../gitCommandStreamStore";

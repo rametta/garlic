@@ -1,3 +1,7 @@
+/**
+ * Frontend bootstrap that restores persisted app state before React renders.
+ * Search tags: restore_app_bootstrap, query client, theme hydration, startup repo snapshot.
+ */
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import React from "react";

@@ -1,3 +1,7 @@
+/**
+ * SVG renderer for the left-side commit DAG lanes and edges.
+ * Search tags: commit graph svg, dag lanes, merge edges, active branch path.
+ */
 import type { CommitGraphLayout } from "../commitGraphLayout";
 import {
   COMMIT_GRAPH_LANE_WIDTH,

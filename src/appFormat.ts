@@ -1,3 +1,7 @@
+/**
+ * Small formatting helpers for dates, authors, and compact UI labels.
+ * Search tags: date formatting, relative time, author display, export date label.
+ */
 function toDate(value: string | number | null): Date | null {
   if (value === null || value === undefined) return null;
   const d = new Date(value);

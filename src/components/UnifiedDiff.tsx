@@ -1,3 +1,7 @@
+/**
+ * Unified diff viewer with syntax highlighting and per-hunk / per-block patch actions.
+ * Search tags: unified diff, shiki diff, partial stage, partial discard, hunk actions.
+ */
 import { getTokenStyleObject } from "@shikijs/core";
 import { memo, useMemo, type CSSProperties, type ReactNode } from "react";
 import {
