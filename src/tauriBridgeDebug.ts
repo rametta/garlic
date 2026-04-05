@@ -2,7 +2,7 @@
  * Thin `invoke` wrapper plus an in-memory log for inspecting frontend-to-Tauri command traffic.
  * Search tags: tauri invoke logging, bridge inspector, command timing, debug export.
  */
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke, type InvokeArgs } from "@tauri-apps/api/core";
 
 export interface TauriBridgeLogEntry {
   id: number;
@@ -75,7 +75,7 @@ export function isTauriBridgeLoggingPaused() {
   return paused;
 }
 
-export async function invoke<T>(command: string, args?: unknown): Promise<T> {
+export async function invoke<T>(command: string, args?: InvokeArgs): Promise<T> {
   if (!import.meta.env.DEV) {
     return tauriInvoke<T>(command, args);
   }
