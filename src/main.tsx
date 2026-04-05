@@ -1,4 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
+import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { invoke } from "@tauri-apps/api/core";
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -79,6 +80,7 @@ async function bootstrap() {
             data.graphCommitTitleFontSizePx ?? DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX
           }
         />
+        {import.meta.env.DEV ? <ReactQueryDevtools initialIsOpen={false} /> : null}
       </QueryClientProvider>
     </React.StrictMode>,
   );
