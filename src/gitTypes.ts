@@ -25,7 +25,6 @@ export interface RepoMetadata {
   headShort: string | null;
   headSubject: string | null;
   headAuthor: string | null;
-  headDate: string | null;
   detached: boolean;
   remotes: RemoteEntry[];
   workingTreeClean: boolean | null;

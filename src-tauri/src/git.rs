@@ -918,7 +918,6 @@ pub struct RepoMetadata {
     pub head_short: Option<String>,
     pub head_subject: Option<String>,
     pub head_author: Option<String>,
-    pub head_date: Option<String>,
     pub detached: bool,
     pub remotes: Vec<RemoteEntry>,
     pub working_tree_clean: Option<bool>,
@@ -1663,15 +1662,13 @@ fn parse_head_log_summary(
     Option<String>,
     Option<String>,
     Option<String>,
-    Option<String>,
 ) {
     let mut parts = text.split('\0');
     let full = parts.next().filter(|s| !s.is_empty()).map(String::from);
     let short = parts.next().filter(|s| !s.is_empty()).map(String::from);
     let subject = parts.next().filter(|s| !s.is_empty()).map(String::from);
     let author = parts.next().filter(|s| !s.is_empty()).map(String::from);
-    let date = parts.next().filter(|s| !s.is_empty()).map(String::from);
-    (full, short, subject, author, date)
+    (full, short, subject, author)
 }
 
 /// Inspect a local folder with `git` and return metadata for the UI.
@@ -1701,7 +1698,6 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         head_short: None,
         head_subject: None,
         head_author: None,
-        head_date: None,
         detached: false,
         remotes: Vec::new(),
         working_tree_clean: None,
@@ -1763,11 +1759,11 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         let log_handle = s.spawn(|| {
             git_output_allow_fail(
                 &path_buf,
-                &["log", "-1", "--format=%H%x00%h%x00%s%x00%an%x00%aI"],
+                &["log", "-1", "--format=%H%x00%h%x00%s%x00%an"],
             )
             .as_deref()
             .map(parse_head_log_summary)
-            .unwrap_or((None, None, None, None, None))
+            .unwrap_or((None, None, None, None))
         });
         let remotes_handle = s.spawn(|| {
             let remotes_text =
@@ -1785,7 +1781,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
     let branch = status_summary.branch.clone();
     let mut head_hash = status_summary.head_hash.clone();
 
-    let (log_head_hash, head_short, head_subject, head_author, head_date) = log_summary;
+    let (log_head_hash, head_short, head_subject, head_author) = log_summary;
     if head_hash.is_none() {
         head_hash = log_head_hash;
     }
@@ -1804,7 +1800,6 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         head_short,
         head_subject,
         head_author,
-        head_date,
         detached,
         remotes,
         working_tree_clean,
@@ -3249,8 +3244,12 @@ pub fn list_working_tree_files_blocking(path: String) -> Result<Vec<WorkingTreeF
             })
             .or_insert(acc);
     }
-    let unmerged_index = git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?;
-    let conflict_stages = parse_unmerged_index_z(&unmerged_index);
+    let has_conflicts = map.values().any(|entry| entry.conflicted);
+    let conflict_stages = if has_conflicts {
+        parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?)
+    } else {
+        HashMap::new()
+    };
 
     let (staged_map, unstaged_map) = std::thread::scope(|s| {
         let p = &path_buf;
