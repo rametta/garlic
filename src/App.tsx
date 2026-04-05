@@ -56,8 +56,10 @@ import type {
   StashEntry,
   TagEntry,
   TagOriginStatus,
+  WireCommitEntry,
   WorktreeEntry,
 } from "./repoTypes";
+import { normalizeCommitEntries } from "./repoTypes";
 import { DEFAULT_OPENAI_MODEL } from "./generateCommitMessage";
 import { resolveThemePreference } from "./theme";
 import {
@@ -209,7 +211,7 @@ function useLatest<T>(value: T) {
 }
 
 interface GraphCommitsPage {
-  commits: CommitEntry[];
+  commits: WireCommitEntry[];
   hasMore: boolean;
 }
 
@@ -943,7 +945,7 @@ const FileHistoryPane = memo(function FileHistoryPane({
                   <span className="font-mono text-[0.65rem] text-base-content/70">
                     {commit.shortHash}
                     {formatAuthorDisplay(commit.author)} ·{" "}
-                    {formatRelativeShort(commit.date) ?? formatDate(commit.date) ?? "—"}
+                    {formatRelativeShort(commit.authorTime) ?? formatDate(commit.authorTime) ?? "—"}
                   </span>
 
                   <span className="text-sm leading-snug text-base-content/95">
@@ -1395,7 +1397,7 @@ export default function App({
           pageSize: graphCommitsPageSize,
         });
         if (cancelled || activeRepoPathRef.current !== pathAtStart) return;
-        setCommits(page.commits);
+        setCommits(normalizeCommitEntries(page.commits));
         setGraphCommitsHasMore(page.hasMore);
         setListsError(null);
       } catch (e) {
@@ -1437,7 +1439,7 @@ export default function App({
         pageSize: graphCommitsPageSize,
       });
       if (activeRepoPathRef.current !== pathAtStart) return;
-      setCommits((prev) => [...prev, ...page.commits]);
+      setCommits((prev) => [...prev, ...normalizeCommitEntries(page.commits)]);
       setGraphCommitsHasMore(page.hasMore);
     } catch (e) {
       if (activeRepoPathRef.current === pathAtStart) {
@@ -6047,7 +6049,7 @@ export default function App({
                                         <p className="m-0 font-mono text-[0.65rem] text-base-content/50">
                                           {formatDate(
                                             commitDetails?.authorDate ??
-                                              commitBrowseMeta?.date ??
+                                              commitBrowseMeta?.authorTime ??
                                               null,
                                           ) ?? "—"}
                                         </p>

@@ -4,7 +4,12 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { TauriBridgeInspector } from "./components/TauriBridgeInspector";
-import { type RestoreLastRepo, DEFAULT_GRAPH_COMMITS_PAGE_SIZE } from "./gitTypes";
+import {
+  type RestoreLastRepo,
+  type WireRestoreLastRepo,
+  DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
+  normalizeRestoreLastRepo,
+} from "./gitTypes";
 import type { BranchSidebarSectionsState } from "./repoTypes";
 import { invoke } from "./tauriBridgeDebug";
 import { queryClient } from "./queryClient";
@@ -23,6 +28,10 @@ export interface AppBootstrap {
   highlightActiveBranchRows: boolean;
   graphCommitsPageSize: number;
   graphCommitTitleFontSizePx: number;
+}
+
+interface WireAppBootstrap extends Omit<AppBootstrap, "repo"> {
+  repo: WireRestoreLastRepo;
 }
 
 export const emptyAppBootstrap: AppBootstrap = {
@@ -58,7 +67,11 @@ export const emptyAppBootstrap: AppBootstrap = {
 async function bootstrap() {
   let data: AppBootstrap = emptyAppBootstrap;
   try {
-    data = await invoke<AppBootstrap>("restore_app_bootstrap");
+    const wire = await invoke<WireAppBootstrap>("restore_app_bootstrap");
+    data = {
+      ...wire,
+      repo: normalizeRestoreLastRepo(wire.repo),
+    };
   } catch {
     console.warn("Could not load 'restore_app_bootstrap'");
   }

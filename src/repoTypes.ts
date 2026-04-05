@@ -5,10 +5,47 @@ export interface CommitEntry {
   subject: string;
   author: string;
   authorEmail: string;
-  date: string;
+  authorTime: number;
   parentHashes: string[];
   /** Set when this row is a stash WIP commit (`stash@{n}`). */
   stashRef?: string | null;
+}
+
+/** Lean wire shape from Rust for graph rows. */
+export interface WireCommitEntry {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author: string;
+  authorEmail: string;
+  authorTime: number;
+  firstParent?: string | null;
+  extraParents?: string[] | null;
+  stashRef?: string | null;
+}
+
+export function normalizeCommitEntry(entry: WireCommitEntry): CommitEntry {
+  const parentHashes: string[] = [];
+  if (entry.firstParent?.trim()) {
+    parentHashes.push(entry.firstParent);
+  }
+  for (const hash of entry.extraParents ?? []) {
+    if (hash.trim()) parentHashes.push(hash);
+  }
+  return {
+    hash: entry.hash,
+    shortHash: entry.shortHash,
+    subject: entry.subject,
+    author: entry.author,
+    authorEmail: entry.authorEmail,
+    authorTime: entry.authorTime,
+    parentHashes,
+    stashRef: entry.stashRef ?? null,
+  };
+}
+
+export function normalizeCommitEntries(entries: WireCommitEntry[]): CommitEntry[] {
+  return entries.map(normalizeCommitEntry);
 }
 
 /** Local branch row from `list_local_branches` / bootstrap. */

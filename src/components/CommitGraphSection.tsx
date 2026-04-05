@@ -870,11 +870,11 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
   const isHeadBranchTipRow = currentBranchTipHash !== null && c.hash === currentBranchTipHash;
   const isActiveBranchCommitRow =
     highlightActiveBranchRows && currentBranchName !== null && activeFirstParentHashes.has(c.hash);
-  const rel = formatRelativeShort(c.date);
+  const rel = formatRelativeShort(c.authorTime);
   const fullTitle = [
     stashRef ? `${stashRef} — ${c.shortHash} — ${c.subject}` : `${c.shortHash} — ${c.subject}`,
     c.author,
-    formatDate(c.date) ?? undefined,
+    formatDate(c.authorTime) ?? undefined,
     visibleTags.length > 0 ? `Tags: ${visibleTags.map((t) => t.name).join(", ")}` : undefined,
   ]
     .filter(Boolean)
@@ -960,7 +960,7 @@ const CommitGraphVirtualRow = memo(function CommitGraphVirtualRow({
         </span>
         <span
           className="shrink-0 text-right text-[0.6rem] text-base-content/45 tabular-nums"
-          title={formatDate(c.date) ?? undefined}
+          title={formatDate(c.authorTime) ?? undefined}
         >
           {rel ?? "—"}
         </span>

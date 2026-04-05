@@ -38,7 +38,7 @@ export function filterGraphCommits(
       const e = c.authorEmail.toLowerCase();
       if (!a.includes(q) && !e.includes(q)) return false;
     }
-    const t = new Date(c.date).getTime();
+    const t = c.authorTime;
     if (Number.isNaN(t)) return false;
     if (fromBound && t < fromBound.start.getTime()) return false;
     if (toBound && t > toBound.end.getTime()) return false;
@@ -104,7 +104,7 @@ export function formatCommitsExportTxt(
   for (const c of commits) {
     const fields: string[] = [];
     if (options.includeHash) fields.push(c.shortHash);
-    fields.push(formatShortDateOnly(c.date));
+    fields.push(formatShortDateOnly(c.authorTime));
     if (options.includeAuthor) fields.push(c.author);
     fields.push(c.subject);
     lines.push(`- ${fields.join(" | ")}`);

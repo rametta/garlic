@@ -1,17 +1,23 @@
+function toDate(value: string | number | null): Date | null {
+  if (value === null || value === undefined) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 /** Calendar-only label for exports (`YYYY-MM-DD`, local date). */
-export function formatShortDateOnly(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso.replace(/\s+/g, " ").trim();
+export function formatShortDateOnly(value: string | number): string {
+  const d = toDate(value);
+  if (!d) return String(value).replace(/\s+/g, " ").trim();
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
-export function formatDate(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+export function formatDate(value: string | number | null): string | null {
+  if (value === null || value === undefined) return null;
+  const d = toDate(value);
+  if (!d) return String(value);
   return d.toLocaleString(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
@@ -19,14 +25,14 @@ export function formatDate(iso: string | null): string | null {
 }
 
 /** Short relative label for dense commit rows (e.g. `2h ago`, `3d ago`). */
-export function formatRelativeShort(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
+export function formatRelativeShort(value: string | number | null): string | null {
+  if (value === null || value === undefined) return null;
+  const d = toDate(value);
+  if (!d) return null;
   const t = d.getTime();
-  if (Number.isNaN(t)) return null;
   const diffSec = Math.round((Date.now() - t) / 1000);
   if (diffSec < 0) {
-    return formatDate(iso);
+    return formatDate(value);
   }
   if (diffSec < 45) {
     return "now";

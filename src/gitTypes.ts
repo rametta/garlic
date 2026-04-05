@@ -4,8 +4,10 @@ import type {
   RemoteBranchEntry,
   StashEntry,
   TagEntry,
+  WireCommitEntry,
   WorktreeEntry,
 } from "./repoTypes";
+import { normalizeCommitEntries } from "./repoTypes";
 
 export interface RemoteEntry {
   name: string;
@@ -110,6 +112,10 @@ export interface RestoreLastRepo {
   listsError: string | null;
 }
 
+export interface WireRestoreLastRepo extends Omit<RestoreLastRepo, "commits"> {
+  commits: WireCommitEntry[];
+}
+
 export interface RepoSnapshot {
   metadata: RepoMetadata | null;
   localBranches: LocalBranchEntry[];
@@ -139,6 +145,13 @@ export function repoSnapshotFromStartup(startup: RestoreLastRepo): RepoSnapshot 
     tags: startup.tags,
     stashes: startup.stashes,
     workingTreeFiles: startup.workingTreeFiles,
+  };
+}
+
+export function normalizeRestoreLastRepo(startup: WireRestoreLastRepo): RestoreLastRepo {
+  return {
+    ...startup,
+    commits: normalizeCommitEntries(startup.commits),
   };
 }
 

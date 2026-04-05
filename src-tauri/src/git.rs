@@ -29,8 +29,8 @@ pub struct RemoteEntry {
     pub fetch_url: String,
 }
 
-/// `git log` line format for graph / commit list (`%P` = parents, `%aI` = ISO date).
-const COMMIT_LOG_FORMAT: &str = "%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s";
+/// `git log` line format for graph / commit list (`%P` = parents, `%at` = author unix timestamp).
+const COMMIT_LOG_FORMAT: &str = "%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,9 +40,14 @@ pub struct CommitEntry {
     pub subject: String,
     pub author: String,
     pub author_email: String,
-    pub date: String,
-    /// Parent commit hashes (first parent is mainline; merge commits have 2+).
-    pub parent_hashes: Vec<String>,
+    /// Commit author timestamp in unix milliseconds.
+    pub author_time: i64,
+    /// Mainline parent hash when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_parent: Option<String>,
+    /// Additional parent hashes for merge/stash helper commits.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra_parents: Vec<String>,
     /// When this commit is a stash WIP (`stash@{n}`), set for UI labels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stash_ref: Option<String>,
@@ -2028,30 +2033,42 @@ fn parse_commit_log_lines(out: &str) -> Vec<CommitEntry> {
         let short_hash = parts.next().map(String::from);
         let author = parts.next().map(String::from);
         let author_email = parts.next().map(String::from);
-        let date = parts.next().map(String::from);
+        let author_time_raw = parts.next().map(String::from);
         let subject = parts.next().map(String::from);
-        if let (Some(h), Some(pr), Some(sh), Some(auth), Some(ae), Some(dt), Some(sub)) = (
+        if let (Some(h), Some(pr), Some(sh), Some(auth), Some(ae), Some(at), Some(sub)) = (
             hash,
             parents_raw,
             short_hash,
             author,
             author_email,
-            date,
+            author_time_raw,
             subject,
         ) {
-            let parent_hashes: Vec<String> = pr
+            let mut parent_hashes = pr
                 .split_whitespace()
                 .map(String::from)
                 .filter(|s| !s.is_empty())
-                .collect();
+                .collect::<Vec<_>>();
+            let first_parent = if parent_hashes.is_empty() {
+                None
+            } else {
+                Some(parent_hashes.remove(0))
+            };
+            let author_time = at
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .and_then(|secs| secs.checked_mul(1000))
+                .unwrap_or_default();
             commits.push(CommitEntry {
                 hash: h,
                 short_hash: sh,
                 subject: sub,
                 author: auth,
                 author_email: ae,
-                date: dt,
-                parent_hashes,
+                author_time,
+                first_parent,
+                extra_parents: parent_hashes,
                 stash_ref: None,
             });
         }
