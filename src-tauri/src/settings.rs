@@ -242,7 +242,8 @@ fn restore_repo_snapshot(
                 });
             }
 
-            let (locals, remotes, worktrees, working_tree, stashes, tags) =
+            let page_size = git::clamp_graph_commits_page_size(settings.graph_commits_page_size);
+            let (locals, remotes, commits_page, worktrees, working_tree, stashes, tags) =
                 std::thread::scope(|s| {
                     let h1 = s.spawn({
                         let p = path.clone();
@@ -268,24 +269,35 @@ fn restore_repo_snapshot(
                         let p = path.clone();
                         move || git::list_tags(p)
                     });
+
+                    let locals = h1.join().unwrap();
+                    let remotes = h2.join().unwrap();
+
+                    let commits_handle = s.spawn({
+                        let p = path.clone();
+                        let locals_ok = locals.clone();
+                        let remotes_ok = remotes.clone();
+                        move || match (&locals_ok, &remotes_ok) {
+                            (Ok(loc), Ok(rem)) => {
+                                let visibility = persisted_graph_branch_visibility(settings, &p);
+                                let hidden_refs =
+                                    hidden_graph_refs_from_visibility(&visibility, loc, rem);
+                                git::list_graph_commits_blocking(p, hidden_refs, 0, page_size)
+                            }
+                            _ => git::list_branch_commits(p, page_size),
+                        }
+                    });
+
                     (
-                        h1.join().unwrap(),
-                        h2.join().unwrap(),
+                        locals,
+                        remotes,
+                        commits_handle.join().unwrap(),
                         h3.join().unwrap(),
                         h4.join().unwrap(),
                         h5.join().unwrap(),
                         h6.join().unwrap(),
                     )
                 });
-            let page_size = git::clamp_graph_commits_page_size(settings.graph_commits_page_size);
-            let commits_page = match (&locals, &remotes) {
-                (Ok(loc), Ok(rem)) => {
-                    let visibility = persisted_graph_branch_visibility(settings, &path);
-                    let hidden_refs = hidden_graph_refs_from_visibility(&visibility, loc, rem);
-                    git::list_graph_commits_blocking(path.clone(), hidden_refs, 0, page_size)
-                }
-                _ => git::list_branch_commits(path.clone(), page_size),
-            };
 
             let lists_error = locals
                 .as_ref()
