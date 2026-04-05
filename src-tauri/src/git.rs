@@ -1761,13 +1761,10 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
                 .unwrap_or_default()
         });
         let log_handle = s.spawn(|| {
-            git_output_allow_fail(
-                &path_buf,
-                &["log", "-1", "--format=%H%x00%h%x00%s%x00%an"],
-            )
-            .as_deref()
-            .map(parse_head_log_summary)
-            .unwrap_or((None, None, None, None))
+            git_output_allow_fail(&path_buf, &["log", "-1", "--format=%H%x00%h%x00%s%x00%an"])
+                .as_deref()
+                .map(parse_head_log_summary)
+                .unwrap_or((None, None, None, None))
         });
         let remotes_handle = s.spawn(|| {
             let remotes_text =
@@ -2121,78 +2118,39 @@ fn trim_graph_commits_page(mut commits: Vec<CommitEntry>, page_size: usize) -> G
     GraphCommitsPage { commits, has_more }
 }
 
-/// `stash@{0}`, `stash@{1}`, … from `git stash list` (for `git log` starting points).
-fn stash_ref_list(path: &Path) -> Result<Vec<String>, String> {
-    ensure_git_repo(path)?;
-    let text = git_output(path, &["stash", "list"])?;
+/// `git stash list` once for both graph starting refs and commit-hash annotation.
+fn stash_log_refs_and_map(path: &Path) -> Result<(Vec<String>, HashMap<String, String>), String> {
+    let text = git_output(path, &["stash", "list", "--format=%H%x1f%gd"])?;
     let mut refs = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Some(rest) = trimmed.strip_prefix("stash@{") else {
-            continue;
-        };
-        let Some(end) = rest.find('}') else {
-            continue;
-        };
-        let idx_str = &rest[..end];
-        if idx_str.is_empty() || !idx_str.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        refs.push(format!("stash@{{{idx_str}}}"));
-    }
-    Ok(refs)
-}
-
-fn merge_stash_refs_into_log_refs(path: &Path, clean: &mut Vec<String>) {
-    let Ok(stash_refs) = stash_ref_list(path) else {
-        return;
-    };
-    for r in stash_refs {
-        if !clean.contains(&r) {
-            clean.push(r);
-        }
-    }
-    clean.sort();
-    clean.dedup();
-}
-
-fn all_graph_log_refs(path: &str) -> Result<Vec<String>, String> {
-    let mut refs: Vec<String> = list_local_branches(path.to_string())?
-        .into_iter()
-        .map(|branch| branch.name)
-        .collect();
-    refs.extend(
-        list_remote_branches(path.to_string())?
-            .into_iter()
-            .map(|branch| branch.name),
-    );
-    refs.sort();
-    refs.dedup();
-    Ok(refs)
-}
-
-fn annotate_stash_refs(path: &Path, commits: &mut [CommitEntry]) -> Result<(), String> {
-    let stash_refs = stash_ref_list(path)?;
-    if stash_refs.is_empty() {
-        return Ok(());
-    }
     let mut hash_to_ref: HashMap<String, String> = HashMap::new();
-    for r in stash_refs {
-        let h = git_output(path, &["rev-parse", "--verify", &r])?;
-        let h = h.trim().to_string();
-        if !h.is_empty() {
-            hash_to_ref.insert(h, r);
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
         }
+        let Some((hash, stash_ref)) = line.split_once('\x1f') else {
+            continue;
+        };
+        let hash = hash.trim();
+        let stash_ref = stash_ref.trim();
+        if hash.is_empty() || stash_ref.is_empty() {
+            continue;
+        }
+        refs.push(stash_ref.to_string());
+        hash_to_ref.insert(hash.to_string(), stash_ref.to_string());
+    }
+    Ok((refs, hash_to_ref))
+}
+
+fn annotate_stash_refs(commits: &mut [CommitEntry], hash_to_ref: &HashMap<String, String>) {
+    if hash_to_ref.is_empty() {
+        return;
     }
     for c in commits.iter_mut() {
         if let Some(sr) = hash_to_ref.get(&c.hash) {
             c.stash_ref = Some(sr.clone());
         }
     }
-    Ok(())
 }
 
 /// Commits reachable from any local branch (`--branches`), commit-date order, newest first.
@@ -2202,6 +2160,7 @@ pub fn list_branch_commits(path: String, page_size: u32) -> Result<GraphCommitsP
     ensure_git_repo(&path_buf)?;
     let page_size = clamp_graph_commits_page_size(page_size) as usize;
     let fetch_n = (page_size + 1).to_string();
+    let (stash_refs, stash_hash_to_ref) = stash_log_refs_and_map(&path_buf)?;
     let mut cmd_args: Vec<String> = Vec::with_capacity(8);
     cmd_args.extend([
         "log".into(),
@@ -2213,12 +2172,10 @@ pub fn list_branch_commits(path: String, page_size: u32) -> Result<GraphCommitsP
         fetch_n,
         format!("--format={COMMIT_LOG_FORMAT}"),
     ]);
-    if let Ok(stash_refs) = stash_ref_list(&path_buf) {
-        cmd_args.extend(stash_refs);
-    }
+    cmd_args.extend(stash_refs);
     let out = git_output(&path_buf, &cmd_args)?;
     let mut commits = parse_commit_log_lines(&out);
-    annotate_stash_refs(&path_buf, &mut commits)?;
+    annotate_stash_refs(&mut commits, &stash_hash_to_ref);
     Ok(trim_graph_commits_page(commits, page_size))
 }
 
@@ -2236,27 +2193,19 @@ pub fn list_graph_commits_blocking(
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let page_size = clamp_graph_commits_page_size(page_size) as usize;
-    let hidden: HashSet<String> = hidden_refs
+    let hidden = hidden_refs
         .into_iter()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .collect();
-    let mut clean = all_graph_log_refs(&path)?
-        .into_iter()
-        .filter(|r| !hidden.contains(r))
         .collect::<Vec<_>>();
-    merge_stash_refs_into_log_refs(&path_buf, &mut clean);
-    if clean.is_empty() {
-        return Ok(GraphCommitsPage {
-            commits: Vec::new(),
-            has_more: false,
-        });
-    }
     let fetch_n = (page_size + 1).to_string();
     let skip_s = skip.to_string();
-    let mut cmd_args: Vec<String> = Vec::with_capacity(7 + clean.len());
+    let (stash_refs, stash_hash_to_ref) = stash_log_refs_and_map(&path_buf)?;
+    let mut cmd_args: Vec<String> = Vec::with_capacity(9 + stash_refs.len() + hidden.len());
     cmd_args.extend([
         "log".into(),
+        "--branches".into(),
+        "--remotes".into(),
         "--date-order".into(),
         "--skip".into(),
         skip_s,
@@ -2264,10 +2213,11 @@ pub fn list_graph_commits_blocking(
         fetch_n,
         format!("--format={COMMIT_LOG_FORMAT}"),
     ]);
-    cmd_args.extend(clean);
+    cmd_args.extend(stash_refs);
+    cmd_args.extend(hidden.into_iter().map(|r| format!("^{r}")));
     let out = git_output(&path_buf, &cmd_args)?;
     let mut commits = parse_commit_log_lines(&out);
-    annotate_stash_refs(&path_buf, &mut commits)?;
+    annotate_stash_refs(&mut commits, &stash_hash_to_ref);
     Ok(trim_graph_commits_page(commits, page_size))
 }
 
