@@ -1029,11 +1029,14 @@ export default function App({
   /** Guards async work: ignore results if `repo.path` changed while awaiting (e.g. refresh vs. open other repo). */
   const activeRepoPathRef = useRef<string | null>(null);
   activeRepoPathRef.current = repo?.path ?? null;
+  const graphRefsRef = useRef<string[]>([]);
   /** Latest `loadRepo` target; supersede in-flight loads when opening another path. */
   const pendingLoadRepoRef = useRef<string | null>(null);
   /** Collapse bursts of filesystem watch events into one in-flight refresh plus one queued rerun. */
   const repoMutationRefreshInFlightRef = useRef(false);
   const repoMutationRefreshPendingRef = useRef(false);
+  /** Avoid duplicate graph reloads when multiple state updates describe the same graph request. */
+  const lastGraphReloadKeyRef = useRef<string | null>(null);
   /** Prevents overlapping updater checks from repeated native menu clicks. */
   const updateCheckInFlightRef = useRef(false);
   /** Bumps when clearing browse or starting a new commit selection — drops stale `selectCommit` completions. */
@@ -1351,6 +1354,7 @@ export default function App({
   }, [localBranches, remoteBranches, graphBranchVisible, remoteGraphDefaultsVisible]);
 
   const graphRefsKey = useMemo(() => graphRefs.join("\0"), [graphRefs]);
+  graphRefsRef.current = graphRefs;
   const stashRefsKey = useMemo(
     () => stashes.map((stash) => `${stash.refName}:${stash.commitHash}`).join("\0"),
     [stashes],
@@ -1368,12 +1372,21 @@ export default function App({
   useEffect(() => {
     if (!repo?.path || repo.error) return;
     const pathAtStart = repo.path;
+    const graphReloadKey = [
+      pathAtStart,
+      repo.headHash ?? "",
+      graphRefsKey,
+      stashRefsKey,
+      graphCommitsPageSize,
+    ].join("\0");
+    if (lastGraphReloadKeyRef.current === graphReloadKey) return;
+    lastGraphReloadKeyRef.current = graphReloadKey;
     let cancelled = false;
     void (async () => {
       try {
         const page = await invoke<GraphCommitsPage>("list_graph_commits", {
           path: pathAtStart,
-          refs: graphRefs,
+          refs: graphRefsRef.current,
           skip: 0,
           pageSize: graphCommitsPageSize,
         });
@@ -1383,21 +1396,16 @@ export default function App({
         setListsError(null);
       } catch (e) {
         if (cancelled || activeRepoPathRef.current !== pathAtStart) return;
+        if (lastGraphReloadKeyRef.current === graphReloadKey) {
+          lastGraphReloadKeyRef.current = null;
+        }
         setListsError(invokeErrorMessage(e));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [
-    repo?.path,
-    repo?.error,
-    repo?.headHash,
-    graphRefsKey,
-    stashRefsKey,
-    graphRefs,
-    graphCommitsPageSize,
-  ]);
+  }, [repo?.path, repo?.error, repo?.headHash, graphRefsKey, stashRefsKey, graphCommitsPageSize]);
 
   const handleGraphCommitsPageSizeChange = useCallback((next: number) => {
     const clamped = clampGraphCommitsPageSize(next);
