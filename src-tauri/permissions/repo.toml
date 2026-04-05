@@ -28,6 +28,7 @@ commands.allow = [
   "list_worktrees",
   "remove_worktree",
   "stage_paths",
+  "stage_all",
   "stage_patch",
   "unstage_paths",
   "unstage_patch",

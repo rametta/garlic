@@ -433,11 +433,24 @@ pub struct GitCommandStreamFinishedEvent {
 
 /// Runs `git` with piped stdout/stderr, optionally writes stdin, streams lines to the webview,
 /// writes the audit log, and returns `Err` with stderr (or a generic message) on failure.
-fn run_git_streaming_with_input_and_env(
+fn format_git_command<S: AsRef<str>>(args: &[S]) -> String {
+    let mut command_line = String::from("git");
+    for arg in args {
+        command_line.push(' ');
+        command_line.push_str(arg.as_ref());
+    }
+    command_line
+}
+
+fn format_git_failure<S: AsRef<str>>(args: &[S]) -> String {
+    format!("{} failed", format_git_command(args))
+}
+
+fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
     app: &AppHandle,
     repo_path_str: &str,
     workdir: &Path,
-    args: &[&str],
+    args: &[S],
     operation: &str,
     stdin_text: Option<&str>,
     extra_envs: &[(&str, &str)],
@@ -445,7 +458,7 @@ fn run_git_streaming_with_input_and_env(
     let session_id = next_git_stream_session_id();
     let repo_owned = repo_path_str.to_string();
     let op_owned = operation.to_string();
-    let command_line = format!("git {}", args.join(" "));
+    let command_line = format_git_command(args);
     let _ = app.emit(
         "git-command-stream-started",
         GitCommandStreamStartedEvent {
@@ -457,7 +470,9 @@ fn run_git_streaming_with_input_and_env(
     );
 
     let mut cmd = git_cmd(workdir);
-    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args.iter().map(AsRef::as_ref))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if stdin_text.is_some() {
         cmd.stdin(Stdio::piped());
     } else {
@@ -599,7 +614,7 @@ fn run_git_streaming_with_input_and_env(
     let err_msg = if ok {
         None
     } else if stderr_text.is_empty() {
-        Some(format!("git {} failed", args.join(" ")))
+        Some(format!("{} failed", format_git_command(args)))
     } else {
         Some(stderr_text.clone())
     };
@@ -618,15 +633,15 @@ fn run_git_streaming_with_input_and_env(
     if ok {
         Ok(())
     } else {
-        Err(err_msg.unwrap_or_else(|| format!("git {} failed", args.join(" "))))
+        Err(err_msg.unwrap_or_else(|| format!("{} failed", format_git_command(args))))
     }
 }
 
-fn run_git_streaming_with_input(
+fn run_git_streaming_with_input<S: AsRef<str>>(
     app: &AppHandle,
     repo_path_str: &str,
     workdir: &Path,
-    args: &[&str],
+    args: &[S],
     operation: &str,
     stdin_text: Option<&str>,
 ) -> Result<(), String> {
@@ -643,21 +658,21 @@ fn run_git_streaming_with_input(
 
 /// Runs `git` with piped stdout/stderr, streams lines to the webview, writes the audit log, and
 /// returns `Err` with stderr (or a generic message) on failure.
-fn run_git_streaming(
+fn run_git_streaming<S: AsRef<str>>(
     app: &AppHandle,
     repo_path_str: &str,
     workdir: &Path,
-    args: &[&str],
+    args: &[S],
     operation: &str,
 ) -> Result<(), String> {
     run_git_streaming_with_input(app, repo_path_str, workdir, args, operation, None)
 }
 
-fn run_git_streaming_with_env(
+fn run_git_streaming_with_env<S: AsRef<str>>(
     app: &AppHandle,
     repo_path_str: &str,
     workdir: &Path,
-    args: &[&str],
+    args: &[S],
     operation: &str,
     extra_envs: &[(&str, &str)],
 ) -> Result<(), String> {
@@ -1093,7 +1108,7 @@ fn trim_audit_log_if_needed(path: &Path, incoming_len: usize) -> std::io::Result
     Ok(())
 }
 
-fn write_git_audit_line(cwd: &Path, args: &[&str], ok: bool, err: &str) {
+fn write_git_audit_line<S: AsRef<str>>(cwd: &Path, args: &[S], ok: bool, err: &str) {
     let path = match GIT_AUDIT_LOG_PATH.lock().ok().and_then(|g| g.clone()) {
         Some(p) => p,
         None => return,
@@ -1103,7 +1118,7 @@ fn write_git_audit_line(cwd: &Path, args: &[&str], ok: bool, err: &str) {
     let line = format!(
         "{ts}\t{}\tgit {}\t{}\t{}\n",
         cwd.display(),
-        args.join(" "),
+        format_git_command(args).trim_start_matches("git "),
         status,
         err.replace('\n', " ")
     );
@@ -1122,15 +1137,15 @@ fn write_git_audit_line(cwd: &Path, args: &[&str], ok: bool, err: &str) {
         .and_then(|mut f| f.write_all(line_bytes));
 }
 
-fn git_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
+fn git_output<S: AsRef<str>>(workdir: &Path, args: &[S]) -> Result<String, String> {
     let output = git_cmd(workdir)
-        .args(args)
+        .args(args.iter().map(AsRef::as_ref))
         .output()
         .map_err(|e| format!("Could not run git: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
-            format!("git {} failed", args.join(" "))
+            format_git_failure(args)
         } else {
             stderr.clone()
         };
@@ -1142,15 +1157,15 @@ fn git_output(workdir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(out)
 }
 
-fn git_output_raw(workdir: &Path, args: &[&str]) -> Result<String, String> {
+fn git_output_raw<S: AsRef<str>>(workdir: &Path, args: &[S]) -> Result<String, String> {
     let output = git_cmd(workdir)
-        .args(args)
+        .args(args.iter().map(AsRef::as_ref))
         .output()
         .map_err(|e| format!("Could not run git: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
-            format!("git {} failed", args.join(" "))
+            format_git_failure(args)
         } else {
             stderr.clone()
         };
@@ -1176,14 +1191,16 @@ fn commit_has_signature(workdir: &Path, hash: &str) -> bool {
     !flag.is_empty() && marker != 'N'
 }
 
-fn git_output_with_input_and_env(
+fn git_output_with_input_and_env<S: AsRef<str>>(
     workdir: &Path,
-    args: &[&str],
+    args: &[S],
     stdin_text: Option<&str>,
     extra_envs: &[(&str, &str)],
 ) -> Result<String, String> {
     let mut cmd = git_cmd(workdir);
-    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args.iter().map(AsRef::as_ref))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if stdin_text.is_some() {
         cmd.stdin(Stdio::piped());
     }
@@ -1222,7 +1239,7 @@ fn git_output_with_input_and_env(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
-            format!("git {} failed", args.join(" "))
+            format_git_failure(args)
         } else {
             stderr.clone()
         };
@@ -2124,7 +2141,8 @@ pub fn list_branch_commits(path: String, page_size: u32) -> Result<GraphCommitsP
     ensure_git_repo(&path_buf)?;
     let page_size = clamp_graph_commits_page_size(page_size) as usize;
     let fetch_n = (page_size + 1).to_string();
-    let mut cmd_args: Vec<String> = vec![
+    let mut cmd_args: Vec<String> = Vec::with_capacity(8);
+    cmd_args.extend([
         "log".into(),
         "--branches".into(),
         "--date-order".into(),
@@ -2133,12 +2151,11 @@ pub fn list_branch_commits(path: String, page_size: u32) -> Result<GraphCommitsP
         "-n".into(),
         fetch_n,
         format!("--format={COMMIT_LOG_FORMAT}"),
-    ];
+    ]);
     if let Ok(stash_refs) = stash_ref_list(&path_buf) {
         cmd_args.extend(stash_refs);
     }
-    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
-    let out = git_output(&path_buf, &args_ref)?;
+    let out = git_output(&path_buf, &cmd_args)?;
     let mut commits = parse_commit_log_lines(&out);
     annotate_stash_refs(&path_buf, &mut commits)?;
     Ok(trim_graph_commits_page(commits, page_size))
@@ -2174,7 +2191,8 @@ pub fn list_graph_commits_blocking(
     }
     let fetch_n = (page_size + 1).to_string();
     let skip_s = skip.to_string();
-    let mut cmd_args: Vec<String> = vec![
+    let mut cmd_args: Vec<String> = Vec::with_capacity(7 + clean.len());
+    cmd_args.extend([
         "log".into(),
         "--date-order".into(),
         "--skip".into(),
@@ -2182,10 +2200,9 @@ pub fn list_graph_commits_blocking(
         "-n".into(),
         fetch_n,
         format!("--format={COMMIT_LOG_FORMAT}"),
-    ];
+    ]);
     cmd_args.extend(clean);
-    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
-    let out = git_output(&path_buf, &args_ref)?;
+    let out = git_output(&path_buf, &cmd_args)?;
     let mut commits = parse_commit_log_lines(&out);
     annotate_stash_refs(&path_buf, &mut commits)?;
     Ok(trim_graph_commits_page(commits, page_size))
@@ -2596,14 +2613,12 @@ pub fn drop_commit(app: AppHandle, path: String, commit_hash: GitOidArg) -> Resu
     )?;
     let mut parts = parents_line.split_whitespace();
     let _ = parts.next();
-    let parents: Vec<&str> = parts.collect();
-    if parents.is_empty() {
+    let Some(parent_hash) = parts.next() else {
         return Err("Dropping the root commit is not supported.".to_string());
-    }
-    if parents.len() > 1 {
+    };
+    if parts.next().is_some() {
         return Err("Dropping merge commits is not supported yet.".to_string());
     }
-    let parent_hash = parents[0];
 
     let merge_base_args = ["merge-base", "--is-ancestor", &resolved_hash, "HEAD"];
     let ancestor_status = git_cmd(&path_buf)
@@ -3337,10 +3352,19 @@ pub fn stage_paths(app: AppHandle, path: String, paths: Vec<String>) -> Result<(
     if paths.is_empty() {
         return Ok(());
     }
-    let mut args: Vec<String> = vec!["add".into(), "--".into()];
+    let mut args = Vec::with_capacity(paths.len() + 2);
+    args.push("add".into());
+    args.push("--".into());
     args.extend(paths);
-    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_git_streaming(&app, &path, &path_buf, &args_ref, "stage")?;
+    run_git_streaming(&app, &path, &path_buf, &args, "stage")?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stage_all(app: AppHandle, path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    run_git_streaming(&app, &path, &path_buf, &["add", "-A"], "stage")?;
     Ok(())
 }
 
@@ -3372,10 +3396,12 @@ pub fn unstage_paths(app: AppHandle, path: String, paths: Vec<String>) -> Result
     if paths.is_empty() {
         return Ok(());
     }
-    let mut args: Vec<String> = vec!["restore".into(), "--staged".into(), "--".into()];
+    let mut args = Vec::with_capacity(paths.len() + 3);
+    args.push("restore".into());
+    args.push("--staged".into());
+    args.push("--".into());
     args.extend(paths);
-    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_git_streaming(&app, &path, &path_buf, &args_ref, "unstage")?;
+    run_git_streaming(&app, &path, &path_buf, &args, "unstage")?;
     Ok(())
 }
 
@@ -3526,16 +3552,20 @@ fn discard_paths_changes_inner(
         }
 
         if !restore_paths.is_empty() {
-            let mut args: Vec<String> = vec!["restore".into(), "--worktree".into(), "--".into()];
+            let mut args = Vec::with_capacity(restore_paths.len() + 3);
+            args.push("restore".into());
+            args.push("--worktree".into());
+            args.push("--".into());
             args.extend(restore_paths);
-            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            run_git_streaming(app, path, path_buf, &args_ref, "discard changes")?;
+            run_git_streaming(app, path, path_buf, &args, "discard changes")?;
         }
         if !clean_paths.is_empty() {
-            let mut args: Vec<String> = vec!["clean".into(), "-f".into(), "--".into()];
+            let mut args = Vec::with_capacity(clean_paths.len() + 3);
+            args.push("clean".into());
+            args.push("-f".into());
+            args.push("--".into());
             args.extend(clean_paths);
-            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            run_git_streaming(app, path, path_buf, &args_ref, "discard changes")?;
+            run_git_streaming(app, path, path_buf, &args, "discard changes")?;
         }
         return Ok(());
     }
@@ -3560,16 +3590,16 @@ fn discard_paths_changes_inner(
     if restore_paths.is_empty() {
         return Ok(());
     }
-    let mut args: Vec<String> = vec![
+    let mut args = Vec::with_capacity(restore_paths.len() + 5);
+    args.extend([
         "restore".into(),
         "--source=HEAD".into(),
         "--staged".into(),
         "--worktree".into(),
         "--".into(),
-    ];
+    ]);
     args.extend(restore_paths);
-    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_git_streaming(app, path, path_buf, &args_ref, "discard changes")?;
+    run_git_streaming(app, path, path_buf, &args, "discard changes")?;
     Ok(())
 }
 
@@ -4803,13 +4833,14 @@ pub fn list_stashes(path: String) -> Result<Vec<StashEntry>, String> {
 pub fn stash_push(app: AppHandle, path: String, message: Option<String>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let mut args: Vec<String> = vec!["stash".into(), "push".into()];
+    let mut args = Vec::with_capacity(if message.is_some() { 4 } else { 2 });
+    args.push("stash".into());
+    args.push("push".into());
     if let Some(m) = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         args.push("-m".into());
         args.push(m.to_string());
     }
-    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_git_streaming(&app, &path, &path_buf, &args_ref, "stash push")?;
+    run_git_streaming(&app, &path, &path_buf, &args, "stash push")?;
     Ok(())
 }
 

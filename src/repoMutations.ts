@@ -9,6 +9,7 @@ import {
   applyOptimisticDiscardPathChange,
   applyOptimisticStageChange,
   clearStagedWorkingTreeFiles,
+  stageAllWorkingTreeFiles,
   type RepoMetadata,
   type RepoSnapshot,
   withWorkingTreeFiles,
@@ -575,6 +576,15 @@ export function useStagePathsMutation() {
         snapshot,
         applyOptimisticStageChange(snapshot.workingTreeFiles, variables.paths, "stage"),
       ),
+    invalidateSnapshotOnSettled: false,
+  });
+}
+
+export function useStageAllMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string }) => invokeRepoMutation("stage_all", variables),
+    optimisticUpdate: (snapshot) =>
+      withWorkingTreeFiles(snapshot, stageAllWorkingTreeFiles(snapshot.workingTreeFiles)),
     invalidateSnapshotOnSettled: false,
   });
 }

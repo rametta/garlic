@@ -129,6 +129,7 @@ pub fn run() {
             git::list_worktrees,
             git::remove_worktree,
             git::stage_paths,
+            git::stage_all,
             git::stage_patch,
             git::unstage_paths,
             git::unstage_patch,

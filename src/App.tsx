@@ -110,6 +110,7 @@ import {
   useSetGraphBranchVisibilityMutation,
   useSetRemoteUrlMutation,
   useSkipRepoOperationMutation,
+  useStageAllMutation,
   useStagePatchMutation,
   useStagePathsMutation,
   useStashDropMutation,
@@ -1213,6 +1214,7 @@ export default function App({
   const stashDropMutation = useStashDropMutation();
   const deleteTagMutation = useDeleteTagMutation();
   const deleteRemoteTagMutation = useDeleteRemoteTagMutation();
+  const stageAllMutation = useStageAllMutation();
   const stagePathsMutation = useStagePathsMutation();
   const unstagePathsMutation = useUnstagePathsMutation();
   const stagePatchMutation = useStagePatchMutation();
@@ -4118,6 +4120,39 @@ export default function App({
     }
   }
 
+  async function onStageAll() {
+    if (!repo?.path || repo.error) return;
+    const nextPaths = unstagedPaths.filter((path) => !syncingStagePaths.has(path));
+    if (nextPaths.length === 0) return;
+    setOperationError(null);
+    setSyncingStagePaths((prev) => {
+      const next = new Set(prev);
+      for (const path of nextPaths) next.add(path);
+      return next;
+    });
+    if (
+      selectedDiffRepoPath === repo.path &&
+      selectedDiffPath !== null &&
+      nextPaths.includes(selectedDiffPath) &&
+      selectedDiffSide === "unstaged"
+    ) {
+      diffLoadSeqRef.current += 1;
+      setSelectedDiffSide("staged");
+      clearSelectedDiffContent();
+    }
+    try {
+      await stageAllMutation.mutateAsync({ path: repo.path });
+    } catch (e) {
+      setOperationError(invokeErrorMessage(e));
+    } finally {
+      setSyncingStagePaths((prev) => {
+        const next = new Set(prev);
+        for (const path of nextPaths) next.delete(path);
+        return next;
+      });
+    }
+  }
+
   async function onUnstagePaths(paths: string[]) {
     if (!repo?.path || repo.error || paths.length === 0) return;
     const nextPaths = [...new Set(paths)].filter((path) => !syncingStagePaths.has(path));
@@ -6522,7 +6557,7 @@ export default function App({
                         type="button"
                         className="btn shrink-0 btn-outline btn-xs btn-success"
                         disabled={stageSyncBusy || stageCommitBusy || commitPushBusy}
-                        onClick={() => void onStagePaths(unstagedPaths)}
+                        onClick={() => void onStageAll()}
                       >
                         Stage all
                       </button>

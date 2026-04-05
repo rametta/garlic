@@ -253,3 +253,16 @@ export function clearStagedWorkingTreeFiles(files: WorkingTreeFile[]): WorkingTr
     ];
   });
 }
+
+export function stageAllWorkingTreeFiles(files: WorkingTreeFile[]): WorkingTreeFile[] {
+  return files.map((file) => {
+    if (!file.unstaged) return file;
+    return {
+      ...file,
+      staged: true,
+      unstaged: false,
+      stagedStats: combineLineStats(file.stagedStats, file.unstagedStats),
+      unstagedStats: undefined,
+    };
+  });
+}
