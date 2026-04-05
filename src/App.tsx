@@ -2130,7 +2130,7 @@ export default function App({
       setCommitDetailsExpanded(false);
       setCommitBrowseLoading(true);
       setCommitBrowseError(null);
-      setCommitSignature({ loading: true, verified: null });
+      setCommitSignature({ loading: false, verified: null });
 
       void invoke<CommitDetails>("get_commit_details", {
         path: pathAtStart,
@@ -2174,12 +2174,6 @@ export default function App({
           setCommitBrowseLoading(false);
         }
       }
-
-      void invoke("start_commit_signature_check", {
-        path: pathAtStart,
-        commitHash: hash,
-        requestId: seq,
-      }).catch(() => {});
     },
     [repo, clearFileToolView, loadCommitFileDiff, clearSelectedDiffContent, clearWorktreeBrowse],
   );
@@ -5937,174 +5931,6 @@ export default function App({
                               />
                             ) : !listsError && commitBrowseHash ? (
                               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                                <div className="shrink-0 p-3">
-                                  <div className="flex flex-wrap items-start justify-between gap-2">
-                                    <button
-                                      type="button"
-                                      className="btn shrink-0 btn-xs btn-primary"
-                                      onClick={clearCommitBrowse}
-                                    >
-                                      Back to commits
-                                    </button>
-                                    <div className="min-w-0 text-right">
-                                      <div className="flex items-center justify-end gap-2">
-                                        <p className="m-0 font-mono text-[0.65rem] text-base-content/60">
-                                          {commitDetails?.shortHash ??
-                                            commitBrowseMeta?.shortHash ??
-                                            commitBrowseHash.slice(0, 7)}
-                                        </p>
-                                        <button
-                                          type="button"
-                                          className="btn shrink-0 btn-ghost btn-xs"
-                                          aria-expanded={commitDetailsExpanded}
-                                          onClick={() => {
-                                            setCommitDetailsExpanded((expanded) => !expanded);
-                                          }}
-                                        >
-                                          {commitDetailsExpanded ? "Hide details" : "Show details"}
-                                        </button>
-                                      </div>
-                                      <p className="mt-0.5 mb-0 text-[0.65rem] text-base-content/55">
-                                        Signature:{" "}
-                                        {commitSignature.loading ? (
-                                          <span className="text-base-content/50">checking…</span>
-                                        ) : commitSignature.verified === true ? (
-                                          <span className="text-success">verified</span>
-                                        ) : commitSignature.verified === false ? (
-                                          <span className="text-base-content/70">not verified</span>
-                                        ) : (
-                                          <span className="text-base-content/50">unknown</span>
-                                        )}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="mt-2">
-                                    <p className="m-0 text-[0.68rem] text-base-content/55">
-                                      {commitDetails?.subject ??
-                                        commitBrowseMeta?.subject ??
-                                        commitBrowseHash.slice(0, 7)}
-                                    </p>
-                                  </div>
-                                  {commitDetailsLoading ? (
-                                    <p className="mt-2 mb-0 text-xs text-base-content/60">
-                                      Loading commit details…
-                                    </p>
-                                  ) : commitDetailsError ? (
-                                    <DismissibleAlert
-                                      className="mt-3 alert py-2 text-xs alert-error"
-                                      onDismiss={() => {
-                                        setCommitDetailsError(null);
-                                      }}
-                                    >
-                                      <span className="wrap-break-word">{commitDetailsError}</span>
-                                    </DismissibleAlert>
-                                  ) : commitDetailsExpanded ? (
-                                    <>
-                                      {commitDescription ? (
-                                        <pre className="mt-2 mb-0 overflow-x-auto font-sans text-xs leading-relaxed whitespace-pre-wrap text-base-content/80">
-                                          {commitDescription}
-                                        </pre>
-                                      ) : null}
-                                      <div className="mt-3 grid gap-2 text-[0.68rem] leading-snug text-base-content/70 md:grid-cols-2">
-                                        <div className="min-w-0">
-                                          <div className="font-semibold tracking-wide text-base-content/45 uppercase">
-                                            Author
-                                          </div>
-                                          <div className="mt-0.5 text-base-content/90">
-                                            {commitDetails?.author.trim() ||
-                                              commitBrowseMeta?.author.trim() ||
-                                              "—"}
-                                          </div>
-                                          <code className="mt-0.5 block font-mono wrap-break-word text-base-content/60">
-                                            {commitDetails?.authorEmail.trim() ||
-                                              commitBrowseMeta?.authorEmail.trim() ||
-                                              "—"}
-                                          </code>
-                                          <div className="mt-0.5">
-                                            {formatDate(
-                                              commitDetails?.authorDate ??
-                                                commitBrowseMeta?.date ??
-                                                null,
-                                            ) ?? "—"}
-                                          </div>
-                                        </div>
-                                        <div className="min-w-0">
-                                          <div className="font-semibold tracking-wide text-base-content/45 uppercase">
-                                            Committer
-                                          </div>
-                                          <div className="mt-0.5 text-base-content/90">
-                                            {commitDetails?.committer.trim() ||
-                                              commitDetails?.author.trim() ||
-                                              commitBrowseMeta?.author.trim() ||
-                                              "—"}
-                                          </div>
-                                          <code className="mt-0.5 block font-mono wrap-break-word text-base-content/60">
-                                            {commitDetails?.committerEmail.trim() ||
-                                              commitDetails?.authorEmail.trim() ||
-                                              commitBrowseMeta?.authorEmail.trim() ||
-                                              "—"}
-                                          </code>
-                                          <div className="mt-0.5">
-                                            {formatDate(
-                                              commitDetails?.committerDate ??
-                                                commitDetails?.authorDate ??
-                                                commitBrowseMeta?.date ??
-                                                null,
-                                            ) ?? "—"}
-                                          </div>
-                                        </div>
-                                        <div className="min-w-0 md:col-span-2">
-                                          <div className="font-semibold tracking-wide text-base-content/45 uppercase">
-                                            Metadata
-                                          </div>
-                                          <div className="mt-1 flex flex-wrap gap-1.5">
-                                            <span className="badge badge-ghost font-mono badge-sm">
-                                              {commitDetails?.hash ?? commitBrowseHash}
-                                            </span>
-                                            <span className="badge badge-ghost badge-sm">
-                                              {commitDetails?.parentHashes.length ??
-                                                commitBrowseMeta?.parentHashes.length ??
-                                                0}{" "}
-                                              parent
-                                              {(commitDetails?.parentHashes.length ??
-                                                commitBrowseMeta?.parentHashes.length ??
-                                                0) === 1
-                                                ? ""
-                                                : "s"}
-                                            </span>
-                                            {commitDetails?.coAuthors.length ? (
-                                              <span className="badge badge-ghost badge-sm">
-                                                {commitDetails.coAuthors.length} co-author
-                                                {commitDetails.coAuthors.length === 1 ? "" : "s"}
-                                              </span>
-                                            ) : null}
-                                          </div>
-                                          {commitDetails?.parentHashes.length ? (
-                                            <code className="mt-1 block font-mono text-[0.62rem] wrap-break-word text-base-content/55">
-                                              Parents: {commitDetails.parentHashes.join(", ")}
-                                            </code>
-                                          ) : null}
-                                          {commitDetails?.coAuthors.length ? (
-                                            <div className="mt-2 flex flex-col gap-1">
-                                              {commitDetails.coAuthors.map((coAuthor) => (
-                                                <div key={`${coAuthor.name}<${coAuthor.email}>`}>
-                                                  <span className="text-base-content/85">
-                                                    {coAuthor.name || "Unknown co-author"}
-                                                  </span>
-                                                  {coAuthor.email ? (
-                                                    <code className="ml-1 font-mono text-base-content/55">
-                                                      {`<${coAuthor.email}>`}
-                                                    </code>
-                                                  ) : null}
-                                                </div>
-                                              ))}
-                                            </div>
-                                          ) : null}
-                                        </div>
-                                      </div>
-                                    </>
-                                  ) : null}
-                                </div>
                                 <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
                                   <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                                     {!commitDiffPath ? (
@@ -6136,7 +5962,13 @@ export default function App({
                                         ) : (
                                           <div className="flex-1 overflow-auto border-t border-base-300/80 bg-base-200/30 p-2">
                                             <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
-                                              Patch
+                                              <button
+                                                type="button"
+                                                className="btn shrink-0 btn-xs btn-primary"
+                                                onClick={clearCommitBrowse}
+                                              >
+                                                Back to commits
+                                              </button>
                                             </div>
                                             <UnifiedDiff
                                               text={commitDiffText ?? ""}
@@ -6149,8 +5981,200 @@ export default function App({
                                     )}
                                   </div>
                                   <div className="flex w-96 min-w-0 shrink-0 flex-col border-t border-l border-base-300/80">
-                                    <div className="shrink-0 border-b border-base-300/80 py-2">
-                                      <h2 className="m-0 ml-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
+                                    <div className="shrink-0 border-b border-base-300/80 bg-base-200 px-3 py-3">
+                                      <div className="flex justify-between items-baseline gap-3">
+                                        <p className="m-0 font-mono text-[0.65rem] text-base-content/50">
+                                          {formatDate(
+                                            commitDetails?.authorDate ??
+                                              commitBrowseMeta?.date ??
+                                              null,
+                                          ) ?? "—"}
+                                        </p>
+                                        <button
+                                          type="button"
+                                          className="btn shrink-0 btn-ghost btn-xs"
+                                          aria-expanded={commitDetailsExpanded}
+                                          onClick={() => {
+                                            const nextExpanded = !commitDetailsExpanded;
+                                            setCommitDetailsExpanded(nextExpanded);
+                                            if (
+                                              !nextExpanded ||
+                                              !repo?.path ||
+                                              !commitBrowseHash ||
+                                              commitSignature.loading ||
+                                              commitSignature.verified !== null
+                                            ) {
+                                              return;
+                                            }
+                                            const pathAtStart = repo.path;
+                                            const seq = selectCommitSeqRef.current;
+                                            setCommitSignature({ loading: true, verified: null });
+                                            void invoke("start_commit_signature_check", {
+                                              path: pathAtStart,
+                                              commitHash: commitBrowseHash,
+                                              requestId: seq,
+                                            }).catch(() => {
+                                              if (
+                                                activeRepoPathRef.current !== pathAtStart ||
+                                                seq !== selectCommitSeqRef.current
+                                              ) {
+                                                return;
+                                              }
+                                              setCommitSignature({
+                                                loading: false,
+                                                verified: null,
+                                              });
+                                            });
+                                          }}
+                                        >
+                                          {commitDetailsExpanded ? "Collapse" : "Expand"}
+                                        </button>
+                                      </div>
+                                      <h2 className="mt-2 mb-0 text-base leading-snug font-semibold text-base-content">
+                                        {commitDetails?.subject ??
+                                          commitBrowseMeta?.subject ??
+                                          commitBrowseHash.slice(0, 7)}
+                                      </h2>
+                                      {commitDetailsLoading ? (
+                                        <p className="mt-2 mb-0 text-xs text-base-content/60">
+                                          Loading commit details…
+                                        </p>
+                                      ) : commitDetailsError ? (
+                                        <DismissibleAlert
+                                          className="mt-3 alert py-2 text-xs alert-error"
+                                          onDismiss={() => {
+                                            setCommitDetailsError(null);
+                                          }}
+                                        >
+                                          <span className="wrap-break-word">
+                                            {commitDetailsError}
+                                          </span>
+                                        </DismissibleAlert>
+                                      ) : (
+                                        <div className="mt-3 text-xs leading-relaxed">
+                                          <div className="min-w-0">
+                                            <div className="text-base-content/90">
+                                              {commitDetails?.author.trim() ||
+                                                commitBrowseMeta?.author.trim() ||
+                                                "—"}
+                                              {" — "}
+                                              <code className="font-mono text-[0.7rem] wrap-break-word text-base-content/55">
+                                                {commitDetails?.authorEmail.trim() ||
+                                                  commitBrowseMeta?.authorEmail.trim() ||
+                                                  "—"}
+                                              </code>
+                                            </div>
+                                          </div>
+                                          {commitDetailsExpanded ? (
+                                            <div className="mt-3 space-y-3">
+                                              {commitDescription ? (
+                                                <pre className="m-0 overflow-x-auto font-sans text-xs leading-relaxed whitespace-pre-wrap text-base-content/75">
+                                                  {commitDescription}
+                                                </pre>
+                                              ) : null}
+                                              <div className="flex items-start justify-between gap-3">
+                                                <div>
+                                                  <div className="text-[0.65rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                                    Signature
+                                                  </div>
+                                                  <div className="mt-0.5 text-[0.7rem]">
+                                                    {commitSignature.loading ? (
+                                                      <span className="text-base-content/50">
+                                                        checking…
+                                                      </span>
+                                                    ) : commitSignature.verified === true ? (
+                                                      <span className="text-success">signed ⛨</span>
+                                                    ) : commitSignature.verified === false ? (
+                                                      <span className="text-base-content/70">
+                                                        unsigned
+                                                      </span>
+                                                    ) : (
+                                                      <span className="text-base-content/50">
+                                                        unknown
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                              </div>
+                                              {commitDetails?.coAuthors.length ? (
+                                                <div>
+                                                  <div className="text-[0.65rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                                    Co-authors
+                                                  </div>
+                                                  <div className="mt-1 space-y-1 text-base-content/75">
+                                                    {commitDetails.coAuthors.map((coAuthor) => (
+                                                      <div
+                                                        key={`${coAuthor.name}<${coAuthor.email}>`}
+                                                        className="wrap-break-word"
+                                                      >
+                                                        <span>
+                                                          {coAuthor.name || "Unknown co-author"}
+                                                        </span>
+                                                        {coAuthor.email ? (
+                                                          <code className="ml-1 font-mono text-[0.7rem] text-base-content/55">
+                                                            {`<${coAuthor.email}>`}
+                                                          </code>
+                                                        ) : null}
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                </div>
+                                              ) : null}
+                                              <div className="grid gap-2 text-[0.7rem] text-base-content/65">
+                                                <div>
+                                                  <div className="font-semibold tracking-wide text-base-content/45 uppercase">
+                                                    Parent
+                                                  </div>
+                                                  {commitDetails?.parentHashes.length ? (
+                                                    <div className="mt-1 space-y-1">
+                                                      {commitDetails.parentHashes.map(
+                                                        (parentHash) => (
+                                                          <code
+                                                            key={parentHash}
+                                                            className="block font-mono wrap-break-word"
+                                                          >
+                                                            {parentHash}
+                                                          </code>
+                                                        ),
+                                                      )}
+                                                    </div>
+                                                  ) : (
+                                                    <div className="mt-1">None</div>
+                                                  )}
+                                                </div>
+                                                <div>
+                                                  <div className="font-semibold tracking-wide text-base-content/45 uppercase">
+                                                    Hashes
+                                                  </div>
+                                                  <div className="mt-1 space-y-1">
+                                                    <div>
+                                                      <span className="text-base-content/45">
+                                                        Short:
+                                                      </span>{" "}
+                                                      <code className="font-mono">
+                                                        {commitDetails?.shortHash ??
+                                                          commitBrowseMeta?.shortHash ??
+                                                          commitBrowseHash.slice(0, 7)}
+                                                      </code>
+                                                    </div>
+                                                    <div>
+                                                      <span className="text-base-content/45">
+                                                        Full:
+                                                      </span>{" "}
+                                                      <code className="font-mono wrap-break-word">
+                                                        {commitDetails?.hash ?? commitBrowseHash}
+                                                      </code>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="shrink-0 border-b border-base-300/80 px-3 py-2">
+                                      <h2 className="m-0 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[0.65rem] font-semibold tracking-wide text-base-content/50 uppercase">
                                         <span>Files</span>
                                         {!commitBrowseLoading ? (
                                           <span className="font-mono text-[0.65rem] font-normal tracking-normal text-base-content/45 normal-case tabular-nums">
