@@ -1295,22 +1295,8 @@ fn git_output_allow_fail(workdir: &Path, args: &[&str]) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
-fn git_internal_path_exists(workdir: &Path, rel: &str) -> bool {
-    let Ok(resolved) = git_output(workdir, &["rev-parse", "--git-path", rel]) else {
-        return false;
-    };
-    let resolved_path = PathBuf::from(resolved.trim());
-    if resolved_path.is_absolute() {
-        resolved_path.exists()
-    } else {
-        workdir.join(resolved_path).exists()
-    }
-}
-
-fn detect_repo_operation_state(workdir: &Path) -> Option<RepoOperationState> {
-    if git_internal_path_exists(workdir, "rebase-merge")
-        || git_internal_path_exists(workdir, "rebase-apply")
-    {
+fn detect_repo_operation_state_from_git_dir(git_dir: &Path) -> Option<RepoOperationState> {
+    if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
         return Some(RepoOperationState {
             kind: "rebase".into(),
             label: "Rebase in progress".into(),
@@ -1319,7 +1305,7 @@ fn detect_repo_operation_state(workdir: &Path) -> Option<RepoOperationState> {
             can_skip: true,
         });
     }
-    if git_internal_path_exists(workdir, "MERGE_HEAD") {
+    if git_dir.join("MERGE_HEAD").exists() {
         return Some(RepoOperationState {
             kind: "merge".into(),
             label: "Merge in progress".into(),
@@ -1328,7 +1314,7 @@ fn detect_repo_operation_state(workdir: &Path) -> Option<RepoOperationState> {
             can_skip: false,
         });
     }
-    if git_internal_path_exists(workdir, "CHERRY_PICK_HEAD") {
+    if git_dir.join("CHERRY_PICK_HEAD").exists() {
         return Some(RepoOperationState {
             kind: "cherryPick".into(),
             label: "Cherry-pick in progress".into(),
@@ -1338,6 +1324,17 @@ fn detect_repo_operation_state(workdir: &Path) -> Option<RepoOperationState> {
         });
     }
     None
+}
+
+fn detect_repo_operation_state(workdir: &Path) -> Option<RepoOperationState> {
+    let git_dir = git_output_allow_fail(workdir, &["rev-parse", "--git-dir"])?;
+    let git_dir = PathBuf::from(git_dir.trim());
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        workdir.join(git_dir)
+    };
+    detect_repo_operation_state_from_git_dir(&git_dir)
 }
 
 fn repo_name_from_path(path: &str) -> String {
@@ -1598,6 +1595,80 @@ fn parse_remotes(text: &str) -> Vec<RemoteEntry> {
         .collect()
 }
 
+#[derive(Default)]
+struct RepoStatusSummary {
+    branch: Option<String>,
+    detached: bool,
+    head_hash: Option<String>,
+    ahead: Option<u32>,
+    behind: Option<u32>,
+    working_tree_clean: Option<bool>,
+}
+
+fn parse_repo_status_summary(text: &str) -> RepoStatusSummary {
+    let mut summary = RepoStatusSummary {
+        working_tree_clean: Some(true),
+        ..RepoStatusSummary::default()
+    };
+
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("# branch.oid ") {
+            let oid = rest.trim();
+            if oid != "(initial)" && !oid.is_empty() {
+                summary.head_hash = Some(oid.to_string());
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# branch.head ") {
+            let head = rest.trim();
+            if head == "(detached)" {
+                summary.detached = true;
+                summary.branch = None;
+            } else if !head.is_empty() && head != "(unknown)" {
+                summary.branch = Some(head.to_string());
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# branch.ab ") {
+            let mut parts = rest.split_whitespace();
+            let ahead = parts
+                .next()
+                .and_then(|part| part.strip_prefix('+'))
+                .and_then(|n| n.parse::<u32>().ok());
+            let behind = parts
+                .next()
+                .and_then(|part| part.strip_prefix('-'))
+                .and_then(|n| n.parse::<u32>().ok());
+            summary.ahead = ahead;
+            summary.behind = behind;
+            continue;
+        }
+        if !line.is_empty() {
+            summary.working_tree_clean = Some(false);
+        }
+    }
+
+    summary
+}
+
+fn parse_head_log_summary(
+    text: &str,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    let mut parts = text.split('\0');
+    let full = parts.next().filter(|s| !s.is_empty()).map(String::from);
+    let short = parts.next().filter(|s| !s.is_empty()).map(String::from);
+    let subject = parts.next().filter(|s| !s.is_empty()).map(String::from);
+    let author = parts.next().filter(|s| !s.is_empty()).map(String::from);
+    let date = parts.next().filter(|s| !s.is_empty()).map(String::from);
+    (full, short, subject, author, date)
+}
+
 /// Inspect a local folder with `git` and return metadata for the UI.
 #[tauri::command]
 pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, String> {
@@ -1634,7 +1705,39 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         operation_state: None,
     };
 
-    if git_output(&path_buf, &["rev-parse", "--is-inside-work-tree"]).is_err() {
+    let repo_info = git_output(
+        &path_buf,
+        &[
+            "rev-parse",
+            "--is-inside-work-tree",
+            "--show-toplevel",
+            "--git-dir",
+        ],
+    );
+    let Ok(repo_info) = repo_info else {
+        let meta = RepoMetadata {
+            error: Some("Not a Git repository (no .git metadata found).".to_string()),
+            ..base
+        };
+        crate::active_repo::set_path(&app, Some(path_buf.clone()));
+        crate::window_title::set_main_window_title(&app, &meta.name);
+        return Ok(meta);
+    };
+
+    let mut repo_info_lines = repo_info.lines();
+    let inside_work_tree = repo_info_lines.next().map(str::trim) == Some("true");
+    let git_root = repo_info_lines
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let git_dir = repo_info_lines
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+
+    if !inside_work_tree {
         let meta = RepoMetadata {
             error: Some("Not a Git repository (no .git metadata found).".to_string()),
             ..base
@@ -1644,39 +1747,50 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         return Ok(meta);
     }
 
-    let git_root = git_output(&path_buf, &["rev-parse", "--show-toplevel"]).ok();
+    let git_dir = git_dir.map(|p| if p.is_absolute() { p } else { path_buf.join(p) });
 
-    let abbrev = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"]).ok();
-    let detached = abbrev.as_deref() == Some("HEAD");
+    let (status_summary, log_summary, remotes) = std::thread::scope(|s| {
+        let status_handle = s.spawn(|| {
+            git_output_allow_fail(&path_buf, &["status", "--porcelain=v2", "--branch"])
+                .map(|text| parse_repo_status_summary(&text))
+                .unwrap_or_default()
+        });
+        let log_handle = s.spawn(|| {
+            git_output_allow_fail(
+                &path_buf,
+                &["log", "-1", "--format=%H%x00%h%x00%s%x00%an%x00%aI"],
+            )
+            .as_deref()
+            .map(parse_head_log_summary)
+            .unwrap_or((None, None, None, None, None))
+        });
+        let remotes_handle = s.spawn(|| {
+            let remotes_text =
+                git_output_allow_fail(&path_buf, &["remote", "-v"]).unwrap_or_default();
+            parse_remotes(&remotes_text)
+        });
+        (
+            status_handle.join().unwrap(),
+            log_handle.join().unwrap(),
+            remotes_handle.join().unwrap(),
+        )
+    });
 
-    let branch = if detached { None } else { abbrev.clone() };
+    let detached = status_summary.detached;
+    let branch = status_summary.branch.clone();
+    let mut head_hash = status_summary.head_hash.clone();
 
-    let head_hash = git_output(&path_buf, &["rev-parse", "HEAD"]).ok();
-    let head_short = git_output(&path_buf, &["rev-parse", "--short", "HEAD"]).ok();
+    let (log_head_hash, head_short, head_subject, head_author, head_date) = log_summary;
+    if head_hash.is_none() {
+        head_hash = log_head_hash;
+    }
 
-    let log_line = git_output(&path_buf, &["log", "-1", "--format=%s|%an|%aI"]).ok();
-
-    let (head_subject, head_author, head_date) = log_line
-        .as_ref()
-        .map(|s| {
-            let mut parts = s.splitn(3, '|');
-            let sub = parts.next().map(String::from);
-            let auth = parts.next().map(String::from);
-            let date = parts.next().map(String::from);
-            (sub, auth, date)
-        })
-        .unwrap_or((None, None, None));
-
-    let remotes_text = git_output_allow_fail(&path_buf, &["remote", "-v"]).unwrap_or_default();
-    let remotes = parse_remotes(&remotes_text);
-
-    let status = git_output_allow_fail(&path_buf, &["status", "--porcelain"]);
-    let working_tree_clean = status.as_ref().map(|s| s.is_empty());
-
-    let (ahead, behind) = head_upstream_ahead_behind(&path_buf)
-        .map(|(a, b)| (Some(a), Some(b)))
-        .unwrap_or((None, None));
-    let operation_state = detect_repo_operation_state(&path_buf);
+    let working_tree_clean = status_summary.working_tree_clean;
+    let ahead = status_summary.ahead;
+    let behind = status_summary.behind;
+    let operation_state = git_dir
+        .as_deref()
+        .and_then(detect_repo_operation_state_from_git_dir);
 
     let meta = RepoMetadata {
         git_root,
@@ -1704,16 +1818,6 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         meta.head_short.as_deref(),
     );
     Ok(meta)
-}
-
-/// Ahead/behind vs `@{upstream}` using two-dot ranges (same idea as `git status -sb`).
-fn head_upstream_ahead_behind(workdir: &Path) -> Option<(u32, u32)> {
-    git_output_allow_fail(workdir, &["rev-parse", "--verify", "@{upstream}"])?;
-    let ahead_s = git_output_allow_fail(workdir, &["rev-list", "--count", "@{upstream}..HEAD"])?;
-    let behind_s = git_output_allow_fail(workdir, &["rev-list", "--count", "HEAD..@{upstream}"])?;
-    let ahead = ahead_s.trim().parse().ok()?;
-    let behind = behind_s.trim().parse().ok()?;
-    Some((ahead, behind))
 }
 
 fn branch_upstream_abbrev(workdir: &Path, branch: &str) -> Option<String> {
@@ -2039,6 +2143,21 @@ fn merge_stash_refs_into_log_refs(path: &Path, clean: &mut Vec<String>) {
     clean.dedup();
 }
 
+fn all_graph_log_refs(path: &str) -> Result<Vec<String>, String> {
+    let mut refs: Vec<String> = list_local_branches(path.to_string())?
+        .into_iter()
+        .map(|branch| branch.name)
+        .collect();
+    refs.extend(
+        list_remote_branches(path.to_string())?
+            .into_iter()
+            .map(|branch| branch.name),
+    );
+    refs.sort();
+    refs.dedup();
+    Ok(refs)
+}
+
 fn annotate_stash_refs(path: &Path, commits: &mut [CommitEntry]) -> Result<(), String> {
     let stash_refs = stash_ref_list(path)?;
     if stash_refs.is_empty() {
@@ -2087,27 +2206,29 @@ pub fn list_branch_commits(path: String, page_size: u32) -> Result<GraphCommitsP
     Ok(trim_graph_commits_page(commits, page_size))
 }
 
-/// Commits reachable from the given refs (branch names like `main` or `origin/main`), commit-date order, newest first.
+/// Commits reachable from all local and remote refs except the hidden refs, commit-date order, newest first.
 /// Stash entries (`stash@{n}`) are merged into the log so stashes appear by commit date with branch history.
 /// Use `skip` 0 for the first page, then `skip` = loaded count for "load more".
 ///
 /// Same work as [`list_graph_commits`]; exposed for bootstrap and tests that run synchronously on a worker thread.
 pub fn list_graph_commits_blocking(
     path: String,
-    refs: Vec<String>,
+    hidden_refs: Vec<String>,
     skip: u32,
     page_size: u32,
 ) -> Result<GraphCommitsPage, String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let page_size = clamp_graph_commits_page_size(page_size) as usize;
-    let mut clean: Vec<String> = refs
+    let hidden: HashSet<String> = hidden_refs
         .into_iter()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    clean.sort();
-    clean.dedup();
+    let mut clean = all_graph_log_refs(&path)?
+        .into_iter()
+        .filter(|r| !hidden.contains(r))
+        .collect::<Vec<_>>();
     merge_stash_refs_into_log_refs(&path_buf, &mut clean);
     if clean.is_empty() {
         return Ok(GraphCommitsPage {
@@ -2137,11 +2258,12 @@ pub fn list_graph_commits_blocking(
 #[tauri::command]
 pub async fn list_graph_commits(
     path: String,
-    refs: Vec<String>,
+    hidden_refs: Vec<String>,
     skip: u32,
     page_size: u32,
 ) -> Result<GraphCommitsPage, String> {
-    run_blocking_git_task(move || list_graph_commits_blocking(path, refs, skip, page_size)).await
+    run_blocking_git_task(move || list_graph_commits_blocking(path, hidden_refs, skip, page_size))
+        .await
 }
 
 #[tauri::command]

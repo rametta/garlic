@@ -1344,21 +1344,21 @@ export default function App({
 
   const remoteGraphDefaultsVisible = true;
 
-  const graphRefs = useMemo(() => {
+  const hiddenGraphRefs = useMemo(() => {
     const refs: string[] = [];
     for (const b of localBranches) {
-      if (graphLocalVisible(graphBranchVisible, b.name)) refs.push(b.name);
+      if (!graphLocalVisible(graphBranchVisible, b.name)) refs.push(b.name);
     }
     for (const r of remoteBranches) {
-      if (graphRemoteVisible(graphBranchVisible, r.name, remoteGraphDefaultsVisible)) {
+      if (!graphRemoteVisible(graphBranchVisible, r.name, remoteGraphDefaultsVisible)) {
         refs.push(r.name);
       }
     }
     return refs;
   }, [localBranches, remoteBranches, graphBranchVisible, remoteGraphDefaultsVisible]);
 
-  const graphRefsKey = useMemo(() => graphRefs.join("\0"), [graphRefs]);
-  graphRefsRef.current = graphRefs;
+  const hiddenGraphRefsKey = useMemo(() => hiddenGraphRefs.join("\0"), [hiddenGraphRefs]);
+  graphRefsRef.current = hiddenGraphRefs;
   const stashRefsKey = useMemo(
     () => stashes.map((stash) => `${stash.refName}:${stash.commitHash}`).join("\0"),
     [stashes],
@@ -1379,7 +1379,7 @@ export default function App({
     const graphReloadKey = [
       pathAtStart,
       repo.headHash ?? "",
-      graphRefsKey,
+      hiddenGraphRefsKey,
       stashRefsKey,
       graphCommitsPageSize,
     ].join("\0");
@@ -1390,7 +1390,7 @@ export default function App({
       try {
         const page = await invoke<GraphCommitsPage>("list_graph_commits", {
           path: pathAtStart,
-          refs: graphRefsRef.current,
+          hiddenRefs: graphRefsRef.current,
           skip: 0,
           pageSize: graphCommitsPageSize,
         });
@@ -1409,7 +1409,14 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [repo?.path, repo?.error, repo?.headHash, graphRefsKey, stashRefsKey, graphCommitsPageSize]);
+  }, [
+    repo?.path,
+    repo?.error,
+    repo?.headHash,
+    hiddenGraphRefsKey,
+    stashRefsKey,
+    graphCommitsPageSize,
+  ]);
 
   const handleGraphCommitsPageSizeChange = useCallback((next: number) => {
     const clamped = clampGraphCommitsPageSize(next);
@@ -1425,7 +1432,7 @@ export default function App({
     try {
       const page = await invoke<GraphCommitsPage>("list_graph_commits", {
         path: pathAtStart,
-        refs: graphRefs,
+        hiddenRefs: hiddenGraphRefs,
         skip,
         pageSize: graphCommitsPageSize,
       });
@@ -1444,7 +1451,7 @@ export default function App({
     repo?.error,
     graphCommitsHasMore,
     loadingMoreGraphCommits,
-    graphRefs,
+    hiddenGraphRefs,
     commits.length,
     graphCommitsPageSize,
   ]);

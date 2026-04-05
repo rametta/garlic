@@ -280,11 +280,9 @@ fn restore_repo_snapshot(
             let page_size = git::clamp_graph_commits_page_size(settings.graph_commits_page_size);
             let commits_page = match (&locals, &remotes) {
                 (Ok(loc), Ok(rem)) => {
-                    let mut refs: Vec<String> = loc.iter().map(|b| b.name.clone()).collect();
-                    refs.extend(rem.iter().map(|r| r.name.clone()));
-                    refs.sort();
-                    refs.dedup();
-                    git::list_graph_commits_blocking(path.clone(), refs, 0, page_size)
+                    let visibility = persisted_graph_branch_visibility(settings, &path);
+                    let hidden_refs = hidden_graph_refs_from_visibility(&visibility, loc, rem);
+                    git::list_graph_commits_blocking(path.clone(), hidden_refs, 0, page_size)
                 }
                 _ => git::list_branch_commits(path.clone(), page_size),
             };
@@ -413,6 +411,27 @@ fn normalize_graph_branch_visibility(visibility: GraphBranchVisibility) -> Graph
             Some((key.to_string(), false))
         })
         .collect()
+}
+
+fn hidden_graph_refs_from_visibility(
+    visibility: &GraphBranchVisibility,
+    local_branches: &[git::LocalBranchEntry],
+    remote_branches: &[git::RemoteBranchEntry],
+) -> Vec<String> {
+    let mut refs: Vec<String> = local_branches
+        .iter()
+        .filter(|branch| visibility.get(&format!("local:{}", branch.name)) == Some(&false))
+        .map(|branch| branch.name.clone())
+        .collect();
+    refs.extend(
+        remote_branches
+            .iter()
+            .filter(|branch| visibility.get(&format!("remote:{}", branch.name)) == Some(&false))
+            .map(|branch| branch.name.clone()),
+    );
+    refs.sort();
+    refs.dedup();
+    refs
 }
 
 /// Persists OpenAI API key and model for AI-generated commit messages.
