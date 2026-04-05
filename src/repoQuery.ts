@@ -127,11 +127,25 @@ export async function loadRepoLists(
 }
 
 export async function loadRepoSnapshot(path: string): Promise<RepoSnapshot> {
-  const metadata = await invoke<RepoMetadata>("get_repo_metadata", { path });
+  const [metadataResult, listsResult] = await Promise.allSettled([
+    invoke<RepoMetadata>("get_repo_metadata", { path }),
+    loadRepoLists(path),
+  ]);
+
+  if (metadataResult.status === "rejected") {
+    throw metadataResult.reason;
+  }
+
+  const metadata = metadataResult.value;
   if (metadata.error) {
     return emptyRepoSnapshot(metadata);
   }
-  const lists = await loadRepoLists(path);
+
+  if (listsResult.status === "rejected") {
+    throw listsResult.reason;
+  }
+
+  const lists = listsResult.value;
   return withRepoLists(emptyRepoSnapshot(metadata), lists);
 }
 
