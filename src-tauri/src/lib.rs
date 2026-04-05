@@ -5,6 +5,7 @@ mod repo_watch;
 mod settings;
 mod window_title;
 
+use chrono::Local;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::Emitter;
 use tauri::Manager;
@@ -86,6 +87,22 @@ fn write_export_text_file(path: String, contents: String) -> Result<(), String> 
         return Err("Path is empty".to_string());
     }
     std::fs::write(p, contents.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// Writes bridge debug export text to the user's Downloads folder and returns the saved path.
+#[tauri::command]
+fn export_bridge_debug_to_downloads(
+    app: tauri::AppHandle,
+    contents: String,
+) -> Result<String, String> {
+    let mut path = app.path().download_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    path.push(format!(
+        "garlic-bridge-debug-{}.txt",
+        Local::now().format("%Y-%m-%d_%H-%M-%S")
+    ));
+    std::fs::write(&path, contents.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
 }
 
 fn format_theme_label(name: &str) -> String {
@@ -178,6 +195,7 @@ pub fn run() {
             settings::set_graph_commits_page_size,
             settings::set_graph_commit_title_font_size,
             write_export_text_file,
+            export_bridge_debug_to_downloads,
             open_in_cursor::open_in_cursor,
             repo_watch::start_repo_watch,
         ])

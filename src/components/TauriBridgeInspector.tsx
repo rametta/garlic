@@ -3,6 +3,7 @@ import {
   clearTauriBridgeLogs,
   getTauriBridgeLogs,
   isTauriBridgeLoggingPaused,
+  invoke,
   setTauriBridgeLoggingPaused,
   subscribeTauriBridgeLogs,
   type TauriBridgeLogEntry,
@@ -23,6 +24,39 @@ function formatValue(value: unknown) {
 function previewValue(value: unknown) {
   const text = formatValue(value);
   return text.length > JSON_PREVIEW_LIMIT ? `${text.slice(0, JSON_PREVIEW_LIMIT)}...` : text;
+}
+
+function formatErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatTimestamp(value: number | null) {
+  return value == null ? "pending" : new Date(value).toISOString();
+}
+
+function formatBridgeDebugExport(entries: readonly TauriBridgeLogEntry[]) {
+  const lines = [
+    "# Garlic bridge debug export",
+    `Exported at: ${new Date().toISOString()}`,
+    `Entry count: ${entries.length}`,
+    "",
+  ];
+
+  for (const [index, entry] of entries.entries()) {
+    lines.push(`## ${index + 1}. ${entry.command}`);
+    lines.push(`- Status: ${entry.status}`);
+    lines.push(`- Started: ${formatTimestamp(entry.startedAt)}`);
+    lines.push(`- Finished: ${formatTimestamp(entry.finishedAt)}`);
+    lines.push(`- Duration: ${entry.durationMs == null ? "pending" : `${entry.durationMs}ms`}`);
+    lines.push("- Args:");
+    lines.push("```");
+    lines.push(formatValue(entry.args));
+    lines.push("```");
+    lines.push(`- ${entry.status }`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
 }
 
 function entryStatusTone(status: TauriBridgeLogEntry["status"]) {
@@ -49,6 +83,9 @@ export function TauriBridgeInspector() {
   );
   const [open, setOpen] = useState(false);
   const [expandedEntryId, setExpandedEntryId] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportPath, setExportPath] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const stats = useMemo(() => {
     let pending = 0;
@@ -59,6 +96,8 @@ export function TauriBridgeInspector() {
     }
     return { pending, errors };
   }, [entries]);
+
+  const exportDisabled = exporting || entries.length === 0;
 
   return (
     <div className="pointer-events-none fixed bottom-4 left-1/2 z-70 flex max-h-[70vh] w-120 max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2">
@@ -85,9 +124,6 @@ export function TauriBridgeInspector() {
           <div className="flex items-center gap-2 border-b border-base-300 px-3 py-2">
             <div className="min-w-0 flex-1">
               <h2 className="m-0 text-sm font-semibold">Tauri bridge</h2>
-              <p className="m-0 text-xs text-base-content/60">
-                Live `invoke()` commands, args, results, and errors
-              </p>
             </div>
             <button
               type="button"
@@ -101,9 +137,35 @@ export function TauriBridgeInspector() {
             <button
               type="button"
               className="btn btn-ghost btn-xs"
+              disabled={exportDisabled}
+              onClick={() => {
+                void (async () => {
+                  if (entries.length === 0) return;
+                  setExporting(true);
+                  setExportError(null);
+                  try {
+                    const savedPath = await invoke<string>("export_bridge_debug_to_downloads", {
+                      contents: formatBridgeDebugExport(entries),
+                    });
+                    setExportPath(savedPath);
+                  } catch (error) {
+                    setExportError(formatErrorMessage(error));
+                  } finally {
+                    setExporting(false);
+                  }
+                })();
+              }}
+            >
+              {exporting ? "Exporting..." : "Export"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
               onClick={() => {
                 clearTauriBridgeLogs();
                 setExpandedEntryId(null);
+                setExportPath(null);
+                setExportError(null);
               }}
             >
               Clear
@@ -118,6 +180,17 @@ export function TauriBridgeInspector() {
               Close
             </button>
           </div>
+
+          {exportPath || exportError ? (
+            <div className="border-b border-base-300 px-3 py-2 text-[11px]">
+              {exportPath ? (
+                <div className="truncate text-base-content/70">
+                  Saved to Downloads: {exportPath}
+                </div>
+              ) : null}
+              {exportError ? <div className="text-error">{exportError}</div> : null}
+            </div>
+          ) : null}
 
           <div className="overflow-y-auto p-2">
             {entries.length === 0 ? (
