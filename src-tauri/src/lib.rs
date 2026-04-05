@@ -417,9 +417,7 @@ pub fn run() {
             }
             if menu_id_is(&event, "repo_metadata") {
                 let handle = app.clone();
-                let path_opt = handle
-                    .try_state::<active_repo::ActiveRepoPath>()
-                    .and_then(|state| state.0.lock().ok().map(|g| (*g).clone()).flatten());
+                let path_opt = active_repo::get_path(&handle);
                 let Some(path) = path_opt else {
                     handle
                         .dialog()
@@ -429,7 +427,7 @@ pub fn run() {
                         .show(|_| {});
                     return;
                 };
-                match git::get_repo_metadata(handle.clone(), path.clone()) {
+                match git::get_repo_metadata(handle.clone(), path.to_string_lossy().into_owned()) {
                     Ok(meta) => {
                         let text = git::format_repo_metadata_plain_text(&meta);
                         handle
@@ -452,9 +450,7 @@ pub fn run() {
             }
             if menu_id_is(&event, "force_push") {
                 let handle = app.clone();
-                let path_opt = handle
-                    .try_state::<active_repo::ActiveRepoPath>()
-                    .and_then(|state| state.0.lock().ok().map(|g| (*g).clone()).flatten());
+                let path_opt = active_repo::get_path(&handle);
                 let Some(path) = path_opt else {
                     handle
                         .dialog()
@@ -493,7 +489,13 @@ pub fn run() {
                         }
                         let h = handle_confirm.clone();
                         tauri::async_runtime::spawn(async move {
-                            match git::force_push_to_origin(h.clone(), path_for_push, false).await {
+                            match git::force_push_to_origin(
+                                h.clone(),
+                                path_for_push.to_string_lossy().into_owned(),
+                                false,
+                            )
+                            .await
+                            {
                                 Ok(()) => {
                                     let _ = h.emit("repository-mutated", ());
                                 }

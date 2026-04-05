@@ -401,34 +401,34 @@ fn ssh_signing_preparation(
 /// Emitted when a hook-heavy `git` invocation begins (`git-command-stream-started`).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GitCommandStreamStartedEvent {
+pub struct GitCommandStreamStartedEvent<'a> {
     pub session_id: u64,
-    pub repo_path: String,
-    pub operation: String,
-    pub command_line: String,
+    pub repo_path: &'a str,
+    pub operation: &'a str,
+    pub command_line: &'a str,
 }
 
 /// One line from stdout or stderr (`git-command-stream-line`).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GitCommandStreamLineEvent {
+pub struct GitCommandStreamLineEvent<'a> {
     pub session_id: u64,
-    pub repo_path: String,
-    pub operation: String,
-    pub stream: String,
-    pub line: String,
+    pub repo_path: &'a str,
+    pub operation: &'a str,
+    pub stream: &'static str,
+    pub line: &'a str,
 }
 
 /// Emitted after the child exits (`git-command-stream-finished`).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GitCommandStreamFinishedEvent {
+pub struct GitCommandStreamFinishedEvent<'a> {
     pub session_id: u64,
-    pub repo_path: String,
-    pub operation: String,
+    pub repo_path: &'a str,
+    pub operation: &'a str,
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub error: Option<&'a str>,
 }
 
 /// Runs `git` with piped stdout/stderr, optionally writes stdin, streams lines to the webview,
@@ -446,9 +446,12 @@ fn format_git_failure<S: AsRef<str>>(args: &[S]) -> String {
     format!("{} failed", format_git_command(args))
 }
 
+fn require_active_repo_path(app: &AppHandle) -> Result<PathBuf, String> {
+    crate::active_repo::get_path(app).ok_or_else(|| "No repository is open.".to_string())
+}
+
 fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
     app: &AppHandle,
-    repo_path_str: &str,
     workdir: &Path,
     args: &[S],
     operation: &str,
@@ -456,16 +459,16 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
     extra_envs: &[(&str, &str)],
 ) -> Result<(), String> {
     let session_id = next_git_stream_session_id();
-    let repo_owned = repo_path_str.to_string();
+    let repo_owned = workdir.to_string_lossy().into_owned();
     let op_owned = operation.to_string();
     let command_line = format_git_command(args);
     let _ = app.emit(
         "git-command-stream-started",
         GitCommandStreamStartedEvent {
             session_id,
-            repo_path: repo_owned.clone(),
-            operation: op_owned.clone(),
-            command_line,
+            repo_path: &repo_owned,
+            operation: &op_owned,
+            command_line: &command_line,
         },
     );
 
@@ -504,12 +507,17 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
     let rp_out = repo_owned.clone();
     let op_out = op_owned.clone();
     let h_out = std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            let Ok(line) = line else {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let Ok(read) = reader.read_line(&mut line) else {
                 break;
             };
-            let trimmed = line.trim_end().to_string();
+            if read == 0 {
+                break;
+            }
+            let trimmed = line.trim_end();
             if trimmed.is_empty() {
                 continue;
             }
@@ -517,10 +525,10 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
                 "git-command-stream-line",
                 GitCommandStreamLineEvent {
                     session_id,
-                    repo_path: rp_out.clone(),
-                    operation: op_out.clone(),
-                    stream: "stdout".into(),
-                    line: trimmed,
+                    repo_path: &rp_out,
+                    operation: &op_out,
+                    stream: "stdout",
+                    line: &trimmed,
                 },
             );
         }
@@ -531,31 +539,36 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
     let rp_err = repo_owned.clone();
     let op_err = op_owned.clone();
     let h_err = std::thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            let Ok(line) = line else {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let Ok(read) = reader.read_line(&mut line) else {
                 break;
             };
-            let trimmed = line.trim_end().to_string();
+            if read == 0 {
+                break;
+            }
+            let trimmed = line.trim_end();
             if trimmed.is_empty() {
                 continue;
             }
-            let _ = app_err.emit(
-                "git-command-stream-line",
-                GitCommandStreamLineEvent {
-                    session_id,
-                    repo_path: rp_err.clone(),
-                    operation: op_err.clone(),
-                    stream: "stderr".into(),
-                    line: trimmed.clone(),
-                },
-            );
             if let Ok(mut g) = stderr_acc_clone.lock() {
                 if !g.is_empty() {
                     g.push('\n');
                 }
                 g.push_str(&trimmed);
             }
+            let _ = app_err.emit(
+                "git-command-stream-line",
+                GitCommandStreamLineEvent {
+                    session_id,
+                    repo_path: &rp_err,
+                    operation: &op_err,
+                    stream: "stderr",
+                    line: &trimmed,
+                },
+            );
         }
     });
 
@@ -587,10 +600,10 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
                 "git-command-stream-finished",
                 GitCommandStreamFinishedEvent {
                     session_id,
-                    repo_path: repo_owned.clone(),
-                    operation: op_owned.clone(),
+                    repo_path: &repo_owned,
+                    operation: &op_owned,
                     success: false,
-                    error: Some(msg.clone()),
+                    error: Some(&msg),
                 },
             );
             return Err(msg);
@@ -623,10 +636,10 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
         "git-command-stream-finished",
         GitCommandStreamFinishedEvent {
             session_id,
-            repo_path: repo_owned.clone(),
-            operation: op_owned.clone(),
+            repo_path: &repo_owned,
+            operation: &op_owned,
             success: ok,
-            error: err_msg.clone(),
+            error: err_msg.as_deref(),
         },
     );
 
@@ -639,52 +652,33 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
 
 fn run_git_streaming_with_input<S: AsRef<str>>(
     app: &AppHandle,
-    repo_path_str: &str,
     workdir: &Path,
     args: &[S],
     operation: &str,
     stdin_text: Option<&str>,
 ) -> Result<(), String> {
-    run_git_streaming_with_input_and_env(
-        app,
-        repo_path_str,
-        workdir,
-        args,
-        operation,
-        stdin_text,
-        &[],
-    )
+    run_git_streaming_with_input_and_env(app, workdir, args, operation, stdin_text, &[])
 }
 
 /// Runs `git` with piped stdout/stderr, streams lines to the webview, writes the audit log, and
 /// returns `Err` with stderr (or a generic message) on failure.
 fn run_git_streaming<S: AsRef<str>>(
     app: &AppHandle,
-    repo_path_str: &str,
     workdir: &Path,
     args: &[S],
     operation: &str,
 ) -> Result<(), String> {
-    run_git_streaming_with_input(app, repo_path_str, workdir, args, operation, None)
+    run_git_streaming_with_input(app, workdir, args, operation, None)
 }
 
 fn run_git_streaming_with_env<S: AsRef<str>>(
     app: &AppHandle,
-    repo_path_str: &str,
     workdir: &Path,
     args: &[S],
     operation: &str,
     extra_envs: &[(&str, &str)],
 ) -> Result<(), String> {
-    run_git_streaming_with_input_and_env(
-        app,
-        repo_path_str,
-        workdir,
-        args,
-        operation,
-        None,
-        extra_envs,
-    )
+    run_git_streaming_with_input_and_env(app, workdir, args, operation, None, extra_envs)
 }
 
 #[cfg(target_os = "windows")]
@@ -1253,7 +1247,7 @@ fn git_output_with_input_and_env<S: AsRef<str>>(
 
 fn run_git_apply_patch_streaming(
     app: &AppHandle,
-    repo_path_str: &str,
+    _repo_path_str: &str,
     workdir: &Path,
     args: &[&str],
     operation: &str,
@@ -1263,7 +1257,7 @@ fn run_git_apply_patch_streaming(
     if trimmed.is_empty() {
         return Err("Patch cannot be empty.".to_string());
     }
-    run_git_streaming_with_input(app, repo_path_str, workdir, args, operation, Some(trimmed))
+    run_git_streaming_with_input(app, workdir, args, operation, Some(trimmed))
 }
 
 /// `git diff` / `git diff --no-index` use exit status 1 when there are differences (POSIX).
@@ -1645,7 +1639,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
             error: Some("Not a Git repository (no .git metadata found).".to_string()),
             ..base
         };
-        crate::active_repo::set_path(&app, Some(path.clone()));
+        crate::active_repo::set_path(&app, Some(path_buf.clone()));
         crate::window_title::set_main_window_title(&app, &meta.name);
         return Ok(meta);
     }
@@ -1701,7 +1695,7 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
         error: None,
         ..base
     };
-    crate::active_repo::set_path(&app, Some(path.clone()));
+    crate::active_repo::set_path(&app, Some(path_buf.clone()));
     crate::window_title::set_main_window_title_for_repo_head(
         &app,
         &meta.name,
@@ -2275,7 +2269,7 @@ pub fn get_commit_details(path: String, commit_hash: GitOidArg) -> Result<Commit
 pub fn checkout_local_branch(app: AppHandle, path: String, branch: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    run_git_streaming(&app, &path, &path_buf, &["switch", &branch], "checkout")?;
+    run_git_streaming(&app, &path_buf, &["switch", &branch], "checkout")?;
     Ok(())
 }
 
@@ -2288,13 +2282,7 @@ pub fn create_local_branch(app: AppHandle, path: String, branch: String) -> Resu
     if name.is_empty() {
         return Err("Branch name cannot be empty.".to_string());
     }
-    run_git_streaming(
-        &app,
-        &path,
-        &path_buf,
-        &["switch", "-c", name],
-        "create branch",
-    )?;
+    run_git_streaming(&app, &path_buf, &["switch", "-c", name], "create branch")?;
     Ok(())
 }
 
@@ -2320,7 +2308,6 @@ pub fn create_branch_at_commit(
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
     run_git_streaming(
         &app,
-        &path,
         &path_buf,
         &["switch", "-c", name, commit],
         "create branch",
@@ -2353,13 +2340,12 @@ pub fn create_tag(
     if let Some(m) = msg {
         run_git_streaming(
             &app,
-            &path,
             &path_buf,
             &["tag", "-a", tag, "-m", m, commit],
             "create tag",
         )?;
     } else {
-        run_git_streaming(&app, &path, &path_buf, &["tag", tag, commit], "create tag")?;
+        run_git_streaming(&app, &path_buf, &["tag", tag, commit], "create tag")?;
     }
     Ok(())
 }
@@ -2373,7 +2359,7 @@ pub fn delete_tag(app: AppHandle, path: String, tag: String) -> Result<(), Strin
     if tag.is_empty() {
         return Err("Tag name cannot be empty.".to_string());
     }
-    run_git_streaming(&app, &path, &path_buf, &["tag", "-d", tag], "delete tag")?;
+    run_git_streaming(&app, &path_buf, &["tag", "-d", tag], "delete tag")?;
     Ok(())
 }
 
@@ -2395,7 +2381,6 @@ pub fn create_branch_from_remote(
     }
     run_git_streaming(
         &app,
-        &path,
         &path_buf,
         &["switch", "-c", local_name, remote_ref.as_str()],
         "create branch",
@@ -2420,7 +2405,6 @@ pub fn delete_local_branch(
     let flag = if force { "-D" } else { "-d" };
     match run_git_streaming(
         &app,
-        &path,
         &path_buf,
         &["branch", flag, "--", name],
         "delete branch",
@@ -2457,7 +2441,6 @@ fn delete_remote_branch_blocking(
     }
     run_git_streaming(
         &app,
-        &path,
         &path_buf,
         &["push", remote, "--delete", branch_on_remote],
         "push",
@@ -2506,7 +2489,6 @@ pub fn set_remote_url(
     }
     run_git_streaming(
         &app,
-        &path,
         &path_buf,
         &["remote", "set-url", "--", name, url],
         "set remote url",
@@ -2532,9 +2514,9 @@ pub fn rebase_current_branch_onto(
     let verify_spec = format!("{onto}^{{commit}}");
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
     if interactive {
-        run_git_streaming(&app, &path, &path_buf, &["rebase", "-i", onto], "rebase")?;
+        run_git_streaming(&app, &path_buf, &["rebase", "-i", onto], "rebase")?;
     } else {
-        run_git_streaming(&app, &path, &path_buf, &["rebase", onto], "rebase")?;
+        run_git_streaming(&app, &path_buf, &["rebase", onto], "rebase")?;
     }
     Ok(())
 }
@@ -2579,13 +2561,7 @@ pub fn reset_current_branch_to_commit(
 
     let verify_spec = format!("{hash}^{{commit}}");
     let resolved_hash = git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
-    run_git_streaming(
-        &app,
-        &path,
-        &path_buf,
-        &["reset", flag, &resolved_hash],
-        "reset",
-    )?;
+    run_git_streaming(&app, &path_buf, &["reset", flag, &resolved_hash], "reset")?;
     Ok(())
 }
 
@@ -2659,7 +2635,6 @@ pub fn drop_commit(app: AppHandle, path: String, commit_hash: GitOidArg) -> Resu
 
     run_git_streaming(
         &app,
-        &path,
         &path_buf,
         &["rebase", "--onto", parent_hash, &resolved_hash],
         "drop commit",
@@ -2805,7 +2780,6 @@ pub fn squash_commits(
     if newest_hash == head_hash {
         run_git_streaming(
             &app,
-            &path,
             &path_buf,
             &["reset", "--soft", &squashed_hash],
             "squash commits",
@@ -2815,7 +2789,6 @@ pub fn squash_commits(
 
     run_git_streaming(
         &app,
-        &path,
         &path_buf,
         &["rebase", "--onto", &squashed_hash, &newest_hash],
         "squash commits",
@@ -3341,7 +3314,7 @@ pub fn remove_worktree(
     }
     args.push("--");
     args.push(target);
-    run_git_streaming(&app, &path, &path_buf, &args, "remove worktree")?;
+    run_git_streaming(&app, &path_buf, &args, "remove worktree")?;
     Ok(())
 }
 
@@ -3356,15 +3329,15 @@ pub fn stage_paths(app: AppHandle, path: String, paths: Vec<String>) -> Result<(
     args.push("add".into());
     args.push("--".into());
     args.extend(paths);
-    run_git_streaming(&app, &path, &path_buf, &args, "stage")?;
+    run_git_streaming(&app, &path_buf, &args, "stage")?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn stage_all(app: AppHandle, path: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
+pub fn stage_all(app: AppHandle) -> Result<(), String> {
+    let path_buf = require_active_repo_path(&app)?;
     ensure_git_repo(&path_buf)?;
-    run_git_streaming(&app, &path, &path_buf, &["add", "-A"], "stage")?;
+    run_git_streaming(&app, &path_buf, &["add", "-A"], "stage")?;
     Ok(())
 }
 
@@ -3401,7 +3374,7 @@ pub fn unstage_paths(app: AppHandle, path: String, paths: Vec<String>) -> Result
     args.push("--staged".into());
     args.push("--".into());
     args.extend(paths);
-    run_git_streaming(&app, &path, &path_buf, &args, "unstage")?;
+    run_git_streaming(&app, &path_buf, &args, "unstage")?;
     Ok(())
 }
 
@@ -3468,7 +3441,6 @@ pub fn resolve_conflict_choice(
     if delete_path {
         run_git_streaming(
             &app,
-            &path,
             &path_buf,
             &["rm", "--force", "--", rel],
             "resolve conflict",
@@ -3480,7 +3452,7 @@ pub fn resolve_conflict_choice(
     } else {
         ["checkout", "--theirs", "--", rel]
     };
-    run_git_streaming(&app, &path, &path_buf, &checkout_args, "resolve conflict")?;
+    run_git_streaming(&app, &path_buf, &checkout_args, "resolve conflict")?;
     git_output(&path_buf, &["add", "--", rel])?;
     Ok(())
 }
@@ -3514,7 +3486,6 @@ fn push_unique_path(paths: &mut Vec<String>, seen: &mut HashSet<String>, rel: &s
 
 fn discard_paths_changes_inner(
     app: &AppHandle,
-    path: &str,
     path_buf: &Path,
     files: &[DiscardPathTarget],
     from_unstaged: bool,
@@ -3557,7 +3528,7 @@ fn discard_paths_changes_inner(
             args.push("--worktree".into());
             args.push("--".into());
             args.extend(restore_paths);
-            run_git_streaming(app, path, path_buf, &args, "discard changes")?;
+            run_git_streaming(app, path_buf, &args, "discard changes")?;
         }
         if !clean_paths.is_empty() {
             let mut args = Vec::with_capacity(clean_paths.len() + 3);
@@ -3565,7 +3536,7 @@ fn discard_paths_changes_inner(
             args.push("-f".into());
             args.push("--".into());
             args.extend(clean_paths);
-            run_git_streaming(app, path, path_buf, &args, "discard changes")?;
+            run_git_streaming(app, path_buf, &args, "discard changes")?;
         }
         return Ok(());
     }
@@ -3599,7 +3570,7 @@ fn discard_paths_changes_inner(
         "--".into(),
     ]);
     args.extend(restore_paths);
-    run_git_streaming(app, path, path_buf, &args, "discard changes")?;
+    run_git_streaming(app, path_buf, &args, "discard changes")?;
     Ok(())
 }
 
@@ -3616,7 +3587,7 @@ pub fn discard_paths_changes(
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    discard_paths_changes_inner(&app, &path, &path_buf, &files, from_unstaged)
+    discard_paths_changes_inner(&app, &path_buf, &files, from_unstaged)
 }
 
 /// Discard local changes for one path. `from_unstaged` selects the sidebar column:
@@ -3635,7 +3606,6 @@ pub fn discard_path_changes(
     ensure_git_repo(&path_buf)?;
     discard_paths_changes_inner(
         &app,
-        &path,
         &path_buf,
         &[DiscardPathTarget {
             file_path,
@@ -3656,7 +3626,7 @@ fn commit_staged_blocking(app: AppHandle, path: String, message: String) -> Resu
     let mut args = prep.git_config_overrides;
     args.extend(["commit".to_string(), "-m".to_string(), msg.to_string()]);
     let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_git_streaming(&app, &path, &path_buf, &args_ref, "commit")?;
+    run_git_streaming(&app, &path_buf, &args_ref, "commit")?;
     Ok(())
 }
 
@@ -3686,7 +3656,7 @@ fn amend_last_commit_blocking(
                 m.to_string(),
             ]);
             let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
-            run_git_streaming(&app, &path, &path_buf, &args_ref, "commit --amend")?;
+            run_git_streaming(&app, &path_buf, &args_ref, "commit --amend")?;
         }
         None => {
             let mut args = prep.git_config_overrides;
@@ -3696,7 +3666,7 @@ fn amend_last_commit_blocking(
                 "--no-edit".to_string(),
             ]);
             let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
-            run_git_streaming(&app, &path, &path_buf, &args_ref, "commit --amend")?;
+            run_git_streaming(&app, &path_buf, &args_ref, "commit --amend")?;
         }
     }
     Ok(())
@@ -3853,7 +3823,6 @@ pub fn reword_commit(
     if is_head {
         run_git_streaming(
             &app,
-            &path,
             &path_buf,
             &["reset", "--soft", &rewritten_hash],
             "edit commit message",
@@ -3870,13 +3839,7 @@ pub fn reword_commit(
     rebase_args.push(rewritten_hash.clone());
     rebase_args.push(resolved_hash.clone());
     let rebase_args_ref = rebase_args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_git_streaming(
-        &app,
-        &path,
-        &path_buf,
-        &rebase_args_ref,
-        "edit commit message",
-    )?;
+    run_git_streaming(&app, &path_buf, &rebase_args_ref, "edit commit message")?;
     Ok(())
 }
 
@@ -3891,7 +3854,7 @@ pub fn merge_branch(app: AppHandle, path: String, branch_or_ref: String) -> Resu
     }
     let verify_spec = format!("{onto}^{{commit}}");
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
-    run_git_streaming(&app, &path, &path_buf, &["merge", onto], "merge")?;
+    run_git_streaming(&app, &path_buf, &["merge", onto], "merge")?;
     Ok(())
 }
 
@@ -3910,13 +3873,7 @@ pub fn cherry_pick_commit(
     }
     let verify_spec = format!("{hash}^{{commit}}");
     git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
-    run_git_streaming(
-        &app,
-        &path,
-        &path_buf,
-        &["cherry-pick", hash],
-        "cherry-pick",
-    )?;
+    run_git_streaming(&app, &path_buf, &["cherry-pick", hash], "cherry-pick")?;
     Ok(())
 }
 
@@ -3934,7 +3891,6 @@ pub fn continue_repo_operation(app: AppHandle, path: String) -> Result<(), Strin
     match op.kind.as_str() {
         "rebase" => run_git_streaming_with_env(
             &app,
-            &path,
             &path_buf,
             &["rebase", "--continue"],
             "continue rebase",
@@ -3942,7 +3898,6 @@ pub fn continue_repo_operation(app: AppHandle, path: String) -> Result<(), Strin
         )?,
         "merge" => run_git_streaming_with_env(
             &app,
-            &path,
             &path_buf,
             &["merge", "--continue"],
             "continue merge",
@@ -3950,7 +3905,6 @@ pub fn continue_repo_operation(app: AppHandle, path: String) -> Result<(), Strin
         )?,
         "cherryPick" => run_git_streaming_with_env(
             &app,
-            &path,
             &path_buf,
             &["cherry-pick", "--continue"],
             "continue cherry-pick",
@@ -3967,17 +3921,10 @@ pub fn abort_repo_operation(app: AppHandle, path: String) -> Result<(), String> 
     ensure_git_repo(&path_buf)?;
     let op = current_repo_operation_state(&path_buf)?;
     match op.kind.as_str() {
-        "rebase" => run_git_streaming(
-            &app,
-            &path,
-            &path_buf,
-            &["rebase", "--abort"],
-            "abort rebase",
-        )?,
-        "merge" => run_git_streaming(&app, &path, &path_buf, &["merge", "--abort"], "abort merge")?,
+        "rebase" => run_git_streaming(&app, &path_buf, &["rebase", "--abort"], "abort rebase")?,
+        "merge" => run_git_streaming(&app, &path_buf, &["merge", "--abort"], "abort merge")?,
         "cherryPick" => run_git_streaming(
             &app,
-            &path,
             &path_buf,
             &["cherry-pick", "--abort"],
             "abort cherry-pick",
@@ -3993,12 +3940,9 @@ pub fn skip_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
     ensure_git_repo(&path_buf)?;
     let op = current_repo_operation_state(&path_buf)?;
     match op.kind.as_str() {
-        "rebase" => {
-            run_git_streaming(&app, &path, &path_buf, &["rebase", "--skip"], "skip rebase")?
-        }
+        "rebase" => run_git_streaming(&app, &path_buf, &["rebase", "--skip"], "skip rebase")?,
         "cherryPick" => run_git_streaming(
             &app,
-            &path,
             &path_buf,
             &["cherry-pick", "--skip"],
             "skip cherry-pick",
@@ -4840,7 +4784,7 @@ pub fn stash_push(app: AppHandle, path: String, message: Option<String>) -> Resu
         args.push("-m".into());
         args.push(m.to_string());
     }
-    run_git_streaming(&app, &path, &path_buf, &args, "stash push")?;
+    run_git_streaming(&app, &path_buf, &args, "stash push")?;
     Ok(())
 }
 
@@ -4853,7 +4797,7 @@ pub fn stash_pop(app: AppHandle, path: String, stash_ref: StashRefArg) -> Result
     if !is_valid_stash_ref(s) {
         return Err("Invalid stash reference.".to_string());
     }
-    run_git_streaming(&app, &path, &path_buf, &["stash", "pop", s], "stash pop")?;
+    run_git_streaming(&app, &path_buf, &["stash", "pop", s], "stash pop")?;
     Ok(())
 }
 
@@ -4866,13 +4810,7 @@ pub fn stash_drop(app: AppHandle, path: String, stash_ref: StashRefArg) -> Resul
     if !is_valid_stash_ref(s) {
         return Err("Invalid stash reference.".to_string());
     }
-    run_git_streaming(
-        &app,
-        &path,
-        &path_buf,
-        &["stash", "drop", "-q", s],
-        "stash drop",
-    )?;
+    run_git_streaming(&app, &path_buf, &["stash", "drop", "-q", s], "stash drop")?;
     Ok(())
 }
 
@@ -4894,7 +4832,7 @@ pub fn pull_local_branch(app: AppHandle, path: String, branch: String) -> Result
     let head = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let head = head.trim();
     if head == name {
-        run_git_streaming(&app, &path, &path_buf, &["pull"], "pull")?;
+        run_git_streaming(&app, &path_buf, &["pull"], "pull")?;
         return Ok(());
     }
     if let Some(upstream) = branch_upstream_abbrev(&path_buf, name) {
@@ -4902,26 +4840,14 @@ pub fn pull_local_branch(app: AppHandle, path: String, branch: String) -> Result
             return Err("Could not parse upstream ref.".to_string());
         };
         let refspec = format!("{remote_branch}:{name}");
-        run_git_streaming(
-            &app,
-            &path,
-            &path_buf,
-            &["fetch", remote, &refspec],
-            "fetch",
-        )?;
+        run_git_streaming(&app, &path_buf, &["fetch", remote, &refspec], "fetch")?;
         return Ok(());
     }
     git_output(&path_buf, &["remote", "get-url", "origin"]).map_err(|_| {
         "No upstream configured for this branch and no remote named \"origin\".".to_string()
     })?;
     let refspec = format!("{name}:{name}");
-    run_git_streaming(
-        &app,
-        &path,
-        &path_buf,
-        &["fetch", "origin", &refspec],
-        "fetch",
-    )?;
+    run_git_streaming(&app, &path_buf, &["fetch", "origin", &refspec], "fetch")?;
     Ok(())
 }
 
@@ -5016,19 +4942,12 @@ fn push_to_origin_blocking(app: AppHandle, path: String, skip_hooks: bool) -> Re
     if skip_hooks {
         run_git_streaming(
             &app,
-            &path,
             &path_buf,
             &["push", "--no-verify", "-u", "origin", "HEAD"],
             "push",
         )?;
     } else {
-        run_git_streaming(
-            &app,
-            &path,
-            &path_buf,
-            &["push", "-u", "origin", "HEAD"],
-            "push",
-        )?;
+        run_git_streaming(&app, &path_buf, &["push", "-u", "origin", "HEAD"], "push")?;
     }
     Ok(())
 }
@@ -5058,7 +4977,6 @@ fn force_push_to_origin_blocking(
     if skip_hooks {
         run_git_streaming(
             &app,
-            &path,
             &path_buf,
             &[
                 "push",
@@ -5073,7 +4991,6 @@ fn force_push_to_origin_blocking(
     } else {
         run_git_streaming(
             &app,
-            &path,
             &path_buf,
             &["push", "--force-with-lease", "-u", "origin", "HEAD"],
             "push",
@@ -5133,7 +5050,6 @@ fn delete_remote_tag_blocking(app: AppHandle, path: String, tag: String) -> Resu
         .map_err(|_| "No remote named \"origin\" configured.".to_string())?;
     run_git_streaming(
         &app,
-        &path,
         &path_buf,
         &["push", "origin", "--delete", tag],
         "push",
@@ -5158,7 +5074,7 @@ fn push_tag_to_origin_blocking(app: AppHandle, path: String, tag: String) -> Res
         .map_err(|_| "No remote named \"origin\" configured.".to_string())?;
     let tag_ref = format!("refs/tags/{tag}");
     git_output(&path_buf, &["rev-parse", "--verify", &tag_ref])?;
-    run_git_streaming(&app, &path, &path_buf, &["push", "origin", tag], "push")?;
+    run_git_streaming(&app, &path_buf, &["push", "origin", tag], "push")?;
     Ok(())
 }
 

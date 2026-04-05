@@ -582,7 +582,9 @@ export function useStagePathsMutation() {
 
 export function useStageAllMutation() {
   return useRepoCommandMutation({
-    mutationFn: (variables: { path: string }) => invokeRepoMutation("stage_all", variables),
+    mutationFn: async () => {
+      await invoke("stage_all");
+    },
     optimisticUpdate: (snapshot) =>
       withWorkingTreeFiles(snapshot, stageAllWorkingTreeFiles(snapshot.workingTreeFiles)),
     invalidateSnapshotOnSettled: false,
