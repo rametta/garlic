@@ -1706,73 +1706,6 @@ pub fn get_repo_metadata(app: AppHandle, path: String) -> Result<RepoMetadata, S
     Ok(meta)
 }
 
-fn format_head_date_display(iso: &str) -> String {
-    use chrono::DateTime;
-    let trimmed = iso.trim();
-    if trimmed.is_empty() {
-        return trimmed.to_string();
-    }
-    match DateTime::parse_from_rfc3339(trimmed) {
-        Ok(dt) => dt.format("%b %d, %Y, %I:%M %p %:z").to_string(),
-        Err(_) => trimmed.to_string(),
-    }
-}
-
-pub(crate) fn format_repo_metadata_plain_text(m: &RepoMetadata) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    if let Some(ref err) = m.error {
-        lines.push(format!("Error: {err}"));
-        lines.push(String::new());
-    }
-    lines.push(format!("Path: {}", m.path));
-    if let Some(ref gr) = m.git_root {
-        if gr != &m.path {
-            lines.push(format!("Git root: {gr}"));
-        }
-    }
-    let branch_line = if m.detached {
-        format!(
-            "Branch: Detached at {}",
-            m.head_short.as_deref().unwrap_or("—")
-        )
-    } else {
-        format!("Branch: {}", m.branch.as_deref().unwrap_or("—"))
-    };
-    lines.push(branch_line);
-    if let Some(ref hs) = m.head_short {
-        let head_part = match &m.head_subject {
-            Some(sub) => format!("{hs} {sub}"),
-            None => hs.clone(),
-        };
-        lines.push(format!("HEAD: {head_part}"));
-    }
-    if let Some(ref ha) = m.head_author {
-        lines.push(format!("Last commit author: {ha}"));
-    }
-    if let Some(ref hd) = m.head_date {
-        if !hd.is_empty() {
-            lines.push(format!("Last commit: {}", format_head_date_display(hd)));
-        }
-    }
-    if let Some(wtc) = m.working_tree_clean {
-        lines.push(format!(
-            "Working tree: {}",
-            if wtc { "Clean" } else { "Has local changes" }
-        ));
-    }
-    if let (Some(a), Some(b)) = (m.ahead, m.behind) {
-        lines.push(format!("Upstream: {a} ahead, {b} behind"));
-    }
-    if !m.remotes.is_empty() {
-        lines.push("Remotes:".to_string());
-        for r in &m.remotes {
-            lines.push(format!("  • {}: {}", r.name, r.fetch_url));
-        }
-    } else {
-        lines.push("Remotes: None configured".to_string());
-    }
-    lines.join("\n")
-}
 
 /// Ahead/behind vs `@{upstream}` using two-dot ranges (same idea as `git status -sb`).
 fn head_upstream_ahead_behind(workdir: &Path) -> Option<(u32, u32)> {
@@ -4912,18 +4845,6 @@ pub fn schedule_fetch_all_remotes(
         }
     });
     Ok(())
-}
-
-/// Current branch name, or an error if `HEAD` is detached or the path is not a repo.
-pub fn current_branch_name(path: impl AsRef<Path>) -> Result<String, String> {
-    let path_buf = path.as_ref().to_path_buf();
-    ensure_git_repo(&path_buf)?;
-    let head_ref = git_output(&path_buf, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    let head_ref = head_ref.trim();
-    if head_ref == "HEAD" {
-        return Err("Cannot push while in detached HEAD. Check out a branch first.".to_string());
-    }
-    Ok(head_ref.to_string())
 }
 
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).

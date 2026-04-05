@@ -10,7 +10,7 @@ use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, 
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::Wry;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 const RECENT_MENU_SLOTS: usize = settings::MAX_RECENT_REPO_PATHS;
 
@@ -288,30 +288,6 @@ pub fn run() {
                 ],
             )?;
 
-            let repo_metadata =
-                MenuItem::with_id(app, "repo_metadata", "Repo Metadata", true, None::<&str>)?;
-            let new_branch = MenuItem::with_id(
-                app,
-                "new_branch",
-                "New Branch…",
-                true,
-                None::<&str>,
-            )?;
-            let stash_push_menu = MenuItem::with_id(app, "stash_push_menu", "Stash", true, None::<&str>)?;
-            let force_push = MenuItem::with_id(
-                app,
-                "force_push",
-                "Force Push…",
-                true,
-                None::<&str>,
-            )?;
-            let repo_menu = Submenu::with_items(
-                app,
-                "Repository",
-                true,
-                &[&repo_metadata, &new_branch, &stash_push_menu, &force_push],
-            )?;
-
             let highlight_active_branch_rows = CheckMenuItem::with_id(
                 app,
                 "view_highlight_active_branch_rows",
@@ -364,7 +340,7 @@ pub fn run() {
 
             let menu = Menu::with_items(
                 app,
-                &[&garlic_menu, &file_menu, &edit_menu, &repo_menu, &view_menu, &theme_submenu],
+                &[&garlic_menu, &file_menu, &edit_menu, &view_menu, &theme_submenu],
             )?;
             menu.set_as_app_menu()?;
             Ok(())
@@ -417,116 +393,6 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let _ = handle.emit("clone-repo-request", ());
                 });
-                return;
-            }
-            if menu_id_is(&event, "new_branch") {
-                let handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = handle.emit("new-branch-request", ());
-                });
-                return;
-            }
-            if menu_id_is(&event, "stash_push_menu") {
-                let handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = handle.emit("stash-push-request", ());
-                });
-                return;
-            }
-            if menu_id_is(&event, "repo_metadata") {
-                let handle = app.clone();
-                let path_opt = active_repo::get_path(&handle);
-                let Some(path) = path_opt else {
-                    handle
-                        .dialog()
-                        .message("No repository is open.")
-                        .title("Repo Metadata")
-                        .kind(MessageDialogKind::Info)
-                        .show(|_| {});
-                    return;
-                };
-                match git::get_repo_metadata(handle.clone(), path.to_string_lossy().into_owned()) {
-                    Ok(meta) => {
-                        let text = git::format_repo_metadata_plain_text(&meta);
-                        handle
-                            .dialog()
-                            .message(text)
-                            .title("Repo Metadata")
-                            .kind(MessageDialogKind::Info)
-                            .show(|_| {});
-                    }
-                    Err(e) => {
-                        handle
-                            .dialog()
-                            .message(e)
-                            .title("Repo Metadata")
-                            .kind(MessageDialogKind::Error)
-                            .show(|_| {});
-                    }
-                }
-                return;
-            }
-            if menu_id_is(&event, "force_push") {
-                let handle = app.clone();
-                let path_opt = active_repo::get_path(&handle);
-                let Some(path) = path_opt else {
-                    handle
-                        .dialog()
-                        .message("No repository is open.")
-                        .title("Force Push")
-                        .kind(MessageDialogKind::Info)
-                        .show(|_| {});
-                    return;
-                };
-                let branch_name = match git::current_branch_name(&path) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        handle
-                            .dialog()
-                            .message(e)
-                            .title("Force Push")
-                            .kind(MessageDialogKind::Warning)
-                            .show(|_| {});
-                        return;
-                    }
-                };
-                let msg = format!(
-                    r#"Force push "{branch_name}" to origin? This runs git push --force-with-lease: the remote branch will be updated to match your local tip, but only if the remote has not received new commits (otherwise the push is rejected)."#
-                );
-                let handle_confirm = handle.clone();
-                let path_for_push = path.clone();
-                handle
-                    .dialog()
-                    .message(msg)
-                    .title("Garlic")
-                    .kind(MessageDialogKind::Warning)
-                    .buttons(MessageDialogButtons::YesNo)
-                    .show(move |confirmed| {
-                        if !confirmed {
-                            return;
-                        }
-                        let h = handle_confirm.clone();
-                        tauri::async_runtime::spawn(async move {
-                            match git::force_push_to_origin(
-                                h.clone(),
-                                path_for_push.to_string_lossy().into_owned(),
-                                false,
-                            )
-                            .await
-                            {
-                                Ok(()) => {
-                                    let _ = h.emit("repository-mutated", ());
-                                }
-                                Err(e) => {
-                                    h.dialog()
-                                        .message(e)
-                                        .title("Force Push")
-                                        .kind(MessageDialogKind::Error)
-                                        .show(|_| {});
-                                }
-                            }
-                        });
-                    });
                 return;
             }
             if menu_id_is(&event, "view_highlight_active_branch_rows") {
