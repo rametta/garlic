@@ -63,11 +63,24 @@ export interface ConflictVersionPreview {
   text?: string | null;
 }
 
+export interface ConflictRange {
+  conflictIndex: number;
+  startLine: number;
+  endLine: number;
+  isEmpty: boolean;
+}
+
+export interface ConflictRangesBySide {
+  ours: ConflictRange[];
+  theirs: ConflictRange[];
+}
+
 export interface ConflictFileDetails {
   statusCode: string;
   summary: string;
   ours: ConflictVersionPreview;
   theirs: ConflictVersionPreview;
+  conflictRanges: ConflictRangesBySide;
   worktreeText?: string | null;
 }
 

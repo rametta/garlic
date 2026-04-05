@@ -4,16 +4,7 @@ import type { BundledLanguage, Highlighter } from "shiki";
 
 import { pathToShikiLang } from "../diffLanguage";
 import { useDiffShikiTheme, useShikiHighlighter } from "../diffShiki";
-import type { ConflictVersionPreview } from "../gitTypes";
-
-type ConflictVersionSide = "ours" | "theirs";
-
-type ConflictRange = {
-  conflictIndex: number;
-  startLine: number;
-  endLine: number;
-  isEmpty: boolean;
-};
+import type { ConflictRange, ConflictVersionPreview } from "../gitTypes";
 
 type ConflictSnippetRow = {
   key: string;
@@ -49,79 +40,6 @@ function splitLines(text: string): string[] {
     lines.pop();
   }
   return lines;
-}
-
-function parseConflictRanges(worktreeText: string): Record<ConflictVersionSide, ConflictRange[]> {
-  const lines = splitLines(worktreeText);
-  const ours: ConflictRange[] = [];
-  const theirs: ConflictRange[] = [];
-  let oursLine = 1;
-  let theirsLine = 1;
-  let i = 0;
-  let conflictIndex = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.startsWith("<<<<<<<")) {
-      oursLine += 1;
-      theirsLine += 1;
-      i += 1;
-      continue;
-    }
-
-    conflictIndex += 1;
-    i += 1;
-
-    const oursStart = oursLine;
-    let oursCount = 0;
-    while (i < lines.length && !lines[i].startsWith("|||||||") && !lines[i].startsWith("=======")) {
-      oursCount += 1;
-      i += 1;
-    }
-
-    if (i < lines.length && lines[i].startsWith("|||||||")) {
-      i += 1;
-      while (i < lines.length && !lines[i].startsWith("=======")) {
-        i += 1;
-      }
-    }
-
-    if (i >= lines.length || !lines[i].startsWith("=======")) {
-      return { ours: [], theirs: [] };
-    }
-
-    i += 1;
-    const theirsStart = theirsLine;
-    let theirsCount = 0;
-    while (i < lines.length && !lines[i].startsWith(">>>>>>>")) {
-      theirsCount += 1;
-      i += 1;
-    }
-
-    if (i >= lines.length) {
-      return { ours: [], theirs: [] };
-    }
-
-    i += 1;
-
-    ours.push({
-      conflictIndex,
-      startLine: oursStart,
-      endLine: oursStart + Math.max(oursCount - 1, 0),
-      isEmpty: oursCount === 0,
-    });
-    theirs.push({
-      conflictIndex,
-      startLine: theirsStart,
-      endLine: theirsStart + Math.max(theirsCount - 1, 0),
-      isEmpty: theirsCount === 0,
-    });
-
-    oursLine += oursCount;
-    theirsLine += theirsCount;
-  }
-
-  return { ours, theirs };
 }
 
 function buildConflictSnippets(
@@ -294,8 +212,7 @@ function ConflictSnippetCard({
 export const ConflictVersionPanel = memo(function ConflictVersionPanel({
   path,
   preview,
-  side,
-  worktreeText,
+  ranges,
   actionLabel,
   actionKind = "outline",
   busy = false,
@@ -303,8 +220,7 @@ export const ConflictVersionPanel = memo(function ConflictVersionPanel({
 }: {
   path: string;
   preview: ConflictVersionPreview;
-  side: ConflictVersionSide;
-  worktreeText?: string | null;
+  ranges: ConflictRange[];
   actionLabel?: string;
   actionKind?: "primary" | "outline";
   busy?: boolean;
@@ -313,14 +229,10 @@ export const ConflictVersionPanel = memo(function ConflictVersionPanel({
   const highlighter = useShikiHighlighter();
   const shikiTheme = useDiffShikiTheme();
   const lang = useMemo(() => pathToShikiLang(path), [path]);
-  const conflictRanges = useMemo(() => {
-    if (!worktreeText) return [];
-    return parseConflictRanges(worktreeText)[side];
-  }, [side, worktreeText]);
   const snippets = useMemo(() => {
-    if (!preview.text || conflictRanges.length === 0) return [];
-    return buildConflictSnippets(preview.text, conflictRanges);
-  }, [conflictRanges, preview.text]);
+    if (!preview.text || ranges.length === 0) return [];
+    return buildConflictSnippets(preview.text, ranges);
+  }, [preview.text, ranges]);
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-base-300/80 bg-base-200/35">

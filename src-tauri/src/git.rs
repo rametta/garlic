@@ -811,11 +811,28 @@ pub struct ConflictVersionPreview {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConflictRange {
+    pub conflict_index: usize,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub is_empty: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictRangesBySide {
+    pub ours: Vec<ConflictRange>,
+    pub theirs: Vec<ConflictRange>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConflictFileDetails {
     pub status_code: String,
     pub summary: String,
     pub ours: ConflictVersionPreview,
     pub theirs: ConflictVersionPreview,
+    pub conflict_ranges: ConflictRangesBySide,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_text: Option<String>,
 }
@@ -4113,6 +4130,141 @@ fn utf8_text_from_bytes(bytes: Option<Vec<u8>>) -> Option<String> {
     bytes.and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
+fn next_line_bounds(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
+    if start >= bytes.len() {
+        return None;
+    }
+    let mut end = start;
+    while end < bytes.len() && bytes[end] != b'\n' && bytes[end] != b'\r' {
+        end += 1;
+    }
+    let mut next = end;
+    if next < bytes.len() {
+        if bytes[next] == b'\r' {
+            next += 1;
+            if next < bytes.len() && bytes[next] == b'\n' {
+                next += 1;
+            }
+        } else {
+            next += 1;
+        }
+    }
+    Some((end, next))
+}
+
+fn line_starts_with(bytes: &[u8], start: usize, prefix: &[u8]) -> bool {
+    let Some((end, _)) = next_line_bounds(bytes, start) else {
+        return false;
+    };
+    bytes[start..end].starts_with(prefix)
+}
+
+fn parse_conflict_ranges(worktree_text: &str) -> ConflictRangesBySide {
+    let bytes = worktree_text.as_bytes();
+    let mut ours = Vec::new();
+    let mut theirs = Vec::new();
+    let mut ours_line = 1usize;
+    let mut theirs_line = 1usize;
+    let mut pos = 0usize;
+    let mut conflict_index = 0usize;
+
+    while let Some((_, next)) = next_line_bounds(bytes, pos) {
+        if !line_starts_with(bytes, pos, b"<<<<<<<") {
+            ours_line += 1;
+            theirs_line += 1;
+            pos = next;
+            continue;
+        }
+
+        conflict_index += 1;
+        pos = next;
+
+        let ours_start = ours_line;
+        let mut ours_count = 0usize;
+        while pos < bytes.len()
+            && !line_starts_with(bytes, pos, b"|||||||")
+            && !line_starts_with(bytes, pos, b"=======")
+        {
+            ours_count += 1;
+            let Some((_, next)) = next_line_bounds(bytes, pos) else {
+                break;
+            };
+            pos = next;
+        }
+
+        if pos < bytes.len() && line_starts_with(bytes, pos, b"|||||||") {
+            let Some((_, next)) = next_line_bounds(bytes, pos) else {
+                break;
+            };
+            pos = next;
+            while pos < bytes.len() && !line_starts_with(bytes, pos, b"=======") {
+                let Some((_, next)) = next_line_bounds(bytes, pos) else {
+                    break;
+                };
+                pos = next;
+            }
+        }
+
+        if pos >= bytes.len() || !line_starts_with(bytes, pos, b"=======") {
+            return ConflictRangesBySide {
+                ours: Vec::new(),
+                theirs: Vec::new(),
+            };
+        }
+
+        let Some((_, next)) = next_line_bounds(bytes, pos) else {
+            return ConflictRangesBySide {
+                ours: Vec::new(),
+                theirs: Vec::new(),
+            };
+        };
+        pos = next;
+
+        let theirs_start = theirs_line;
+        let mut theirs_count = 0usize;
+        while pos < bytes.len() && !line_starts_with(bytes, pos, b">>>>>>>") {
+            theirs_count += 1;
+            let Some((_, next)) = next_line_bounds(bytes, pos) else {
+                break;
+            };
+            pos = next;
+        }
+
+        if pos >= bytes.len() {
+            return ConflictRangesBySide {
+                ours: Vec::new(),
+                theirs: Vec::new(),
+            };
+        }
+
+        let Some((_, next)) = next_line_bounds(bytes, pos) else {
+            return ConflictRangesBySide {
+                ours: Vec::new(),
+                theirs: Vec::new(),
+            };
+        };
+        pos = next;
+
+        ours.push(ConflictRange {
+            conflict_index,
+            start_line: ours_start,
+            end_line: ours_start + ours_count.saturating_sub(1),
+            is_empty: ours_count == 0,
+        });
+        theirs.push(ConflictRange {
+            conflict_index,
+            start_line: theirs_start,
+            end_line: theirs_start + theirs_count.saturating_sub(1),
+            is_empty: theirs_count == 0,
+        });
+
+        ours_line += ours_count;
+        theirs_line += theirs_count;
+    }
+
+    ConflictRangesBySide { ours, theirs }
+}
+
 fn trim_line_ending(line: &str) -> &str {
     line.trim_end_matches(['\n', '\r'])
 }
@@ -4207,11 +4359,19 @@ pub fn get_conflict_file_details(
     let ours = git_show_blob_bytes(&path_buf, &format!(":2:{rel}"))?;
     let theirs = git_show_blob_bytes(&path_buf, &format!(":3:{rel}"))?;
     let worktree_text = utf8_text_from_bytes(read_working_tree_bytes(&path_buf, rel)?);
+    let conflict_ranges = worktree_text
+        .as_deref()
+        .map(parse_conflict_ranges)
+        .unwrap_or(ConflictRangesBySide {
+            ours: Vec::new(),
+            theirs: Vec::new(),
+        });
     Ok(ConflictFileDetails {
         status_code: conflict.status_code,
         summary: conflict.summary,
         ours: conflict_preview_from_bytes("Ours", ours),
         theirs: conflict_preview_from_bytes("Theirs", theirs),
+        conflict_ranges,
         worktree_text,
     })
 }
@@ -4979,7 +5139,8 @@ pub async fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Re
 #[cfg(test)]
 mod tests {
     use super::{
-        commit_path_display_parts, parse_porcelain_v1_z, parse_porcelain_xy, parse_unmerged_index_z,
+        commit_path_display_parts, parse_conflict_ranges, parse_porcelain_v1_z, parse_porcelain_xy,
+        parse_unmerged_index_z,
     };
 
     #[test]
@@ -5051,5 +5212,33 @@ mod tests {
         let stages = parsed.get("conflicted.txt").copied().unwrap_or_default();
         assert!(stages.has_ours);
         assert!(stages.has_theirs);
+    }
+
+    #[test]
+    fn parse_conflict_ranges_tracks_line_numbers() {
+        let parsed = parse_conflict_ranges(
+            "before\n<<<<<<< ours\nleft 1\nleft 2\n=======\nright 1\n>>>>>>> theirs\nafter\n",
+        );
+        assert_eq!(parsed.ours.len(), 1);
+        assert_eq!(parsed.theirs.len(), 1);
+        assert_eq!(parsed.ours[0].conflict_index, 1);
+        assert_eq!(parsed.ours[0].start_line, 2);
+        assert_eq!(parsed.ours[0].end_line, 3);
+        assert!(!parsed.ours[0].is_empty);
+        assert_eq!(parsed.theirs[0].start_line, 2);
+        assert_eq!(parsed.theirs[0].end_line, 2);
+    }
+
+    #[test]
+    fn parse_conflict_ranges_handles_empty_and_diff3_markers() {
+        let parsed = parse_conflict_ranges(
+            "<<<<<<< ours\n||||||| base\nbase line\n=======\nright\n>>>>>>> theirs\r\n",
+        );
+        assert_eq!(parsed.ours.len(), 1);
+        assert!(parsed.ours[0].is_empty);
+        assert_eq!(parsed.ours[0].start_line, 1);
+        assert_eq!(parsed.ours[0].end_line, 1);
+        assert_eq!(parsed.theirs[0].start_line, 1);
+        assert_eq!(parsed.theirs[0].end_line, 1);
     }
 }

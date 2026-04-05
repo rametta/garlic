@@ -803,8 +803,7 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
             <ConflictVersionPanel
               path={path}
               preview={details.ours}
-              side="ours"
-              worktreeText={details.worktreeText}
+              ranges={details.conflictRanges.ours}
               actionLabel={canChooseOurs ? oursLabel : undefined}
               actionKind="primary"
               busy={busy}
@@ -813,8 +812,7 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
             <ConflictVersionPanel
               path={path}
               preview={details.theirs}
-              side="theirs"
-              worktreeText={details.worktreeText}
+              ranges={details.conflictRanges.theirs}
               actionLabel={canChooseTheirs ? theirsLabel : undefined}
               actionKind="outline"
               busy={busy}
