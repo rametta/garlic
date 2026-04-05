@@ -132,7 +132,6 @@ import {
   repoQueryKeys,
   setRepoSnapshot,
   updateRepoSnapshot,
-  withRepoLists,
 } from "./repoQuery";
 import { invoke } from "./tauriBridgeDebug";
 
@@ -153,11 +152,6 @@ const WINDOW_FOCUS_REFRESH_DELAY_MS = 250;
 
 /** Initial row height for virtualized “files in commit” list (`measureElement` refines). */
 const COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX = 44;
-/**
- * On window focus, skip `list_local_branches` / `list_remote_branches` unless HEAD changed or this
- * many ms have passed since the last full branch list refresh (reduces subprocess churn).
- */
-const BRANCH_LIST_FULL_REFRESH_INTERVAL_MS = 45_000;
 /** Remote name before `remote/branch` (e.g. `origin/main` → `origin`). */
 function remoteNameFromRemoteRef(fullRef: string): string | null {
   const i = fullRef.indexOf("/");
@@ -1057,6 +1051,7 @@ export default function App({
   const [cloneLogLines, setCloneLogLines] = useState<string[]>([]);
   /** Set when a clone succeeds; user must click Open before `loadRepo` runs. */
   const [cloneReadyPath, setCloneReadyPath] = useState<string | null>(null);
+  const [refreshActionBusy, setRefreshActionBusy] = useState(false);
   /** Matches `start_clone_repository` return value; filters `clone-progress` / `clone-complete`. */
   const pendingCloneSessionRef = useRef<number | null>(null);
   /** `clone-complete` can arrive before `invoke` resolves; flush after session id is known. */
@@ -1259,8 +1254,6 @@ export default function App({
     setAppSettingsOpen(false);
   }, []);
   const [editOriginUrl, setEditOriginUrl] = useState("");
-  /** Last time we ran full local+remote branch listing (used to lighten focus refreshes). */
-  const lastFullBranchListRefreshAtRef = useRef(0);
   const [newBranchName, setNewBranchName] = useState("");
   const [createBranchFieldError, setCreateBranchFieldError] = useState<string | null>(null);
   /** When set, the create-branch dialog starts the branch at this commit instead of HEAD. */
@@ -2328,7 +2321,6 @@ export default function App({
         if (!snapshot.metadata?.error) {
           await invoke("set_last_repo_path", { path: target });
           if (pendingLoadRepoRef.current !== target) return;
-          lastFullBranchListRefreshAtRef.current = Date.now();
         } else {
           setCommits([]);
           setGraphCommitsHasMore(false);
@@ -2520,6 +2512,68 @@ export default function App({
       const fromWatcher = options?.fromWatcher ?? false;
       if (!repo?.path || repo.error) return;
       const pathAtStart = repo.path;
+      if (fromFocus) {
+        try {
+          const files = await invoke<WorkingTreeFile[]>("list_working_tree_files", {
+            path: pathAtStart,
+          });
+          if (activeRepoPathRef.current !== pathAtStart) return;
+          updateRepoSnapshot(queryClient, pathAtStart, (snapshot) => ({
+            ...snapshot,
+            workingTreeFiles: files,
+          }));
+          setListsError(null);
+
+          if (selectedDiffRepoPath === pathAtStart && selectedDiffPath) {
+            const next = files.find((w) => w.path === selectedDiffPath);
+            if (next && (next.staged || next.unstaged || next.conflict)) {
+              if (next.conflict) {
+                void loadConflictForFile(next, {
+                  clearCommitBrowse: false,
+                  preserveExisting: true,
+                });
+              } else {
+                const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
+                if (preferredSide === "unstaged" && next.unstaged) {
+                  void loadDiffForFile(next, "unstaged", {
+                    clearCommitBrowse: false,
+                    preserveExisting: true,
+                  });
+                } else if (preferredSide === "staged" && next.staged) {
+                  void loadDiffForFile(next, "staged", {
+                    clearCommitBrowse: false,
+                    preserveExisting: true,
+                  });
+                } else if (next.unstaged) {
+                  void loadDiffForFile(next, "unstaged", { clearCommitBrowse: false });
+                } else if (next.staged) {
+                  void loadDiffForFile(next, "staged", { clearCommitBrowse: false });
+                } else {
+                  diffLoadSeqRef.current += 1;
+                  setSelectedDiffPath(null);
+                  setSelectedDiffSide(null);
+                  setSelectedDiffRepoPath(null);
+                  clearSelectedDiffContent();
+                  setDiffLoading(false);
+                }
+              }
+            } else {
+              diffLoadSeqRef.current += 1;
+              setSelectedDiffPath(null);
+              setSelectedDiffSide(null);
+              setSelectedDiffRepoPath(null);
+              clearSelectedDiffContent();
+              setDiffLoading(false);
+              setConflictLoading(false);
+            }
+          }
+        } catch (e) {
+          if (activeRepoPathRef.current === pathAtStart) {
+            setListsError(invokeErrorMessage(e));
+          }
+        }
+        return;
+      }
       const prevBranch = repo.branch;
       const prevDetached = repo.detached;
       const prevHeadHash = repo.headHash ?? null;
@@ -2564,7 +2618,6 @@ export default function App({
               files = null;
             }
           } else if (!fromFocus) {
-            lastFullBranchListRefreshAtRef.current = Date.now();
             files = await refreshLists(pathAtStart, {
               localBranches: true,
               remoteBranches: true,
@@ -2573,32 +2626,6 @@ export default function App({
               tags: false,
               stashes: false,
             });
-          } else {
-            const now = Date.now();
-            const needFullBranchList =
-              branchContextChanged ||
-              now - lastFullBranchListRefreshAtRef.current >= BRANCH_LIST_FULL_REFRESH_INTERVAL_MS;
-            if (needFullBranchList) {
-              lastFullBranchListRefreshAtRef.current = Date.now();
-              files = await refreshLists(pathAtStart);
-            } else {
-              try {
-                // Focus refreshes still need to pick up external ref-only changes
-                // like new tags or branches created outside Garlic.
-                const lists = await loadRepoLists(pathAtStart);
-                if (activeRepoPathRef.current !== pathAtStart) return;
-                updateRepoSnapshot(queryClient, pathAtStart, (snapshot) =>
-                  withRepoLists(snapshot, lists),
-                );
-                setListsError(null);
-                files = lists.workingTreeFiles;
-              } catch (e) {
-                if (activeRepoPathRef.current === pathAtStart) {
-                  setListsError(invokeErrorMessage(e));
-                }
-                files = null;
-              }
-            }
           }
 
           if (activeRepoPathRef.current !== pathAtStart) return;
@@ -4766,6 +4793,16 @@ export default function App({
   }, [commits, graphToolbarBranchTargetHash]);
   const latestStashRef = stashes[0]?.refName ?? null;
   const graphToolbarActionBusy = Boolean(branchBusy) || pushBusy || stashBusy !== null;
+  const refreshActionDisabled = refreshActionBusy || !repo?.path || Boolean(repo.error);
+  const handleGraphRefreshAction = useCallback(() => {
+    if (!repo?.path || repo.error || refreshActionBusy) return;
+    setRefreshActionBusy(true);
+    void refreshAfterMutation()
+      .catch(() => {})
+      .finally(() => {
+        setRefreshActionBusy(false);
+      });
+  }, [repo?.error, repo?.path, refreshActionBusy, refreshAfterMutation]);
   const pullActionDisabled = graphToolbarActionBusy || currentBranchName === null;
   const pushActionDisabled =
     graphToolbarActionBusy || !repo?.path || Boolean(repo.error) || Boolean(repo.detached);
@@ -6457,6 +6494,9 @@ export default function App({
                                   graphCommitsPageSize={graphCommitsPageSize}
                                   onGraphCommitsPageSizeChange={handleGraphCommitsPageSizeChange}
                                   graphCommitTitleFontSizePx={graphCommitTitleFontSizePx}
+                                  refreshActionDisabled={refreshActionDisabled}
+                                  refreshActionBusy={refreshActionBusy}
+                                  onRefreshAction={handleGraphRefreshAction}
                                   pullActionDisabled={pullActionDisabled}
                                   onPullAction={handleGraphPullAction}
                                   pushActionDisabled={pushActionDisabled}

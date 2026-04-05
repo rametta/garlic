@@ -177,6 +177,26 @@ function IconSettings({ className }: { className?: string }) {
   );
 }
 
+function IconRefresh({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </svg>
+  );
+}
+
 export interface CommitGraphSectionProps {
   commits: CommitEntry[];
   commitGraphLayout: CommitGraphLayout;
@@ -244,6 +264,9 @@ export interface CommitGraphSectionProps {
   onGraphCommitsPageSizeChange: (value: number) => void;
   /** Commit subject font size in the main graph (persisted app setting, px). */
   graphCommitTitleFontSizePx: number;
+  refreshActionDisabled: boolean;
+  refreshActionBusy: boolean;
+  onRefreshAction: () => void;
   pullActionDisabled: boolean;
   onPullAction: () => void;
   pushActionDisabled: boolean;
@@ -1072,6 +1095,9 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   graphCommitsPageSize,
   onGraphCommitsPageSizeChange,
   graphCommitTitleFontSizePx,
+  refreshActionDisabled,
+  refreshActionBusy,
+  onRefreshAction,
   pullActionDisabled,
   onPullAction,
   pushActionDisabled,
@@ -1244,6 +1270,21 @@ export const CommitGraphSection = memo(function CommitGraphSection({
           className="menu menu-horizontal flex-wrap items-center justify-center menu-xs rounded-box bg-base-200/70 p-1"
           aria-label="Graph actions"
         >
+          <li className={refreshActionDisabled ? "menu-disabled" : undefined}>
+            <button
+              type="button"
+              className="flex items-center gap-1.5"
+              disabled={refreshActionDisabled}
+              title="Refresh repository lists and graph"
+              onClick={onRefreshAction}
+            >
+              {refreshActionBusy ? (
+                <span className="loading loading-xs shrink-0 loading-spinner" />
+              ) : (
+                <IconRefresh className="h-3.5 w-3.5 shrink-0" />
+              )}
+            </button>
+          </li>
           <li className={pullActionDisabled ? "menu-disabled" : undefined}>
             <button
               type="button"
