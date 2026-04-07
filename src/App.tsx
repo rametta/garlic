@@ -453,6 +453,29 @@ function StagePanelLineStats({
   return <DiffLineStatBadge stat={s} />;
 }
 
+function InlinePathLabel({
+  dir,
+  base,
+  title,
+}: {
+  dir: string | null | undefined;
+  base: string;
+  title: string | null | undefined;
+}) {
+  return (
+    <span title={title ?? undefined} className="wrap-break-word">
+      {dir ? (
+        <>
+          <span className="text-base-content/45">{dir}</span>
+          <span className="text-base-content">{base}</span>
+        </>
+      ) : (
+        <span className="text-base-content">{base}</span>
+      )}
+    </span>
+  );
+}
+
 function worktreeFileMutationPaths(file: Pick<WorkingTreeFile, "path" | "renameFrom">): string[] {
   const renameFrom = file.renameFrom?.trim();
   return renameFrom && renameFrom !== file.path ? [file.path, renameFrom] : [file.path];
@@ -537,7 +560,27 @@ const StagePanelFileRow = memo(function StagePanelFileRow({
     >
       <div className="flex min-h-7 items-center gap-2">
         <code className="min-w-0 flex-1 font-mono text-[0.7rem] leading-snug wrap-break-word text-base-content">
-          {f.renameFrom ? `${f.renameFrom} → ${f.path}` : f.path}
+          {f.renameFrom ? (
+            <>
+              <InlinePathLabel
+                dir={f.renameFromDisplayDir}
+                base={f.renameFromDisplayBase ?? f.renameFrom}
+                title={f.renameFromDisplayTitle}
+              />
+              <span className="px-1 text-base-content/55">→</span>
+              <InlinePathLabel
+                dir={f.pathDisplayDir}
+                base={f.pathDisplayBase}
+                title={f.pathDisplayTitle}
+              />
+            </>
+          ) : (
+            <InlinePathLabel
+              dir={f.pathDisplayDir}
+              base={f.pathDisplayBase}
+              title={f.pathDisplayTitle}
+            />
+          )}
         </code>
         <StagePanelLineStats variant={variant} f={f} />
         <div className="flex shrink-0 items-center gap-0.5">

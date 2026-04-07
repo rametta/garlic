@@ -934,9 +934,24 @@ pub struct ConflictFileDetails {
 pub struct WorkingTreeFile {
     /// Path used for git commands (index / worktree); for renames, the new path.
     pub path: String,
+    /// Muted directory segment (may be middle-truncated); `None` if only the basename is shown.
+    pub path_display_dir: Option<String>,
+    /// Emphasized filename segment (may be middle-truncated when the basename alone exceeds the cap).
+    pub path_display_base: String,
+    /// Full path for native tooltip when any truncation applies.
+    pub path_display_title: Option<String>,
     /// When set, the file is a rename from this path (UI may show `from → to`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rename_from: Option<String>,
+    /// Muted directory segment for `rename_from` when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rename_from_display_dir: Option<String>,
+    /// Emphasized basename segment for `rename_from` when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rename_from_display_base: Option<String>,
+    /// Full `rename_from` path for native tooltip when truncation applies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rename_from_display_title: Option<String>,
     pub staged: bool,
     pub unstaged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3295,6 +3310,16 @@ pub fn list_working_tree_files_blocking(path: String) -> Result<Vec<WorkingTreeF
         .into_iter()
         .filter_map(|p| map.get(&p).cloned())
         .map(|acc| {
+            let (path_display_dir, path_display_base, path_display_title) =
+                commit_path_display_parts(&acc.path);
+            let (rename_from_display_dir, rename_from_display_base, rename_from_display_title) =
+                match acc.rename_from.as_deref() {
+                    Some(rename_from) => {
+                        let (dir, base, title) = commit_path_display_parts(rename_from);
+                        (dir, Some(base), title)
+                    }
+                    None => (None, None, None),
+                };
             let staged = acc.staged;
             let unstaged = acc.unstaged || acc.untracked;
             let conflict = if acc.conflicted {
@@ -3331,7 +3356,13 @@ pub fn list_working_tree_files_blocking(path: String) -> Result<Vec<WorkingTreeF
             };
             WorkingTreeFile {
                 path: acc.path,
+                path_display_dir,
+                path_display_base,
+                path_display_title,
                 rename_from: acc.rename_from,
+                rename_from_display_dir,
+                rename_from_display_base,
+                rename_from_display_title,
                 staged,
                 unstaged,
                 staged_stats,

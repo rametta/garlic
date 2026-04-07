@@ -92,7 +92,13 @@ export interface ConflictFileDetails {
 /** One path in the working tree from `list_working_tree_files` / bootstrap. */
 export interface WorkingTreeFile {
   path: string;
+  pathDisplayDir: string | null;
+  pathDisplayBase: string;
+  pathDisplayTitle: string | null;
   renameFrom?: string | null;
+  renameFromDisplayDir?: string | null;
+  renameFromDisplayBase?: string | null;
+  renameFromDisplayTitle?: string | null;
   staged: boolean;
   unstaged: boolean;
   stagedStats?: LineStat;
