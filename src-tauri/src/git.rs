@@ -455,6 +455,78 @@ fn format_git_failure<S: AsRef<str>>(args: &[S]) -> String {
     format!("{} failed", format_git_command(args))
 }
 
+fn should_notify_git_completion(operation: &str) -> bool {
+    operation == "push" || operation.starts_with("commit")
+}
+
+fn format_notification_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        let mins = secs / 60;
+        let rem = secs % 60;
+        if rem == 0 {
+            format!("{mins}m")
+        } else {
+            format!("{mins}m {rem}s")
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn notify_git_completion(operation: &str, workdir: &Path, elapsed: Duration) {
+    if elapsed < Duration::from_secs(5) || !should_notify_git_completion(operation) {
+        return;
+    }
+
+    let title = "Garlic";
+    let subtitle = workdir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Repository");
+    let body = format!(
+        "{} finished after {}.",
+        if operation == "push" {
+            "Push"
+        } else {
+            "Commit"
+        },
+        format_notification_elapsed(elapsed)
+    );
+    let script = r#"on run argv
+  set titleText to item 1 of argv
+  set subtitleText to item 2 of argv
+  set bodyText to item 3 of argv
+  display notification bodyText with title titleText subtitle subtitleText
+end run
+"#;
+
+    let spawn_result = (|| -> std::io::Result<()> {
+        let mut child = Command::new("osascript")
+            .arg("-")
+            .arg(title)
+            .arg(subtitle)
+            .arg(&body)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(script.as_bytes())?;
+        }
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    })();
+    let _ = spawn_result;
+}
+
+#[cfg(not(target_os = "macos"))]
+fn notify_git_completion(_operation: &str, _workdir: &Path, _elapsed: Duration) {}
+
 fn require_active_repo_path(app: &AppHandle) -> Result<PathBuf, String> {
     crate::active_repo::get_path(app).ok_or_else(|| "No repository is open.".to_string())
 }
@@ -467,6 +539,7 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
     stdin_text: Option<&str>,
     extra_envs: &[(&str, &str)],
 ) -> Result<(), String> {
+    let started_at = Instant::now();
     let session_id = next_git_stream_session_id();
     let repo_owned = workdir.to_string_lossy().into_owned();
     let op_owned = operation.to_string();
@@ -653,6 +726,7 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
     );
 
     if ok {
+        notify_git_completion(&op_owned, workdir, started_at.elapsed());
         Ok(())
     } else {
         Err(err_msg.unwrap_or_else(|| format!("{} failed", format_git_command(args))))

@@ -246,6 +246,7 @@ export async function popupWorktreeContextMenu(
     disabled: boolean;
     canOpen: boolean;
     canBrowse: boolean;
+    applyLabel: string;
     canApply: boolean;
     canDelete: boolean;
     onOpen: () => void;
@@ -273,7 +274,7 @@ export async function popupWorktreeContextMenu(
     },
     {
       id: "worktree_apply",
-      text: "Apply worktree to current branch…",
+      text: args.applyLabel,
       enabled: !args.disabled && args.canApply,
       action: () => {
         args.onApply();

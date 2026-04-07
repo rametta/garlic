@@ -3071,6 +3071,9 @@ export default function App({
         disabled: Boolean(branchBusy),
         canOpen: !worktree.isCurrent,
         canBrowse: worktree.changedFileCount > 0 || !!applySource,
+        applyLabel: worktree.branch
+          ? "Apply branch to current branch…"
+          : "Apply worktree HEAD to current branch…",
         canApply,
         canDelete: !worktree.isCurrent,
         onOpen: () => {
