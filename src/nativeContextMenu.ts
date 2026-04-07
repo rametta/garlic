@@ -273,7 +273,7 @@ export async function popupWorktreeContextMenu(
     },
     {
       id: "worktree_apply",
-      text: "Apply branch to current branch…",
+      text: "Apply worktree to current branch…",
       enabled: !args.disabled && args.canApply,
       action: () => {
         args.onApply();

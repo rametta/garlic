@@ -1025,6 +1025,43 @@ export default function App({
   const tags = repoSnapshot.tags;
   const stashes = repoSnapshot.stashes;
   const workingTreeFiles = repoSnapshot.workingTreeFiles;
+  const worktreeApplyTarget = useMemo(() => {
+    if (!repo?.path || repo.error) return null;
+    if (!repo.detached && repo.branch) {
+      return {
+        path: repo.path,
+        branch: repo.branch,
+        label: repo.branch,
+      };
+    }
+    const branchBacked = worktrees.filter((worktree) => !worktree.isCurrent && !!worktree.branch);
+    const preferred = repo.gitRoot
+      ? branchBacked.find((worktree) => worktree.path === repo.gitRoot)
+      : null;
+    const fallback = branchBacked.length === 1 ? branchBacked[0] : null;
+    const target = preferred ?? fallback;
+    if (!target?.branch) return null;
+    return {
+      path: target.path,
+      branch: target.branch,
+      label: `${target.branch} (${target.path})`,
+    };
+  }, [repo, worktrees]);
+  const worktreeApplySource = useCallback((worktree: WorktreeEntry) => {
+    if (worktree.branch) {
+      return {
+        ref: worktree.branch,
+        label: `"${worktree.branch}"`,
+      };
+    }
+    if (worktree.headHash) {
+      return {
+        ref: worktree.headHash,
+        label: worktree.headShort ? `detached HEAD ${worktree.headShort}` : "detached HEAD",
+      };
+    }
+    return null;
+  }, []);
   /** Guards async work: ignore results if `repo.path` changed while awaiting (e.g. refresh vs. open other repo). */
   const activeRepoPathRef = useRef<string | null>(null);
   activeRepoPathRef.current = repo?.path ?? null;
@@ -2953,27 +2990,34 @@ export default function App({
   );
 
   const mergeBranchIntoCurrent = useCallback(
-    async (onto: string) => {
-      if (!repo?.path || repo.error || repo.detached) return;
-      const ok = await ask(`Merge "${onto}" into the current branch?`, {
+    async (onto: string, sourceLabel = `"${onto}"`, target = worktreeApplyTarget) => {
+      if (!repo?.path || repo.error || !target || onto === target.branch) return;
+      const targetLabel =
+        target.path === repo.path ? "the current branch" : `"${target.branch}" at "${target.path}"`;
+      const ok = await ask(`Merge ${sourceLabel} into ${targetLabel}?`, {
         title: "Garlic",
         kind: "warning",
       });
       if (!ok) return;
-      setBranchBusy(`merge:${onto}`);
+      setBranchBusy(`merge:${target.branch}:${onto}`);
       setOperationError(null);
       try {
         await mergeBranchMutation.mutateAsync({
-          path: repo.path,
+          path: target.path,
           branchOrRef: onto,
         });
+        if (target.path !== repo.path) {
+          await queryClient.invalidateQueries({
+            queryKey: repoQueryKeys.root(repo.path),
+          });
+        }
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, mergeBranchMutation],
+    [repo, worktreeApplyTarget, mergeBranchMutation, queryClient],
   );
 
   const removeLinkedWorktree = useCallback(
@@ -3016,14 +3060,17 @@ export default function App({
 
   const runWorktreeSidebarContextMenu = useCallback(
     (worktree: WorktreeEntry, clientX: number, clientY: number) => {
+      const applySource = worktreeApplySource(worktree);
       const sameBranch =
-        !repo?.detached && !!repo?.branch && !!worktree.branch && repo.branch === worktree.branch;
+        !!worktreeApplyTarget?.branch &&
+        !!worktree.branch &&
+        worktreeApplyTarget.branch === worktree.branch;
       const canApply =
-        !worktree.isCurrent && !repo?.detached && !!worktree.branch && !sameBranch && !branchBusy;
+        !worktree.isCurrent && !!applySource && !!worktreeApplyTarget && !sameBranch && !branchBusy;
       void popupWorktreeContextMenu(clientX, clientY, {
         disabled: Boolean(branchBusy),
         canOpen: !worktree.isCurrent,
-        canBrowse: worktree.changedFileCount > 0 || Boolean(worktree.branch),
+        canBrowse: worktree.changedFileCount > 0 || !!applySource,
         canApply,
         canDelete: !worktree.isCurrent,
         onOpen: () => {
@@ -3033,15 +3080,23 @@ export default function App({
           void openWorktreeBrowse(worktree);
         },
         onApply: () => {
-          if (!worktree.branch) return;
-          void mergeBranchIntoCurrent(worktree.branch);
+          if (!applySource) return;
+          void mergeBranchIntoCurrent(applySource.ref, applySource.label, worktreeApplyTarget);
         },
         onDelete: () => {
           void removeLinkedWorktree(worktree);
         },
       });
     },
-    [repo, branchBusy, loadRepo, openWorktreeBrowse, mergeBranchIntoCurrent, removeLinkedWorktree],
+    [
+      worktreeApplyTarget,
+      worktreeApplySource,
+      branchBusy,
+      loadRepo,
+      openWorktreeBrowse,
+      mergeBranchIntoCurrent,
+      removeLinkedWorktree,
+    ],
   );
 
   const onCheckoutLocal = useCallback(
