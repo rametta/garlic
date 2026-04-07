@@ -6101,7 +6101,7 @@ export default function App({
                                         </p>
                                       </div>
                                     ) : (
-                                      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                                      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                                         {commitDiffLoading ? (
                                           <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12">
                                             <span className="loading loading-md loading-spinner text-primary" />
@@ -6121,8 +6121,8 @@ export default function App({
                                             </span>
                                           </DismissibleAlert>
                                         ) : (
-                                          <div className="flex-1 overflow-auto border-t border-base-300/80 bg-base-200/30 p-2">
-                                            <div className="m-0 mb-1.5 text-[0.6rem] font-semibold tracking-wide text-base-content/45 uppercase">
+                                          <>
+                                            <div className="shrink-0 border-t border-base-300/80 bg-base-200/85 px-2 py-2 backdrop-blur">
                                               <button
                                                 type="button"
                                                 className="btn shrink-0 btn-xs btn-primary"
@@ -6131,12 +6131,14 @@ export default function App({
                                                 Back to commits
                                               </button>
                                             </div>
-                                            <UnifiedDiff
-                                              text={commitDiffText ?? ""}
-                                              emptyLabel="(no diff for this file)"
-                                              binaryImagePreview={commitDiffBinaryImagePreview}
-                                            />
-                                          </div>
+                                            <div className="min-h-0 flex-1 overflow-auto bg-base-200/30 p-2">
+                                              <UnifiedDiff
+                                                text={commitDiffText ?? ""}
+                                                emptyLabel="(no diff for this file)"
+                                                binaryImagePreview={commitDiffBinaryImagePreview}
+                                              />
+                                            </div>
+                                          </>
                                         )}
                                       </div>
                                     )}
