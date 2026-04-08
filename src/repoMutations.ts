@@ -633,6 +633,13 @@ export function useResolveConflictChoiceMutation() {
   });
 }
 
+export function useResolveConflictTextMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string; filePath: string; resolvedText: string }) =>
+      invokeRepoMutation("resolve_conflict_text", variables),
+  });
+}
+
 export function useDiscardPatchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; patch: string }) =>

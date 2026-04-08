@@ -33,6 +33,7 @@ commands.allow = [
   "unstage_paths",
   "unstage_patch",
   "resolve_conflict_choice",
+  "resolve_conflict_text",
   "discard_patch",
   "discard_paths_changes",
   "discard_path_changes",

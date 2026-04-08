@@ -158,6 +158,7 @@ pub fn run() {
             git::unstage_paths,
             git::unstage_patch,
             git::resolve_conflict_choice,
+            git::resolve_conflict_text,
             git::discard_patch,
             git::discard_paths_changes,
             git::discard_path_changes,

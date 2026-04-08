@@ -10,6 +10,14 @@ import { pathToShikiLang } from "../diffLanguage";
 import { useDiffShikiTheme, useShikiHighlighter } from "../diffShiki";
 import type { ConflictRange, ConflictVersionPreview } from "../gitTypes";
 
+export type ConflictSelectionControls = {
+  blockActionLabel?: string;
+  isLineSelected: (conflictIndex: number, lineNumber: number) => boolean;
+  isBlockSelected: (conflictIndex: number, lineNumbers: readonly number[]) => boolean;
+  onToggleLine: (conflictIndex: number, lineNumber: number) => void;
+  onToggleBlock: (conflictIndex: number, lineNumbers: readonly number[]) => void;
+};
+
 type ConflictSnippetRow = {
   key: string;
   lineNumber: number | null;
@@ -23,6 +31,7 @@ type ConflictSnippet = {
   hiddenBefore: number;
   hiddenAfter: number;
   lineLabel: string;
+  highlightedLineNumbers: number[];
   rows: ConflictSnippetRow[];
 };
 
@@ -108,6 +117,10 @@ function buildConflictSnippets(
       hiddenBefore: lines.length === 0 ? 0 : Math.max(0, sliceStart - 1),
       hiddenAfter: lines.length === 0 ? 0 : Math.max(0, lines.length - sliceEnd),
       lineLabel,
+      highlightedLineNumbers: rows
+        .filter((row) => row.highlighted && row.lineNumber !== null)
+        .map((row) => row.lineNumber)
+        .filter((lineNumber): lineNumber is number => lineNumber !== null),
       rows,
     };
   });
@@ -115,15 +128,25 @@ function buildConflictSnippets(
 
 function ConflictCodeRow({
   row,
+  conflictIndex,
   lang,
   highlighter,
   shikiTheme,
+  selectionControls,
+  busy = false,
 }: {
   row: ConflictSnippetRow;
+  conflictIndex: number;
   lang: string | null;
   highlighter: Highlighter | null;
   shikiTheme: "github-light" | "github-dark";
+  selectionControls?: ConflictSelectionControls | null;
+  busy?: boolean;
 }) {
+  const selected =
+    row.highlighted &&
+    row.lineNumber !== null &&
+    selectionControls?.isLineSelected(conflictIndex, row.lineNumber);
   const lineTokens = useMemo(() => {
     if (row.placeholder || !highlighter || !lang) return null;
     try {
@@ -139,7 +162,13 @@ function ConflictCodeRow({
   }, [highlighter, lang, row.placeholder, row.text, shikiTheme]);
 
   return (
-    <div className="grid w-full min-w-0 grid-cols-[minmax(4ch,7ch)_minmax(0,1fr)] font-mono text-[0.8125rem] leading-relaxed text-(--diff-text-color)">
+    <div
+      className={`grid w-full min-w-0 font-mono text-[0.8125rem] leading-relaxed text-(--diff-text-color) ${
+        selectionControls
+          ? "grid-cols-[minmax(4ch,7ch)_minmax(0,1fr)_2.25rem]"
+          : "grid-cols-[minmax(4ch,7ch)_minmax(0,1fr)]"
+      }`}
+    >
       <div
         className={`diff-gutter diff-line px-1 py-0 text-right select-none ${
           row.highlighted ? "diff-gutter-selected" : ""
@@ -151,6 +180,8 @@ function ConflictCodeRow({
       <pre
         className={`diff-line m-0 min-h-0 min-w-0 overflow-x-auto border-0 py-0 pr-2 pl-2 [word-break:break-word] whitespace-pre-wrap ${
           row.highlighted ? "diff-code-selected" : "diff-code-normal"
+        } ${
+          selected ? "bg-success/12 ring-1 ring-success/35" : ""
         } ${row.placeholder ? "text-base-content/70 italic" : ""}`}
       >
         {row.placeholder
@@ -165,6 +196,26 @@ function ConflictCodeRow({
               ? " "
               : row.text}
       </pre>
+      {selectionControls ? (
+        <div className="flex items-start justify-center px-1 py-0.5">
+          {row.highlighted && row.lineNumber !== null ? (
+            <button
+              type="button"
+              className={`btn btn-square min-h-6 min-w-6 px-0 font-mono text-sm leading-none btn-xs ${
+                selected ? "btn-success" : "btn-ghost"
+              }`}
+              disabled={busy}
+              aria-label={selected ? "Remove this line" : "Take this line"}
+              title={selected ? "Remove this line" : "Take this line"}
+              onClick={() => {
+                selectionControls.onToggleLine(conflictIndex, row.lineNumber!);
+              }}
+            >
+              {selected ? "−" : "+"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -174,19 +225,48 @@ function ConflictSnippetCard({
   lang,
   highlighter,
   shikiTheme,
+  selectionControls,
+  busy = false,
 }: {
   snippet: ConflictSnippet;
   lang: string | null;
   highlighter: Highlighter | null;
   shikiTheme: "github-light" | "github-dark";
+  selectionControls?: ConflictSelectionControls | null;
+  busy?: boolean;
 }) {
+  const blockSelected = selectionControls?.isBlockSelected(
+    snippet.conflictIndex,
+    snippet.highlightedLineNumbers,
+  );
   return (
     <section className="overflow-hidden rounded-lg border border-base-300/80 bg-base-100/40">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300/80 bg-base-200/60 px-3 py-2">
         <div className="text-[0.68rem] font-semibold tracking-wide text-base-content/65 uppercase">
           Conflict {snippet.conflictIndex}
         </div>
-        <div className="text-[0.7rem] text-base-content/55">{snippet.lineLabel}</div>
+        <div className="flex items-center gap-2">
+          <div className="text-[0.7rem] text-base-content/55">{snippet.lineLabel}</div>
+          {selectionControls ? (
+            <button
+              type="button"
+              className={`btn h-auto min-h-6 px-2 font-sans text-[0.65rem] tracking-normal btn-outline btn-xs ${
+                blockSelected ? "btn-success" : "btn-ghost"
+              }`}
+              disabled={busy}
+              onClick={() => {
+                selectionControls.onToggleBlock(
+                  snippet.conflictIndex,
+                  snippet.highlightedLineNumbers,
+                );
+              }}
+            >
+              {blockSelected
+                ? "Remove block"
+                : (selectionControls.blockActionLabel ?? "Take block")}
+            </button>
+          ) : null}
+        </div>
       </div>
       {snippet.hiddenBefore > 0 ? (
         <div className="border-b border-base-300/60 px-3 py-1 text-[0.68rem] text-base-content/50">
@@ -198,9 +278,12 @@ function ConflictSnippetCard({
           <ConflictCodeRow
             key={row.key}
             row={row}
+            conflictIndex={snippet.conflictIndex}
             lang={lang}
             highlighter={highlighter}
             shikiTheme={shikiTheme}
+            selectionControls={selectionControls}
+            busy={busy}
           />
         ))}
       </div>
@@ -221,6 +304,7 @@ export const ConflictVersionPanel = memo(function ConflictVersionPanel({
   actionKind = "outline",
   busy = false,
   onAction,
+  selectionControls,
 }: {
   path: string;
   preview: ConflictVersionPreview;
@@ -229,6 +313,7 @@ export const ConflictVersionPanel = memo(function ConflictVersionPanel({
   actionKind?: "primary" | "outline";
   busy?: boolean;
   onAction?: () => void;
+  selectionControls?: ConflictSelectionControls | null;
 }) {
   const highlighter = useShikiHighlighter();
   const shikiTheme = useDiffShikiTheme();
@@ -279,6 +364,8 @@ export const ConflictVersionPanel = memo(function ConflictVersionPanel({
                 lang={lang}
                 highlighter={highlighter}
                 shikiTheme={shikiTheme}
+                selectionControls={selectionControls}
+                busy={busy}
               />
             ))}
           </div>

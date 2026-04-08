@@ -26,6 +26,7 @@ import { collectLocalBranchNamesInSubtree, collectRemoteRefsInSubtree } from "./
 import { BranchSidebar, type BranchGraphControls } from "./components/BranchSidebar";
 import { CommitComposer } from "./components/CommitComposer";
 import { CommitGraphSection } from "./components/CommitGraphSection";
+import { ConflictResolutionDraft } from "./components/ConflictResolutionDraft";
 import { ConflictVersionPanel } from "./components/ConflictVersionPanel";
 import { GitCommandPanel } from "./components/GitCommandPanel";
 import { SettingsPage } from "./components/SettingsPage";
@@ -43,6 +44,7 @@ import {
   type CommitGraphLayout,
 } from "./commitGraphLayout";
 import { base64ToObjectUrl, mimeTypeForImagePath, pathLooksLikeRenderableImage } from "./diffImage";
+import { parseConflictWorktreeText } from "./conflictMarkers";
 import {
   popupBranchContextMenu,
   popupFileRowContextMenu,
@@ -109,6 +111,7 @@ import {
   usePushToOriginMutation,
   useRebaseCurrentBranchOntoMutation,
   useResolveConflictChoiceMutation,
+  useResolveConflictTextMutation,
   useResetCurrentBranchToCommitMutation,
   useRewordCommitMutation,
   useRemoveWorktreeMutation,
@@ -764,6 +767,7 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
   onChooseOurs,
   onChooseTheirs,
   onChooseBoth,
+  onStageResolvedText,
   onOpenInCursor,
   onBack,
   onDismissError,
@@ -781,6 +785,7 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
   onChooseOurs: () => void;
   onChooseTheirs: () => void;
   onChooseBoth: () => void;
+  onStageResolvedText: (resolvedText: string) => void;
   onOpenInCursor: () => void;
   onBack: () => void;
   onDismissError: () => void;
@@ -792,6 +797,15 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
     !details.theirs.deleted &&
     !details.ours.isBinary &&
     !details.theirs.isBinary;
+  const hasCustomDraftResolution = Boolean(
+    details &&
+    details.worktreeText != null &&
+    !details.ours.deleted &&
+    !details.theirs.deleted &&
+    !details.ours.isBinary &&
+    !details.theirs.isBinary &&
+    parseConflictWorktreeText(details.worktreeText)?.conflicts.length,
+  );
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -817,9 +831,32 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
         <p className="m-0 text-xs leading-relaxed text-base-content/70">
           Choose the result to stage. Garlic will mark the file as resolved with your selection.
           {repoOperationLabel ? ` ${repoOperationLabel}.` : ""}
+          {hasCustomDraftResolution
+            ? " For text conflicts you can take whole blocks or individual lines from either side."
+            : ""}
         </p>
-        {canChooseBoth ? (
-          <div className="mt-3">
+        <div className="mt-3 flex flex-wrap gap-2">
+          {canChooseOurs ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={busy}
+              onClick={onChooseOurs}
+            >
+              {oursLabel}
+            </button>
+          ) : null}
+          {canChooseTheirs ? (
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              disabled={busy}
+              onClick={onChooseTheirs}
+            >
+              {theirsLabel}
+            </button>
+          ) : null}
+          {canChooseBoth ? (
             <button
               type="button"
               className="btn btn-outline btn-sm"
@@ -828,8 +865,8 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
             >
               Select both
             </button>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {loading ? (
@@ -842,26 +879,36 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
             <span className="wrap-break-word">{error}</span>
           </DismissibleAlert>
         ) : details ? (
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto bg-base-200/40 p-3 xl:grid-cols-2">
-            <ConflictVersionPanel
+          hasCustomDraftResolution ? (
+            <ConflictResolutionDraft
+              key={`${path}:${details.worktreeText ?? ""}`}
               path={path}
-              preview={details.ours}
-              ranges={details.conflictRanges.ours}
-              actionLabel={canChooseOurs ? oursLabel : undefined}
-              actionKind="primary"
+              details={details}
               busy={busy}
-              onAction={canChooseOurs ? onChooseOurs : undefined}
+              onStageResolved={onStageResolvedText}
             />
-            <ConflictVersionPanel
-              path={path}
-              preview={details.theirs}
-              ranges={details.conflictRanges.theirs}
-              actionLabel={canChooseTheirs ? theirsLabel : undefined}
-              actionKind="outline"
-              busy={busy}
-              onAction={canChooseTheirs ? onChooseTheirs : undefined}
-            />
-          </div>
+          ) : (
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto bg-base-200/40 p-3 xl:grid-cols-2">
+              <ConflictVersionPanel
+                path={path}
+                preview={details.ours}
+                ranges={details.conflictRanges.ours}
+                actionLabel={canChooseOurs ? oursLabel : undefined}
+                actionKind="primary"
+                busy={busy}
+                onAction={canChooseOurs ? onChooseOurs : undefined}
+              />
+              <ConflictVersionPanel
+                path={path}
+                preview={details.theirs}
+                ranges={details.conflictRanges.theirs}
+                actionLabel={canChooseTheirs ? theirsLabel : undefined}
+                actionKind="outline"
+                busy={busy}
+                onAction={canChooseTheirs ? onChooseTheirs : undefined}
+              />
+            </div>
+          )
         ) : (
           <div className="flex flex-1 items-center justify-center px-4 py-10">
             <p className="m-0 text-sm text-base-content/60">No conflict details loaded.</p>
@@ -1303,6 +1350,7 @@ export default function App({
   const stagePatchMutation = useStagePatchMutation();
   const unstagePatchMutation = useUnstagePatchMutation();
   const resolveConflictChoiceMutation = useResolveConflictChoiceMutation();
+  const resolveConflictTextMutation = useResolveConflictTextMutation();
   const discardPatchMutation = useDiscardPatchMutation();
   const amendLastCommitMutation = useAmendLastCommitMutation();
   const commitStagedMutation = useCommitStagedMutation();
@@ -3334,6 +3382,7 @@ export default function App({
       if (!repo?.path || repo.error) return;
       if (syncingStagePaths.has(filePath)) return;
       setOperationError(null);
+      setConflictError(null);
       setSyncingStagePaths((prev) => {
         const next = new Set(prev);
         next.add(filePath);
@@ -3344,7 +3393,9 @@ export default function App({
       try {
         await resolveConflictChoiceMutation.mutateAsync({ path: repo.path, filePath, choice });
       } catch (e) {
-        setOperationError(invokeErrorMessage(e));
+        const message = invokeErrorMessage(e);
+        setOperationError(message);
+        setConflictError(message);
       } finally {
         setSyncingStagePaths((prev) => {
           const next = new Set(prev);
@@ -3355,6 +3406,41 @@ export default function App({
       }
     },
     [repo, syncingStagePaths, clearSelectedDiffContent, resolveConflictChoiceMutation],
+  );
+
+  const resolveConflictText = useCallback(
+    async (filePath: string, resolvedText: string) => {
+      if (!repo?.path || repo.error) return;
+      if (syncingStagePaths.has(filePath)) return;
+      setOperationError(null);
+      setConflictError(null);
+      setSyncingStagePaths((prev) => {
+        const next = new Set(prev);
+        next.add(filePath);
+        return next;
+      });
+      clearSelectedDiffContent();
+      setConflictLoading(true);
+      try {
+        await resolveConflictTextMutation.mutateAsync({
+          path: repo.path,
+          filePath,
+          resolvedText,
+        });
+      } catch (e) {
+        const message = invokeErrorMessage(e);
+        setOperationError(message);
+        setConflictError(message);
+      } finally {
+        setSyncingStagePaths((prev) => {
+          const next = new Set(prev);
+          next.delete(filePath);
+          return next;
+        });
+        setConflictLoading(false);
+      }
+    },
+    [repo, syncingStagePaths, clearSelectedDiffContent, resolveConflictTextMutation],
   );
 
   const rebaseCurrentBranchOntoCommit = useCallback(
@@ -5849,6 +5935,12 @@ export default function App({
                                                 ResolveConflictChoice.Both,
                                               );
                                             }}
+                                            onStageResolvedText={(resolvedText) => {
+                                              void resolveConflictText(
+                                                selectedConflictFile.path,
+                                                resolvedText,
+                                              );
+                                            }}
                                             onOpenInCursor={() => {
                                               void openSelectedDiffInCursor();
                                             }}
@@ -6083,6 +6175,9 @@ export default function App({
                                       selectedDiffPath,
                                       ResolveConflictChoice.Both,
                                     );
+                                  }}
+                                  onStageResolvedText={(resolvedText) => {
+                                    void resolveConflictText(selectedDiffPath, resolvedText);
                                   }}
                                   onOpenInCursor={() => {
                                     void openSelectedDiffInCursor();

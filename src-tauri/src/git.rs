@@ -3587,6 +3587,28 @@ pub fn resolve_conflict_choice(
 }
 
 #[tauri::command]
+pub fn resolve_conflict_text(
+    path: String,
+    file_path: String,
+    resolved_text: String,
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    ensure_git_repo(&path_buf)?;
+    let rel = file_path.trim();
+    if rel.is_empty() {
+        return Err("File path cannot be empty.".to_string());
+    }
+    let unmerged = parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
+    if !unmerged.contains_key(rel) {
+        return Err("This path is not currently conflicted.".to_string());
+    }
+    std::fs::write(path_buf.join(rel), resolved_text)
+        .map_err(|e| format!("Could not write resolved file: {e}"))?;
+    git_output(&path_buf, &["add", "--", rel])?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn discard_patch(app: AppHandle, path: String, patch: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
