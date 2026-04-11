@@ -240,7 +240,7 @@ function ConflictSnippetCard({
     snippet.highlightedLineNumbers,
   );
   return (
-    <section className="overflow-hidden rounded-lg border border-base-300/80 bg-base-100/40">
+    <section className="overflow-hidden bg-base-100/40">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300/80 bg-base-200/60 px-3 py-2">
         <div className="text-[0.68rem] font-semibold tracking-wide text-base-content/65 uppercase">
           Conflict {snippet.conflictIndex}
@@ -324,7 +324,7 @@ export const ConflictVersionPanel = memo(function ConflictVersionPanel({
   }, [preview.text, ranges]);
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-base-300/80 bg-base-200/35">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-r border-base-300/80 bg-base-200/35">
       <div className="flex items-start justify-between gap-2 border-b border-base-300/80 px-3 py-2">
         <div className="min-w-0">
           <div className="text-[0.65rem] font-semibold tracking-wide text-base-content/60 uppercase">
@@ -348,7 +348,7 @@ export const ConflictVersionPanel = memo(function ConflictVersionPanel({
           </button>
         ) : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="min-h-0 flex-1 overflow-auto">
         {preview.deleted ? (
           <p className="m-0 text-sm text-base-content/60">This choice deletes the file.</p>
         ) : preview.isBinary ? (

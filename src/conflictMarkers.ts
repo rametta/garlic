@@ -172,15 +172,29 @@ export function selectedLineCount(
   return side === "ours" ? selection.oursLineNumbers.length : selection.theirsLineNumbers.length;
 }
 
-export function buildResolvedConflictText(
+/** One line of the assembled resolution preview (staging uses the same order). */
+export type ResolvedPreviewLine = {
+  text: string;
+  source: "context" | "ours" | "theirs";
+  /** Set when `source` is ours or theirs. */
+  conflictIndex?: number;
+};
+
+/**
+ * Same assembly order as {@link buildResolvedConflictText}, with per-line provenance for UI.
+ * Returns `null` when any conflict block is still unresolved.
+ */
+export function buildResolvedConflictLines(
   parsed: ParsedConflictWorktree,
   selections: Record<number, ConflictBlockSelectionDraft>,
-): string | null {
-  const outputLines: string[] = [];
+): ResolvedPreviewLine[] | null {
+  const out: ResolvedPreviewLine[] = [];
 
   for (const segment of parsed.segments) {
     if (segment.type === "context") {
-      outputLines.push(...segment.lines);
+      for (const line of segment.lines) {
+        out.push({ text: line, source: "context" });
+      }
       continue;
     }
 
@@ -195,16 +209,34 @@ export function buildResolvedConflictText(
     const oursSet = new Set(selection?.oursLineNumbers ?? []);
     const theirsSet = new Set(selection?.theirsLineNumbers ?? []);
 
-    outputLines.push(
-      ...segment.oursLines.filter((line) => oursSet.has(line.lineNumber)).map((line) => line.text),
-    );
-    outputLines.push(
-      ...segment.theirsLines
-        .filter((line) => theirsSet.has(line.lineNumber))
-        .map((line) => line.text),
-    );
+    for (const line of segment.oursLines.filter((l) => oursSet.has(l.lineNumber))) {
+      out.push({
+        text: line.text,
+        source: "ours",
+        conflictIndex: segment.conflictIndex,
+      });
+    }
+    for (const line of segment.theirsLines.filter((l) => theirsSet.has(l.lineNumber))) {
+      out.push({
+        text: line.text,
+        source: "theirs",
+        conflictIndex: segment.conflictIndex,
+      });
+    }
   }
 
+  return out;
+}
+
+export function buildResolvedConflictText(
+  parsed: ParsedConflictWorktree,
+  selections: Record<number, ConflictBlockSelectionDraft>,
+): string | null {
+  const lines = buildResolvedConflictLines(parsed, selections);
+  if (lines === null) {
+    return null;
+  }
+  const outputLines = lines.map((l) => l.text);
   const resolved = outputLines.join(parsed.eol);
   return parsed.hasTrailingNewline ? `${resolved}${parsed.eol}` : resolved;
 }

@@ -755,7 +755,6 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
 
 const ConflictResolutionPane = memo(function ConflictResolutionPane({
   path,
-  repoOperationLabel,
   loading,
   error,
   details,
@@ -766,7 +765,6 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
   canChooseTheirs,
   onChooseOurs,
   onChooseTheirs,
-  onChooseBoth,
   onStageResolvedText,
   onOpenInCursor,
   onBack,
@@ -790,13 +788,6 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
   onBack: () => void;
   onDismissError: () => void;
 }) {
-  const canChooseBoth =
-    details !== null &&
-    details.worktreeText != null &&
-    !details.ours.deleted &&
-    !details.theirs.deleted &&
-    !details.ours.isBinary &&
-    !details.theirs.isBinary;
   const hasCustomDraftResolution = Boolean(
     details &&
     details.worktreeText != null &&
@@ -825,47 +816,6 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
           <button type="button" className="btn btn-sm btn-primary" onClick={onBack}>
             Back to commits
           </button>
-        </div>
-      </div>
-      <div className="shrink-0 border-b border-base-300/80 bg-base-200/30 p-3">
-        <p className="m-0 text-xs leading-relaxed text-base-content/70">
-          Choose the result to stage. Garlic will mark the file as resolved with your selection.
-          {repoOperationLabel ? ` ${repoOperationLabel}.` : ""}
-          {hasCustomDraftResolution
-            ? " For text conflicts you can take whole blocks or individual lines from either side."
-            : ""}
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {canChooseOurs ? (
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={busy}
-              onClick={onChooseOurs}
-            >
-              {oursLabel}
-            </button>
-          ) : null}
-          {canChooseTheirs ? (
-            <button
-              type="button"
-              className="btn btn-outline btn-sm"
-              disabled={busy}
-              onClick={onChooseTheirs}
-            >
-              {theirsLabel}
-            </button>
-          ) : null}
-          {canChooseBoth ? (
-            <button
-              type="button"
-              className="btn btn-outline btn-sm"
-              disabled={busy}
-              onClick={onChooseBoth}
-            >
-              Select both
-            </button>
-          ) : null}
         </div>
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
