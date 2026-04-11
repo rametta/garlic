@@ -122,6 +122,7 @@ fn format_theme_label(name: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         // Keep command registration centralized here so the frontend can grep one place to see the

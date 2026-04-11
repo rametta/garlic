@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
+use tauri_plugin_notification::NotificationExt;
 
 /// Serialized Git object name from the UI: `%H`, abbreviated SHA-1, or full SHA-256 hex (64 chars max).
 type GitOidArg = ArrayString<64>;
@@ -462,7 +463,12 @@ fn should_notify_git_completion(operation: &str) -> bool {
 fn format_notification_elapsed(elapsed: Duration) -> String {
     let secs = elapsed.as_secs();
     if secs < 60 {
-        format!("{secs}s")
+        let frac = elapsed.as_secs_f64();
+        if frac < 10.0 {
+            format!("{frac:.1}s")
+        } else {
+            format!("{secs}s")
+        }
     } else {
         let mins = secs / 60;
         let rem = secs % 60;
@@ -474,58 +480,36 @@ fn format_notification_elapsed(elapsed: Duration) -> String {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn notify_git_completion(operation: &str, workdir: &Path, elapsed: Duration) {
-    if elapsed < Duration::from_secs(5) || !should_notify_git_completion(operation) {
+/// Minimum duration before we show a completion banner. Hooks often finish in a few seconds; the
+/// previous 5s floor meant pre-commit / pre-push runs almost never qualified.
+const GIT_COMPLETION_NOTIFY_MIN_ELAPSED: Duration = Duration::from_millis(500);
+
+fn notify_git_completion(app: &AppHandle, operation: &str, workdir: &Path, elapsed: Duration) {
+    if elapsed < GIT_COMPLETION_NOTIFY_MIN_ELAPSED || !should_notify_git_completion(operation) {
         return;
     }
 
-    let title = "Garlic";
-    let subtitle = workdir
+    let repo_label = workdir
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .unwrap_or("Repository");
+    let action = if operation == "push" {
+        "Push"
+    } else {
+        "Commit"
+    };
     let body = format!(
-        "{} finished after {}.",
-        if operation == "push" {
-            "Push"
-        } else {
-            "Commit"
-        },
+        "{repo_label} — {action} finished after {}.",
         format_notification_elapsed(elapsed)
     );
-    let script = r#"on run argv
-  set titleText to item 1 of argv
-  set subtitleText to item 2 of argv
-  set bodyText to item 3 of argv
-  display notification bodyText with title titleText subtitle subtitleText
-end run
-"#;
-
-    let spawn_result = (|| -> std::io::Result<()> {
-        let mut child = Command::new("osascript")
-            .arg("-")
-            .arg(title)
-            .arg(subtitle)
-            .arg(&body)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(script.as_bytes())?;
-        }
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-        Ok(())
-    })();
-    let _ = spawn_result;
+    let _ = app
+        .notification()
+        .builder()
+        .title("Garlic")
+        .body(body)
+        .show();
 }
-
-#[cfg(not(target_os = "macos"))]
-fn notify_git_completion(_operation: &str, _workdir: &Path, _elapsed: Duration) {}
 
 fn require_active_repo_path(app: &AppHandle) -> Result<PathBuf, String> {
     crate::active_repo::get_path(app).ok_or_else(|| "No repository is open.".to_string())
@@ -726,7 +710,7 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
     );
 
     if ok {
-        notify_git_completion(&op_owned, workdir, started_at.elapsed());
+        notify_git_completion(app, &op_owned, workdir, started_at.elapsed());
         Ok(())
     } else {
         Err(err_msg.unwrap_or_else(|| format!("{} failed", format_git_command(args))))

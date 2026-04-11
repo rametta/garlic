@@ -30,4 +30,5 @@ tauri-plugin-updater = "2.10.0"
 tauri-plugin-process = "2.3.1"
 serde_repr = "0.1.20"
 arrayvec = { version = "0.7.6", features = ["serde"] }
+tauri-plugin-notification = "2"
 
