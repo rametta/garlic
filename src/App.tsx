@@ -2,8 +2,10 @@
  * Main desktop app shell for a single open repository.
  * Search tags: repo bootstrap, branch sidebar, commit graph, working tree, commit, push, rebase, stash, settings.
  */
+import { getTokenStyleObject } from "@shikijs/core";
 import {
   memo,
+  type CSSProperties,
   type MouseEvent,
   type ReactNode,
   useCallback,
@@ -14,6 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { BundledLanguage } from "shiki";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BranchSidebarSectionsState } from "./repoTypes";
 import { listen } from "@tauri-apps/api/event";
@@ -43,7 +46,9 @@ import {
   type BranchTip,
   type CommitGraphLayout,
 } from "./commitGraphLayout";
+import { pathToShikiLang, splitBlameLine } from "./diffLanguage";
 import { base64ToObjectUrl, mimeTypeForImagePath, pathLooksLikeRenderableImage } from "./diffImage";
+import { useDiffShikiTheme, useShikiHighlighter } from "./diffShiki";
 import { parseConflictWorktreeText } from "./conflictMarkers";
 import {
   popupBranchContextMenu,
@@ -869,6 +874,20 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
   );
 });
 
+function shikiTokenStyleToReact(style: Record<string, string>): CSSProperties {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(style)) {
+    const reactKey = key.includes("-")
+      ? key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
+      : key;
+    out[reactKey] = value;
+  }
+  return out as CSSProperties;
+}
+
+/** Fixed row height for blame virtualization (matches text-[0.7rem] + leading-snug). */
+const BLAME_ROW_HEIGHT_PX = 17;
+
 const FileBlamePane = memo(function FileBlamePane({
   path,
   loading,
@@ -884,6 +903,43 @@ const FileBlamePane = memo(function FileBlamePane({
   onBack: () => void;
   onDismissError: () => void;
 }) {
+  const highlighter = useShikiHighlighter();
+  const shikiTheme = useDiffShikiTheme();
+  const lang = useMemo(() => pathToShikiLang(path), [path]);
+  const blameScrollRef = useRef<HTMLDivElement>(null);
+
+  const blameLines = useMemo(() => {
+    if (text == null || text === "") return [];
+    return text.split(/\r?\n/);
+  }, [text]);
+
+  const blameSplits = useMemo(() => blameLines.map(splitBlameLine), [blameLines]);
+
+  /** One `codeToTokens` for the whole file (source lines only) — avoids per-line Shiki work. */
+  const blameLineTokens = useMemo(() => {
+    if (!highlighter || !lang || blameSplits.length === 0) return null;
+    if (!blameSplits.every((s) => s !== null)) return null;
+    const source = blameSplits.map((s) => s.code).join("\n");
+    try {
+      const { tokens } = highlighter.codeToTokens(source, {
+        lang: lang as BundledLanguage,
+        theme: shikiTheme,
+        tokenizeMaxLineLength: 12000,
+      });
+      if (tokens.length !== blameSplits.length) return null;
+      return tokens;
+    } catch {
+      return null;
+    }
+  }, [blameSplits, highlighter, lang, shikiTheme]);
+
+  const blameVirtualizer = useVirtualizer({
+    count: blameLines.length,
+    getScrollElement: () => blameScrollRef.current,
+    estimateSize: () => BLAME_ROW_HEIGHT_PX,
+    overscan: 24,
+  });
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-base-300 p-3">
@@ -909,10 +965,56 @@ const FileBlamePane = memo(function FileBlamePane({
           <DismissibleAlert className="alert text-sm alert-error" onDismiss={onDismissError}>
             <span className="wrap-break-word">{error}</span>
           </DismissibleAlert>
-        ) : (
-          <pre className="min-h-0 w-full min-w-0 flex-1 overflow-auto bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
+        ) : blameLines.length === 0 ? (
+          <pre className="m-0 min-h-0 flex-1 overflow-auto bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug wrap-break-word whitespace-pre">
             {text ?? ""}
           </pre>
+        ) : (
+          <div
+            ref={blameScrollRef}
+            className="min-h-0 w-full min-w-0 flex-1 overflow-auto bg-base-200/40 p-3 font-mono text-[0.7rem] leading-snug"
+          >
+            <div
+              className="relative w-max min-w-full"
+              style={{ height: `${blameVirtualizer.getTotalSize()}px` }}
+            >
+              {blameVirtualizer.getVirtualItems().map((virtualRow) => {
+                const row = virtualRow.index;
+                const line = blameLines[row] ?? "";
+                const split = blameSplits[row];
+                const lineTok = blameLineTokens?.[row];
+                return (
+                  <div
+                    key={virtualRow.key}
+                    className="absolute top-0 left-0 w-max min-w-full whitespace-pre"
+                    style={{
+                      height: `${virtualRow.size}px`,
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    {!split ? (
+                      line
+                    ) : (
+                      <>
+                        <span className="text-base-content/55">{split.prefix}</span>
+                        <span className="text-base-content/55"> </span>
+                        {lineTok?.length
+                          ? lineTok.map((tok, i) => (
+                              <span
+                                key={i}
+                                style={shikiTokenStyleToReact(getTokenStyleObject(tok))}
+                              >
+                                {tok.content}
+                              </span>
+                            ))
+                          : split.code}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         )}
       </div>
     </div>

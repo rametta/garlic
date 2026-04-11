@@ -119,3 +119,25 @@ export function pathToShikiLang(path: string): string | null {
   const ext = base.slice(dot + 1).toLowerCase();
   return EXT_LANG[ext] ?? null;
 }
+
+/**
+ * Splits default `git blame` lines into the metadata prefix and source text so the latter can be
+ * syntax-highlighted without lexing the blame header.
+ */
+export function splitBlameLine(line: string): { prefix: string; code: string } | null {
+  const m = /^(\^?[0-9a-f]+)\s+\(/.exec(line);
+  if (!m) return null;
+  const openParen = m.index + m[0].length - 1;
+  let depth = 0;
+  for (let i = openParen; i < line.length; i++) {
+    const c = line[i];
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0 && line[i + 1] === " ") {
+        return { prefix: line.slice(0, i + 1), code: line.slice(i + 2) };
+      }
+    }
+  }
+  return null;
+}
