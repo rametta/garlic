@@ -2,8 +2,8 @@
  * Client-side event store for streaming long-running Git command output from Tauri.
  * Search tags: git command stream, live command output, repository-mutated, external store.
  */
-import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
+import { listen } from "./tauriBridgeDebug";
 
 type GitCommandStreamLine = {
   stream: string;

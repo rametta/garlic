@@ -19,7 +19,6 @@ import {
 import type { BundledLanguage } from "shiki";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BranchSidebarSectionsState } from "./repoTypes";
-import { listen } from "@tauri-apps/api/event";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -148,7 +147,7 @@ import {
   setRepoSnapshot,
   updateRepoSnapshot,
 } from "./repoQuery";
-import { invoke } from "./tauriBridgeDebug";
+import { invoke, listen } from "./tauriBridgeDebug";
 
 export type {
   BranchSidebarSectionsState,

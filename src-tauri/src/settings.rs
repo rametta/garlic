@@ -101,7 +101,7 @@ pub fn clamp_graph_commit_title_font_size_px(px: u32) -> u32 {
     px.clamp(9, 20)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppSettings {
     #[serde(default)]
     last_repo_path: Option<String>,
@@ -236,15 +236,19 @@ impl RestoreLastRepo {
 fn restore_repo_snapshot(
     app: &AppHandle,
     settings: &AppSettings,
+    last_repo_path: Option<String>,
+    clear_last_repo_path_on_error: bool,
 ) -> Result<RestoreLastRepo, String> {
-    let Some(path) = settings.last_repo_path.clone() else {
+    let Some(path) = last_repo_path else {
         return Ok(RestoreLastRepo::empty());
     };
 
     match git::get_repo_metadata(app.clone(), path.clone()) {
         Ok(meta) => {
             if meta.error.is_some() {
-                clear_last_repo_path(app)?;
+                if clear_last_repo_path_on_error {
+                    clear_last_repo_path(app)?;
+                }
                 return Ok(RestoreLastRepo {
                     metadata: Some(meta),
                     ..RestoreLastRepo::empty()
@@ -339,7 +343,9 @@ fn restore_repo_snapshot(
             })
         }
         Err(e) => {
-            clear_last_repo_path(app)?;
+            if clear_last_repo_path_on_error {
+                clear_last_repo_path(app)?;
+            }
             Ok(RestoreLastRepo {
                 load_error: Some(e),
                 ..RestoreLastRepo::empty()
@@ -371,17 +377,27 @@ pub struct AppBootstrap {
 #[tauri::command]
 pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
     let settings = load_settings(&app)?;
+    let override_repo_path = std::env::var("GARLIC_E2E_REPO_PATH")
+        .ok()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty());
+    let has_override_repo_path = override_repo_path.is_some();
+    let bootstrap_repo_path = override_repo_path.or_else(|| settings.last_repo_path.clone());
     let theme = settings.theme.clone();
     let openai_api_key = settings.openai_api_key.clone();
     let openai_model = resolve_openai_model(&settings);
     // Repo-scoped visibility is keyed off the last opened repo so the graph can remember which
     // branches were hidden without mixing preferences across repositories.
-    let graph_branch_visible = settings
-        .last_repo_path
+    let graph_branch_visible = bootstrap_repo_path
         .as_deref()
         .map(|path| persisted_graph_branch_visibility(&settings, path))
         .unwrap_or_default();
-    let repo = restore_repo_snapshot(&app, &settings)?;
+    let repo = restore_repo_snapshot(
+        &app,
+        &settings,
+        bootstrap_repo_path,
+        /* clear_last_repo_path_on_error */ !has_override_repo_path,
+    )?;
     if repo.metadata.is_none() {
         window_title::set_main_window_title(&app, window_title::DEFAULT_WINDOW_TITLE);
     }

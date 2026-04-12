@@ -15,7 +15,7 @@ import {
   normalizeRestoreLastRepo,
 } from "./gitTypes";
 import type { BranchSidebarSectionsState } from "./repoTypes";
-import { invoke } from "./tauriBridgeDebug";
+import { invoke, TAURI_RUNTIME_DEBUG_ENABLED } from "./tauriBridgeDebug";
 import { queryClient } from "./queryClient";
 import "./index.css";
 import { DEFAULT_OPENAI_MODEL } from "./generateCommitMessage";
@@ -103,7 +103,7 @@ async function bootstrap() {
           notifyGitCompletion={data.notifyGitCompletion ?? true}
         />
         {import.meta.env.DEV ? <ReactQueryDevtools buttonPosition="bottom-left" /> : null}
-        {import.meta.env.DEV ? <TauriBridgeInspector /> : null}
+        {TAURI_RUNTIME_DEBUG_ENABLED ? <TauriBridgeInspector /> : null}
       </QueryClientProvider>
     </React.StrictMode>,
   );

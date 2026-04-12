@@ -1,8 +1,9 @@
 /**
- * Thin `invoke` wrapper plus an in-memory log for inspecting frontend-to-Tauri command traffic.
- * Search tags: tauri invoke logging, bridge inspector, command timing, debug export.
+ * Thin `invoke` / `listen` wrappers plus in-memory logs for inspecting native Tauri traffic.
+ * Search tags: tauri invoke logging, backend event logging, bridge inspector, webdriver debug.
  */
 import { invoke as tauriInvoke, type InvokeArgs } from "@tauri-apps/api/core";
+import { listen as tauriListen } from "@tauri-apps/api/event";
 
 export interface TauriBridgeLogEntry {
   id: number;
@@ -16,14 +17,58 @@ export interface TauriBridgeLogEntry {
   error?: string;
 }
 
+export interface TauriEventLogEntry {
+  id: number;
+  event: string;
+  payload: unknown;
+  receivedAt: number;
+}
+
 type Listener = () => void;
 
 const MAX_LOG_ENTRIES = 200;
+export const TAURI_RUNTIME_DEBUG_ENABLED =
+  import.meta.env.DEV || import.meta.env.VITE_GARLIC_E2E === "true";
 
 let nextEntryId = 1;
+let nextEventId = 1;
 let paused = false;
 let entries: TauriBridgeLogEntry[] = [];
+let eventEntries: TauriEventLogEntry[] = [];
 const listeners = new Set<Listener>();
+
+type GarlicRuntimeDebugApi = {
+  getInvokeLogs(): TauriBridgeLogEntry[];
+  clearInvokeLogs(): void;
+  getEventLogs(): TauriEventLogEntry[];
+  clearEventLogs(): void;
+  isPaused(): boolean;
+  setPaused(nextPaused: boolean): void;
+};
+
+function installRuntimeDebugApi() {
+  if (!TAURI_RUNTIME_DEBUG_ENABLED) return;
+  (
+    globalThis as typeof globalThis & {
+      __garlicRuntimeDebug?: GarlicRuntimeDebugApi;
+    }
+  ).__garlicRuntimeDebug = {
+    getInvokeLogs: () => entries,
+    clearInvokeLogs: () => {
+      clearTauriBridgeLogs();
+    },
+    getEventLogs: () => eventEntries,
+    clearEventLogs: () => {
+      clearTauriEventLogs();
+    },
+    isPaused: () => paused,
+    setPaused: (nextPaused: boolean) => {
+      setTauriBridgeLoggingPaused(nextPaused);
+    },
+  };
+}
+
+installRuntimeDebugApi();
 
 function emitChange() {
   for (const listener of listeners) listener();
@@ -37,6 +82,12 @@ function upsertEntry(entry: TauriBridgeLogEntry) {
   } else {
     entries = [entry, ...entries].slice(0, MAX_LOG_ENTRIES);
   }
+  emitChange();
+}
+
+function appendEventEntry(entry: TauriEventLogEntry) {
+  if (paused) return;
+  eventEntries = [entry, ...eventEntries].slice(0, MAX_LOG_ENTRIES);
   emitChange();
 }
 
@@ -61,8 +112,17 @@ export function getTauriBridgeLogs() {
   return entries;
 }
 
+export function getTauriEventLogs() {
+  return eventEntries;
+}
+
 export function clearTauriBridgeLogs() {
   entries = [];
+  emitChange();
+}
+
+export function clearTauriEventLogs() {
+  eventEntries = [];
   emitChange();
 }
 
@@ -76,7 +136,7 @@ export function isTauriBridgeLoggingPaused() {
 }
 
 export async function invoke<T>(command: string, args?: InvokeArgs): Promise<T> {
-  if (!import.meta.env.DEV) {
+  if (!TAURI_RUNTIME_DEBUG_ENABLED) {
     return tauriInvoke<T>(command, args);
   }
 
@@ -118,4 +178,21 @@ export async function invoke<T>(command: string, args?: InvokeArgs): Promise<T> 
     });
     throw error;
   }
+}
+
+export async function listen<T>(
+  eventName: string,
+  callback: (event: { payload: T }) => void,
+): Promise<() => void> {
+  return tauriListen<T>(eventName, (event) => {
+    if (TAURI_RUNTIME_DEBUG_ENABLED) {
+      appendEventEntry({
+        id: nextEventId++,
+        event: eventName,
+        payload: event.payload,
+        receivedAt: Date.now(),
+      });
+    }
+    callback({ payload: event.payload });
+  });
 }
