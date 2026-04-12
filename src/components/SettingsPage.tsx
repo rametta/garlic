@@ -257,8 +257,8 @@ export const SettingsPage = memo(function SettingsPage({
                   Long push and commit completion
                 </span>
                 <span className="text-sm text-base-content/70">
-                  Show a system notification when a push or commit finishes after a short delay. Uses your OS notification settings
-                  for Garlic.
+                  Show a system notification when a push or commit finishes after a short delay.
+                  Uses your OS notification settings for Garlic.
                 </span>
               </span>
             </label>

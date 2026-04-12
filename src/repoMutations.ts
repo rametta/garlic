@@ -33,7 +33,8 @@ type RepoMutationOptions<TVariables extends RepoMutationVariables> = {
   mutationFn: (variables: TVariables) => Promise<void>;
   optimisticUpdate?: (snapshot: RepoSnapshot, variables: TVariables) => RepoSnapshot;
   successUpdate?: (snapshot: RepoSnapshot, variables: TVariables) => RepoSnapshot;
-  invalidateSnapshotOnSettled?: boolean;
+  /** When false or when the function returns false, skip invalidating the repo snapshot query after success. */
+  invalidateSnapshotOnSettled?: boolean | ((variables: TVariables) => boolean);
 };
 
 function sortByName<T extends { name: string }>(rows: T[]): T[] {
@@ -148,6 +149,14 @@ function withCurrentBranchPushedToOrigin(snapshot: RepoSnapshot): RepoSnapshot {
   );
 }
 
+/** True when `commit` refers to the current HEAD (full or abbreviated OID). */
+function headMatchesCommit(metadata: RepoMetadata | null | undefined, commit: string): boolean {
+  const h = metadata?.headHash?.trim();
+  const c = commit.trim();
+  if (!h || !c) return false;
+  return h === c || h.startsWith(c) || c.startsWith(h);
+}
+
 function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
   mutationFn,
   optimisticUpdate,
@@ -184,7 +193,11 @@ function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
       }
     },
     onSettled: (_data, _error, variables) => {
-      if (!invalidateSnapshotOnSettled) return;
+      const shouldInvalidate =
+        typeof invalidateSnapshotOnSettled === "function"
+          ? invalidateSnapshotOnSettled(variables)
+          : invalidateSnapshotOnSettled;
+      if (!shouldInvalidate) return;
       void queryClient.invalidateQueries({
         queryKey: repoQueryKeys.root(variables.path),
       });
@@ -287,7 +300,6 @@ export function usePullLocalBranchMutation() {
 
       return nextSnapshot;
     },
-    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -370,7 +382,6 @@ export function useCheckoutLocalBranchMutation() {
         detached: false,
         error: null,
       })),
-    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -473,6 +484,7 @@ export function usePushTagToOriginMutation() {
 }
 
 export function useCreateBranchAtCommitMutation() {
+  const queryClient = useQueryClient();
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; branch: string; commit: string }) =>
       invokeRepoMutation("create_branch_at_commit", variables),
@@ -492,6 +504,39 @@ export function useCreateBranchAtCommitMutation() {
             .concat(nextBranch),
         ),
       };
+    },
+    // Creating at the current commit is the same as "branch at HEAD": no tree change; skip the
+    // heavy snapshot reload (same as create_local_branch).
+    successUpdate: (snapshot, variables) => {
+      if (!snapshot.metadata) return snapshot;
+      if (!headMatchesCommit(snapshot.metadata, variables.commit)) return snapshot;
+      const headHash = snapshot.metadata.headHash ?? "";
+      return {
+        ...snapshot,
+        metadata: {
+          ...snapshot.metadata,
+          branch: variables.branch,
+          detached: false,
+          ahead: null,
+          behind: null,
+        },
+        localBranches: sortByName(
+          snapshot.localBranches
+            .filter((branch) => branch.name !== variables.branch)
+            .concat({
+              name: variables.branch,
+              tipHash: headHash,
+              upstreamName: null,
+              ahead: null,
+              behind: null,
+            }),
+        ),
+      };
+    },
+    invalidateSnapshotOnSettled: (variables) => {
+      const snapshot = getRepoSnapshot(queryClient, variables.path);
+      if (!snapshot?.metadata) return true;
+      return !headMatchesCommit(snapshot.metadata, variables.commit);
     },
   });
 }
@@ -517,6 +562,35 @@ export function useCreateLocalBranchMutation() {
         ),
       };
     },
+    // Creating a branch at HEAD does not change trees or lists other than branch name + local
+    // refs. A full snapshot refetch (metadata + all branch/tag/stash/working-tree lists) is the
+    // usual bottleneck on large repos, not `git switch -c`.
+    successUpdate: (snapshot, variables) => {
+      if (!snapshot.metadata) return snapshot;
+      const headHash = snapshot.metadata.headHash ?? "";
+      return {
+        ...snapshot,
+        metadata: {
+          ...snapshot.metadata,
+          branch: variables.branch,
+          detached: false,
+          ahead: null,
+          behind: null,
+        },
+        localBranches: sortByName(
+          snapshot.localBranches
+            .filter((branch) => branch.name !== variables.branch)
+            .concat({
+              name: variables.branch,
+              tipHash: headHash,
+              upstreamName: null,
+              ahead: null,
+              behind: null,
+            }),
+        ),
+      };
+    },
+    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -662,7 +736,6 @@ export function useAmendLastCommitMutation() {
       invokeRepoMutation("amend_last_commit", variables),
     optimisticUpdate: (snapshot) =>
       withWorkingTreeFiles(snapshot, clearStagedWorkingTreeFiles(snapshot.workingTreeFiles)),
-    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -681,7 +754,6 @@ export function useCommitStagedMutation() {
       withCurrentBranchAheadBumped(
         withWorkingTreeFiles(snapshot, clearStagedWorkingTreeFiles(snapshot.workingTreeFiles)),
       ),
-    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -691,7 +763,6 @@ export function usePushToOriginMutation() {
       invokeRepoMutation("push_to_origin", variables),
     optimisticUpdate: (snapshot) => withCurrentBranchAhead(snapshot, 0),
     successUpdate: (snapshot) => withCurrentBranchPushedToOrigin(snapshot),
-    invalidateSnapshotOnSettled: false,
   });
 }
 
@@ -701,7 +772,6 @@ export function useForcePushToOriginMutation() {
       invokeRepoMutation("force_push_to_origin", variables),
     optimisticUpdate: (snapshot) => withCurrentBranchAhead(snapshot, 0),
     successUpdate: (snapshot) => withCurrentBranchPushedToOrigin(snapshot),
-    invalidateSnapshotOnSettled: false,
   });
 }
 
