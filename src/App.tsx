@@ -140,6 +140,7 @@ import {
   getRepoSnapshot,
   loadRepoLists,
   loadRepoSnapshot,
+  mergeRepoSnapshotAfterCheckout,
   mergeRepoLists,
   repoQueryKeys,
   setRepoSnapshot,
@@ -3261,13 +3262,20 @@ export default function App({
           path: pathAtStart,
           branch,
         });
+        try {
+          await mergeRepoSnapshotAfterCheckout(queryClient, pathAtStart);
+        } catch {
+          await queryClient.invalidateQueries({
+            queryKey: repoQueryKeys.root(pathAtStart),
+          });
+        }
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, checkoutLocalBranchMutation],
+    [repo, checkoutLocalBranchMutation, queryClient],
   );
 
   const onCreateFromRemote = useCallback(
@@ -4017,6 +4025,18 @@ export default function App({
         setHighlightActiveBranchRows(Boolean(e.payload.enabled));
       }),
       listen("repository-mutated", () => {
+        const path = activeRepoPathRef.current;
+        if (!path) return;
+        // Debounced watcher (~450ms) often fires right after an in-app Git command; the UI may
+        // already have refetched (e.g. checkout merge). Skip duplicate refreshAfterMutation work.
+        if (queryClient.isFetching({ queryKey: repoQueryKeys.snapshot(path) })) {
+          return;
+        }
+        const state = queryClient.getQueryState(repoQueryKeys.snapshot(path));
+        const updatedAt = state?.dataUpdatedAt ?? 0;
+        if (updatedAt > 0 && Date.now() - updatedAt < 900) {
+          return;
+        }
         scheduleRepositoryMutationRefresh();
       }),
       listen<CommitSignatureResultPayload>("commit-signature-result", (e) => {
@@ -4096,6 +4116,7 @@ export default function App({
     openCreateBranchDialogListenerRef,
     openAppSettingsListenerRef,
     runCheckForUpdatesListenerRef,
+    queryClient,
     scheduleRepositoryMutationRefresh,
     scheduleCloneProgressUiFlushListenerRef,
   ]);

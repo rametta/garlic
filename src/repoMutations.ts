@@ -382,6 +382,8 @@ export function useCheckoutLocalBranchMutation() {
         detached: false,
         error: null,
       })),
+    // Reconcile via `mergeRepoSnapshotAfterCheckout` in App (lighter than full snapshot reload).
+    invalidateSnapshotOnSettled: false,
   });
 }
 

@@ -155,6 +155,45 @@ export async function loadRepoSnapshot(path: string): Promise<RepoSnapshot> {
   return withRepoLists(emptyRepoSnapshot(metadata), lists);
 }
 
+/** After `checkout_local_branch`: HEAD and the worktree change; other lists rarely do. */
+const CHECKOUT_LIST_SELECTION: RepoListSelection = {
+  localBranches: true,
+  remoteBranches: false,
+  worktrees: false,
+  tags: false,
+  stashes: false,
+  workingTreeFiles: true,
+};
+
+/**
+ * Refreshes metadata, local branches, and working tree only (not remotes/tags/stashes/worktrees).
+ * Call after a successful local branch checkout instead of invalidating the full snapshot.
+ */
+export async function mergeRepoSnapshotAfterCheckout(
+  queryClient: QueryClient,
+  path: string,
+): Promise<void> {
+  const prev = getRepoSnapshot(queryClient, path);
+  if (!prev) return;
+
+  const [metadata, lists] = await Promise.all([
+    invoke<RepoMetadata>("get_repo_metadata", { path }),
+    loadRepoLists(path, CHECKOUT_LIST_SELECTION),
+  ]);
+
+  if (metadata.error) {
+    setRepoSnapshot(queryClient, path, emptyRepoSnapshot(metadata));
+    return;
+  }
+
+  setRepoSnapshot(queryClient, path, {
+    ...prev,
+    metadata,
+    localBranches: lists.localBranches,
+    workingTreeFiles: lists.workingTreeFiles,
+  });
+}
+
 export function getRepoSnapshot(
   queryClient: QueryClient,
   repoPath: string,
