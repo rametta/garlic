@@ -21,7 +21,7 @@ let nativeFixture = null;
 export const config = {
   host: "127.0.0.1",
   port: 4444,
-  specs: ["./e2e-native/specs/**/*.mjs"],
+  specs: [path.join(__dirname, "specs", "**", "*.mjs")],
   maxInstances: 1,
   capabilities: [
     {
