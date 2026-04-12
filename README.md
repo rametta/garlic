@@ -1,4 +1,4 @@
-[![Release](https://github.com/rametta/garlic/actions/workflows/release.yml/badge.svg)](https://github.com/rametta/garlic/actions/workflows/release.yml)
+[![Release](https://github.com/rametta/garlic/actions/workflows/release.yml/badge.svg)](https://github.com/rametta/garlic/actions/workflows/release.yml) [![Native E2E](https://github.com/rametta/garlic/actions/workflows/native-e2e.yml/badge.svg)](https://github.com/rametta/garlic/actions/workflows/native-e2e.yml)
 
 # 🧄 Garlic
 
