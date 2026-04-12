@@ -1111,6 +1111,7 @@ export default function App({
   highlightActiveBranchRows: initialHighlightActiveBranchRows,
   graphCommitsPageSize: initialGraphCommitsPageSize,
   graphCommitTitleFontSizePx: initialGraphCommitTitleFontSizePx,
+  notifyGitCompletion: initialNotifyGitCompletion,
 }: {
   startup: RestoreLastRepo;
   /** Persisted value: `auto` or a DaisyUI theme name. */
@@ -1129,6 +1130,8 @@ export default function App({
   graphCommitsPageSize: number;
   /** Commit subject font size in the main graph (px). */
   graphCommitTitleFontSizePx: number;
+  /** Notify when a long push or commit completes. */
+  notifyGitCompletion: boolean;
 }) {
   const [themePreference, setThemePreference] = useState(initialThemePreference);
   const [branchSidebarSections, setBranchSidebarSections] = useState<BranchSidebarSectionsState>(
@@ -1143,6 +1146,7 @@ export default function App({
   const [graphCommitTitleFontSizePx, setGraphCommitTitleFontSizePx] = useState(() =>
     clampGraphCommitTitleFontSizePx(initialGraphCommitTitleFontSizePx),
   );
+  const [notifyGitCompletion, setNotifyGitCompletion] = useState(initialNotifyGitCompletion);
   const queryClient = useQueryClient();
   const [currentRepoPath, setCurrentRepoPath] = useState<string | null>(
     () => startup.metadata?.path ?? null,
@@ -7032,6 +7036,8 @@ export default function App({
             }}
             graphCommitTitleFontSizePx={graphCommitTitleFontSizePx}
             onGraphCommitTitleFontSizeChange={setGraphCommitTitleFontSizePx}
+            notifyGitCompletion={notifyGitCompletion}
+            onNotifyGitCompletionChange={setNotifyGitCompletion}
             onError={setOperationError}
           />
         </div>

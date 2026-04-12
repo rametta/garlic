@@ -12,6 +12,7 @@ import {
 import { DEFAULT_OPENAI_MODEL } from "../generateCommitMessage";
 import {
   useSetGraphCommitTitleFontSizeMutation,
+  useSetNotifyGitCompletionMutation,
   useSetOpenAiSettingsMutation,
   useSetThemeMutation,
 } from "../repoMutations";
@@ -36,6 +37,8 @@ export type SettingsPageProps = {
   onOpenAiChange: (next: { apiKey: string; model: string }) => void;
   graphCommitTitleFontSizePx: number;
   onGraphCommitTitleFontSizeChange: (px: number) => void;
+  notifyGitCompletion: boolean;
+  onNotifyGitCompletionChange: (enabled: boolean) => void;
   onError: (message: string | null) => void;
 };
 
@@ -48,6 +51,8 @@ export const SettingsPage = memo(function SettingsPage({
   onOpenAiChange,
   graphCommitTitleFontSizePx,
   onGraphCommitTitleFontSizeChange,
+  notifyGitCompletion,
+  onNotifyGitCompletionChange,
   onError,
 }: SettingsPageProps) {
   const [themeDraft, setThemeDraft] = useState(themePreference);
@@ -58,6 +63,7 @@ export const SettingsPage = memo(function SettingsPage({
   const setThemeMutation = useSetThemeMutation();
   const setOpenAiMutation = useSetOpenAiSettingsMutation();
   const setGraphFontMutation = useSetGraphCommitTitleFontSizeMutation();
+  const setNotifyGitCompletionMutation = useSetNotifyGitCompletionMutation();
 
   useEffect(() => {
     setThemeDraft(themePreference);
@@ -75,6 +81,7 @@ export const SettingsPage = memo(function SettingsPage({
   const themeBusy = setThemeMutation.isPending;
   const openAiBusy = setOpenAiMutation.isPending;
   const graphFontBusy = setGraphFontMutation.isPending;
+  const notifyGitBusy = setNotifyGitCompletionMutation.isPending;
 
   const applyTheme = useCallback(
     async (next: string) => {
@@ -121,6 +128,19 @@ export const SettingsPage = memo(function SettingsPage({
       }
     },
     [onError, onGraphCommitTitleFontSizeChange, setGraphFontMutation],
+  );
+
+  const persistNotifyGitCompletion = useCallback(
+    async (enabled: boolean) => {
+      onError(null);
+      try {
+        await setNotifyGitCompletionMutation.mutateAsync(enabled);
+        onNotifyGitCompletionChange(enabled);
+      } catch (e) {
+        onError(invokeErrorMessage(e));
+      }
+    },
+    [onError, onNotifyGitCompletionChange, setNotifyGitCompletionMutation],
   );
 
   return (
@@ -214,6 +234,32 @@ export const SettingsPage = memo(function SettingsPage({
               <span className="label-text-alt mt-1 text-base-content/55">
                 Applies to commit subject lines in the main history graph. Row height adjusts
                 automatically.
+              </span>
+            </label>
+          </section>
+
+          <section className="flex flex-col gap-3">
+            <h2 className="m-0 text-sm font-semibold tracking-wide text-base-content/80 uppercase">
+              Notifications
+            </h2>
+            <label className="flex max-w-md cursor-pointer flex-row items-start gap-3">
+              <input
+                type="checkbox"
+                className="toggle mt-0.5 shrink-0 toggle-sm"
+                checked={notifyGitCompletion}
+                disabled={notifyGitBusy}
+                onChange={(e) => {
+                  void persistNotifyGitCompletion(e.target.checked);
+                }}
+              />
+              <span className="flex min-w-0 flex-col gap-1">
+                <span className="font-medium text-base-content">
+                  Long push and commit completion
+                </span>
+                <span className="text-sm text-base-content/70">
+                  Show a system notification when a push or commit finishes after a short delay. Uses your OS notification settings
+                  for Garlic.
+                </span>
               </span>
             </label>
           </section>

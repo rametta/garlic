@@ -236,6 +236,14 @@ export function useSetGraphCommitTitleFontSizeMutation() {
   });
 }
 
+export function useSetNotifyGitCompletionMutation() {
+  return useMutation<void, unknown, boolean>({
+    mutationFn: async (enabled) => {
+      await invoke("set_notify_git_completion", { enabled });
+    },
+  });
+}
+
 export function useStashPushMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; message: string | null }) =>

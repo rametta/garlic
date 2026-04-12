@@ -127,6 +127,9 @@ struct AppSettings {
     /// Pixel font size for commit subject lines in the main graph (default 11).
     #[serde(default = "default_graph_commit_title_font_size_px")]
     graph_commit_title_font_size_px: u32,
+    /// Desktop notification when a long-running push or commit completes (hooks included).
+    #[serde(default = "default_true")]
+    notify_git_completion: bool,
 }
 
 impl Default for AppSettings {
@@ -142,6 +145,7 @@ impl Default for AppSettings {
             highlight_active_branch_rows: false,
             graph_commits_page_size: git::DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
             graph_commit_title_font_size_px: default_graph_commit_title_font_size_px(),
+            notify_git_completion: true,
         }
     }
 }
@@ -359,6 +363,8 @@ pub struct AppBootstrap {
     pub graph_commits_page_size: u32,
     /// Commit subject font size in the main graph (px, default 11).
     pub graph_commit_title_font_size_px: u32,
+    /// When true, show a system notification after a long-running push or commit completes.
+    pub notify_git_completion: bool,
 }
 
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
@@ -393,6 +399,7 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
         graph_commit_title_font_size_px: clamp_graph_commit_title_font_size_px(
             settings.graph_commit_title_font_size_px,
         ),
+        notify_git_completion: settings.notify_git_completion,
     })
 }
 
@@ -561,6 +568,21 @@ pub fn set_graph_commits_page_size(app: AppHandle, page_size: u32) -> Result<(),
 pub fn set_graph_commit_title_font_size(app: AppHandle, font_size_px: u32) -> Result<(), String> {
     let mut s = load_settings(&app)?;
     s.graph_commit_title_font_size_px = clamp_graph_commit_title_font_size_px(font_size_px);
+    save_settings(&app, &s)
+}
+
+/// Whether completion notifications for long push/commit runs are enabled (stored in `settings.json`).
+pub fn notify_git_completion_enabled(app: &AppHandle) -> bool {
+    load_settings(app)
+        .map(|s| s.notify_git_completion)
+        .unwrap_or(true)
+}
+
+/// Persists whether to show a system notification after a long-running push or commit completes.
+#[tauri::command]
+pub fn set_notify_git_completion(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut s = load_settings(&app)?;
+    s.notify_git_completion = enabled;
     save_settings(&app, &s)
 }
 

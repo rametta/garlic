@@ -488,6 +488,9 @@ fn notify_git_completion(app: &AppHandle, operation: &str, workdir: &Path, elaps
     if elapsed < GIT_COMPLETION_NOTIFY_MIN_ELAPSED || !should_notify_git_completion(operation) {
         return;
     }
+    if !crate::settings::notify_git_completion_enabled(app) {
+        return;
+    }
 
     let repo_label = workdir
         .file_name()
