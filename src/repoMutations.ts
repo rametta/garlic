@@ -18,6 +18,13 @@ import {
   type RepoSnapshot,
   withWorkingTreeFiles,
 } from "./gitTypes";
+import {
+  applyRepoRefreshPlan,
+  beginGitOperation,
+  endGitOperation,
+  planFor,
+  RepoGitRefreshOp,
+} from "./repoRefreshMachine";
 import { getRepoSnapshot, repoQueryKeys, setRepoSnapshot } from "./repoQuery";
 import { invoke } from "./tauriBridgeDebug";
 
@@ -33,8 +40,8 @@ type RepoMutationOptions<TVariables extends RepoMutationVariables> = {
   mutationFn: (variables: TVariables) => Promise<void>;
   optimisticUpdate?: (snapshot: RepoSnapshot, variables: TVariables) => RepoSnapshot;
   successUpdate?: (snapshot: RepoSnapshot, variables: TVariables) => RepoSnapshot;
-  /** When false or when the function returns false, skip invalidating the repo snapshot query after success. */
-  invalidateSnapshotOnSettled?: boolean | ((variables: TVariables) => boolean);
+  /** Which repo slices to reload after success — see `planFor` in `repoRefreshMachine.ts`. */
+  refreshOp: RepoGitRefreshOp;
 };
 
 function sortByName<T extends { name: string }>(rows: T[]): T[] {
@@ -161,15 +168,16 @@ function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
   mutationFn,
   optimisticUpdate,
   successUpdate,
-  invalidateSnapshotOnSettled = true,
+  refreshOp,
 }: RepoMutationOptions<TVariables>) {
   const queryClient = useQueryClient();
 
   return useMutation<void, unknown, TVariables, RepoMutationContext>({
     mutationFn,
     onMutate: async (variables) => {
+      beginGitOperation();
       // Most Git mutations share the same lifecycle: pause overlapping reads, apply an optional
-      // optimistic snapshot, roll back on failure, then refetch to reconcile with the backend.
+      // optimistic snapshot, roll back on failure, then reconcile via `applyRepoRefreshPlan`.
       await queryClient.cancelQueries({
         queryKey: repoQueryKeys.root(variables.path),
       });
@@ -192,15 +200,15 @@ function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
         setRepoSnapshot(queryClient, variables.path, successUpdate(snapshot, variables));
       }
     },
-    onSettled: (_data, _error, variables) => {
-      const shouldInvalidate =
-        typeof invalidateSnapshotOnSettled === "function"
-          ? invalidateSnapshotOnSettled(variables)
-          : invalidateSnapshotOnSettled;
-      if (!shouldInvalidate) return;
-      void queryClient.invalidateQueries({
-        queryKey: repoQueryKeys.root(variables.path),
-      });
+    onSettled: async (_data, error, variables) => {
+      try {
+        if (!error) {
+          const plan = planFor(refreshOp, { queryClient, variables });
+          await applyRepoRefreshPlan(queryClient, variables.path, plan);
+        }
+      } finally {
+        endGitOperation();
+      }
     },
   });
 }
@@ -262,6 +270,7 @@ export function useStashPushMutation() {
     mutationFn: (variables: { path: string; message: string | null }) =>
       invokeRepoMutation("stash_push", variables),
     optimisticUpdate: (snapshot) => withWorkingTreeFiles(snapshot, []),
+    refreshOp: RepoGitRefreshOp.StashPush,
   });
 }
 
@@ -276,6 +285,7 @@ export function useSetRemoteUrlMutation() {
         remotes.sort((a, b) => a.name.localeCompare(b.name));
         return { ...metadata, remotes };
       }),
+    refreshOp: RepoGitRefreshOp.SetRemoteUrl,
   });
 }
 
@@ -300,6 +310,7 @@ export function usePullLocalBranchMutation() {
 
       return nextSnapshot;
     },
+    refreshOp: RepoGitRefreshOp.PullLocalBranch,
   });
 }
 
@@ -311,6 +322,7 @@ export function useDeleteLocalBranchMutation() {
       ...snapshot,
       localBranches: snapshot.localBranches.filter((branch) => branch.name !== variables.branch),
     }),
+    refreshOp: RepoGitRefreshOp.DeleteLocalBranch,
   });
 }
 
@@ -324,6 +336,7 @@ export function useDeleteRemoteBranchMutation() {
         (branch) => branch.name !== variables.remoteRef,
       ),
     }),
+    refreshOp: RepoGitRefreshOp.DeleteRemoteBranch,
   });
 }
 
@@ -331,6 +344,7 @@ export function useRebaseCurrentBranchOntoMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; onto: string; interactive: boolean }) =>
       invokeRepoMutation("rebase_current_branch_onto", variables),
+    refreshOp: RepoGitRefreshOp.RebaseCurrentBranchOnto,
   });
 }
 
@@ -350,6 +364,7 @@ export function useResetCurrentBranchToCommitMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHash: string; mode: ResetMode }) =>
       invokeRepoMutation("reset_current_branch_to_commit", variables),
+    refreshOp: RepoGitRefreshOp.ResetCurrentBranchToCommit,
   });
 }
 
@@ -357,6 +372,7 @@ export function useMergeBranchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; branchOrRef: string }) =>
       invokeRepoMutation("merge_branch", variables),
+    refreshOp: RepoGitRefreshOp.MergeBranch,
   });
 }
 
@@ -368,6 +384,7 @@ export function useRemoveWorktreeMutation() {
       ...snapshot,
       worktrees: snapshot.worktrees.filter((worktree) => worktree.path !== variables.worktreePath),
     }),
+    refreshOp: RepoGitRefreshOp.RemoveWorktree,
   });
 }
 
@@ -382,8 +399,7 @@ export function useCheckoutLocalBranchMutation() {
         detached: false,
         error: null,
       })),
-    // Reconcile via `mergeRepoSnapshotAfterCheckout` in App (lighter than full snapshot reload).
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.CheckoutLocalBranch,
   });
 }
 
@@ -413,6 +429,7 @@ export function useCreateBranchFromRemoteMutation() {
         ),
       };
     },
+    refreshOp: RepoGitRefreshOp.CreateBranchFromRemote,
   });
 }
 
@@ -420,6 +437,7 @@ export function useCherryPickCommitMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHash: string }) =>
       invokeRepoMutation("cherry_pick_commit", variables),
+    refreshOp: RepoGitRefreshOp.CherryPickCommit,
   });
 }
 
@@ -427,6 +445,7 @@ export function useDropCommitMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHash: string }) =>
       invokeRepoMutation("drop_commit", variables),
+    refreshOp: RepoGitRefreshOp.DropCommit,
   });
 }
 
@@ -434,6 +453,7 @@ export function useSquashCommitsMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHashes: string[]; message: string }) =>
       invokeRepoMutation("squash_commits", variables),
+    refreshOp: RepoGitRefreshOp.SquashCommits,
   });
 }
 
@@ -454,7 +474,7 @@ export function useDiscardPathChangesMutation() {
           variables.fromUnstaged,
         ),
       ),
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.DiscardPathChanges,
   });
 }
 
@@ -474,7 +494,7 @@ export function useDiscardPathsChangesMutation() {
           snapshot.workingTreeFiles,
         ),
       ),
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.DiscardPathsChanges,
   });
 }
 
@@ -482,11 +502,11 @@ export function usePushTagToOriginMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; tag: string }) =>
       invokeRepoMutation("push_tag_to_origin", variables),
+    refreshOp: RepoGitRefreshOp.PushTagToOrigin,
   });
 }
 
 export function useCreateBranchAtCommitMutation() {
-  const queryClient = useQueryClient();
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; branch: string; commit: string }) =>
       invokeRepoMutation("create_branch_at_commit", variables),
@@ -535,11 +555,7 @@ export function useCreateBranchAtCommitMutation() {
         ),
       };
     },
-    invalidateSnapshotOnSettled: (variables) => {
-      const snapshot = getRepoSnapshot(queryClient, variables.path);
-      if (!snapshot?.metadata) return true;
-      return !headMatchesCommit(snapshot.metadata, variables.commit);
-    },
+    refreshOp: RepoGitRefreshOp.CreateBranchAtCommit,
   });
 }
 
@@ -592,7 +608,7 @@ export function useCreateLocalBranchMutation() {
         ),
       };
     },
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.CreateLocalBranch,
   });
 }
 
@@ -614,6 +630,7 @@ export function useCreateTagMutation() {
         tags: sortByName(snapshot.tags.filter((tag) => tag.name !== variables.tag).concat(nextTag)),
       };
     },
+    refreshOp: RepoGitRefreshOp.CreateTag,
   });
 }
 
@@ -625,6 +642,7 @@ export function useStashPopMutation() {
       ...snapshot,
       stashes: snapshot.stashes.filter((stash) => stash.refName !== variables.stashRef),
     }),
+    refreshOp: RepoGitRefreshOp.StashPop,
   });
 }
 
@@ -636,6 +654,7 @@ export function useStashDropMutation() {
       ...snapshot,
       stashes: snapshot.stashes.filter((stash) => stash.refName !== variables.stashRef),
     }),
+    refreshOp: RepoGitRefreshOp.StashDrop,
   });
 }
 
@@ -647,6 +666,7 @@ export function useDeleteTagMutation() {
       ...snapshot,
       tags: snapshot.tags.filter((tag) => tag.name !== variables.tag),
     }),
+    refreshOp: RepoGitRefreshOp.DeleteTag,
   });
 }
 
@@ -654,6 +674,7 @@ export function useDeleteRemoteTagMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; tag: string }) =>
       invokeRepoMutation("delete_remote_tag", variables),
+    refreshOp: RepoGitRefreshOp.DeleteRemoteTag,
   });
 }
 
@@ -666,18 +687,18 @@ export function useStagePathsMutation() {
         snapshot,
         applyOptimisticStageChange(snapshot.workingTreeFiles, variables.paths, "stage"),
       ),
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.StagePaths,
   });
 }
 
 export function useStageAllMutation() {
   return useRepoCommandMutation({
-    mutationFn: async () => {
+    mutationFn: async (_variables: { path: string }) => {
       await invoke("stage_all");
     },
     optimisticUpdate: (snapshot) =>
       withWorkingTreeFiles(snapshot, stageAllWorkingTreeFiles(snapshot.workingTreeFiles)),
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.StageAll,
   });
 }
 
@@ -690,7 +711,7 @@ export function useUnstagePathsMutation() {
         snapshot,
         applyOptimisticStageChange(snapshot.workingTreeFiles, variables.paths, "unstage"),
       ),
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.UnstagePaths,
   });
 }
 
@@ -698,7 +719,7 @@ export function useStagePatchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; patch: string }) =>
       invokeRepoMutation("stage_patch", variables),
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.StagePatch,
   });
 }
 
@@ -706,7 +727,7 @@ export function useUnstagePatchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; patch: string }) =>
       invokeRepoMutation("unstage_patch", variables),
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.UnstagePatch,
   });
 }
 
@@ -714,6 +735,7 @@ export function useResolveConflictChoiceMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; filePath: string; choice: ResolveConflictChoice }) =>
       invokeRepoMutation("resolve_conflict_choice", variables),
+    refreshOp: RepoGitRefreshOp.ResolveConflictChoice,
   });
 }
 
@@ -721,6 +743,7 @@ export function useResolveConflictTextMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; filePath: string; resolvedText: string }) =>
       invokeRepoMutation("resolve_conflict_text", variables),
+    refreshOp: RepoGitRefreshOp.ResolveConflictText,
   });
 }
 
@@ -728,7 +751,7 @@ export function useDiscardPatchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; patch: string }) =>
       invokeRepoMutation("discard_patch", variables),
-    invalidateSnapshotOnSettled: false,
+    refreshOp: RepoGitRefreshOp.DiscardPatch,
   });
 }
 
@@ -738,6 +761,7 @@ export function useAmendLastCommitMutation() {
       invokeRepoMutation("amend_last_commit", variables),
     optimisticUpdate: (snapshot) =>
       withWorkingTreeFiles(snapshot, clearStagedWorkingTreeFiles(snapshot.workingTreeFiles)),
+    refreshOp: RepoGitRefreshOp.AmendLastCommit,
   });
 }
 
@@ -745,6 +769,7 @@ export function useRewordCommitMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHash: string; message: string }) =>
       invokeRepoMutation("reword_commit", variables),
+    refreshOp: RepoGitRefreshOp.RewordCommit,
   });
 }
 
@@ -756,6 +781,7 @@ export function useCommitStagedMutation() {
       withCurrentBranchAheadBumped(
         withWorkingTreeFiles(snapshot, clearStagedWorkingTreeFiles(snapshot.workingTreeFiles)),
       ),
+    refreshOp: RepoGitRefreshOp.CommitStaged,
   });
 }
 
@@ -765,6 +791,7 @@ export function usePushToOriginMutation() {
       invokeRepoMutation("push_to_origin", variables),
     optimisticUpdate: (snapshot) => withCurrentBranchAhead(snapshot, 0),
     successUpdate: (snapshot) => withCurrentBranchPushedToOrigin(snapshot),
+    refreshOp: RepoGitRefreshOp.PushToOrigin,
   });
 }
 
@@ -774,6 +801,7 @@ export function useForcePushToOriginMutation() {
       invokeRepoMutation("force_push_to_origin", variables),
     optimisticUpdate: (snapshot) => withCurrentBranchAhead(snapshot, 0),
     successUpdate: (snapshot) => withCurrentBranchPushedToOrigin(snapshot),
+    refreshOp: RepoGitRefreshOp.ForcePushToOrigin,
   });
 }
 
@@ -781,6 +809,7 @@ export function useContinueRepoOperationMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string }) =>
       invokeRepoMutation("continue_repo_operation", variables),
+    refreshOp: RepoGitRefreshOp.ContinueRepoOperation,
   });
 }
 
@@ -788,6 +817,7 @@ export function useAbortRepoOperationMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string }) =>
       invokeRepoMutation("abort_repo_operation", variables),
+    refreshOp: RepoGitRefreshOp.AbortRepoOperation,
   });
 }
 
@@ -795,5 +825,6 @@ export function useSkipRepoOperationMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string }) =>
       invokeRepoMutation("skip_repo_operation", variables),
+    refreshOp: RepoGitRefreshOp.SkipRepoOperation,
   });
 }

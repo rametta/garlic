@@ -84,7 +84,6 @@ import {
   clampGraphCommitsPageSize,
   type ConflictFileDetails as RepoConflictFileDetails,
   type LineStat,
-  type RepoMetadata,
   repoSnapshotFromStartup,
   type RestoreLastRepo,
   type WorkingTreeFile,
@@ -135,13 +134,16 @@ import {
   useUnstagePathsMutation,
 } from "./repoMutations";
 import {
-  type RepoListSelection,
+  applyFilesystemWatcherRepoRefresh,
+  applyFocusWorktreeRefresh,
+  applyRepoRefreshPlan,
+  isGitOperationInFlight,
+  type WatcherPreviousHead,
+} from "./repoRefreshMachine";
+import {
   emptyRepoSnapshot,
   getRepoSnapshot,
-  loadRepoLists,
   loadRepoSnapshot,
-  mergeRepoSnapshotAfterCheckout,
-  mergeRepoLists,
   repoQueryKeys,
   setRepoSnapshot,
   updateRepoSnapshot,
@@ -1455,26 +1457,6 @@ export default function App({
   const [createTagSubmitAction, setCreateTagSubmitAction] = useState<
     "create" | "create-and-push" | null
   >(null);
-  const refreshLists = useCallback(
-    async (
-      repoPath: string,
-      selection: RepoListSelection = {},
-    ): Promise<WorkingTreeFile[] | null> => {
-      setListsError(null);
-      try {
-        const lists = await loadRepoLists(repoPath, selection);
-        if (activeRepoPathRef.current !== repoPath) return null;
-        updateRepoSnapshot(queryClient, repoPath, (snapshot) =>
-          mergeRepoLists(snapshot, lists, selection),
-        );
-        return selection.workingTreeFiles === false ? null : lists.workingTreeFiles;
-      } catch (e) {
-        setListsError(invokeErrorMessage(e));
-        return null;
-      }
-    },
-    [queryClient],
-  );
   const clearDiffImagePreview = useCallback(() => {
     diffImagePreviewKeyRef.current = null;
     setDiffImagePreview(null);
@@ -2701,61 +2683,60 @@ export default function App({
       const fromWatcher = options?.fromWatcher ?? false;
       if (!repo?.path || repo.error) return;
       const pathAtStart = repo.path;
-      if (fromFocus) {
-        try {
-          const files = await invoke<WorkingTreeFile[]>("list_working_tree_files", {
-            path: pathAtStart,
-          });
-          if (activeRepoPathRef.current !== pathAtStart) return;
-          updateRepoSnapshot(queryClient, pathAtStart, (snapshot) => ({
-            ...snapshot,
-            workingTreeFiles: files,
-          }));
-          setListsError(null);
 
-          if (selectedDiffRepoPath === pathAtStart && selectedDiffPath) {
-            const next = files.find((w) => w.path === selectedDiffPath);
-            if (next && (next.staged || next.unstaged || next.conflict)) {
-              if (next.conflict) {
-                void loadConflictForFile(next, {
+      const syncDiffAfterFileList = (files: WorkingTreeFile[] | null) => {
+        if (activeRepoPathRef.current !== pathAtStart) return;
+        if (selectedDiffRepoPath === pathAtStart && selectedDiffPath && files) {
+          const next = files.find((w) => w.path === selectedDiffPath);
+          if (next && (next.staged || next.unstaged || next.conflict)) {
+            if (next.conflict) {
+              void loadConflictForFile(next, {
+                clearCommitBrowse: false,
+                preserveExisting: true,
+              });
+            } else {
+              const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
+              if (preferredSide === "unstaged" && next.unstaged) {
+                void loadDiffForFile(next, "unstaged", {
                   clearCommitBrowse: false,
                   preserveExisting: true,
                 });
+              } else if (preferredSide === "staged" && next.staged) {
+                void loadDiffForFile(next, "staged", {
+                  clearCommitBrowse: false,
+                  preserveExisting: true,
+                });
+              } else if (next.unstaged) {
+                void loadDiffForFile(next, "unstaged", { clearCommitBrowse: false });
+              } else if (next.staged) {
+                void loadDiffForFile(next, "staged", { clearCommitBrowse: false });
               } else {
-                const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
-                if (preferredSide === "unstaged" && next.unstaged) {
-                  void loadDiffForFile(next, "unstaged", {
-                    clearCommitBrowse: false,
-                    preserveExisting: true,
-                  });
-                } else if (preferredSide === "staged" && next.staged) {
-                  void loadDiffForFile(next, "staged", {
-                    clearCommitBrowse: false,
-                    preserveExisting: true,
-                  });
-                } else if (next.unstaged) {
-                  void loadDiffForFile(next, "unstaged", { clearCommitBrowse: false });
-                } else if (next.staged) {
-                  void loadDiffForFile(next, "staged", { clearCommitBrowse: false });
-                } else {
-                  diffLoadSeqRef.current += 1;
-                  setSelectedDiffPath(null);
-                  setSelectedDiffSide(null);
-                  setSelectedDiffRepoPath(null);
-                  clearSelectedDiffContent();
-                  setDiffLoading(false);
-                }
+                diffLoadSeqRef.current += 1;
+                setSelectedDiffPath(null);
+                setSelectedDiffSide(null);
+                setSelectedDiffRepoPath(null);
+                clearSelectedDiffContent();
+                setDiffLoading(false);
               }
-            } else {
-              diffLoadSeqRef.current += 1;
-              setSelectedDiffPath(null);
-              setSelectedDiffSide(null);
-              setSelectedDiffRepoPath(null);
-              clearSelectedDiffContent();
-              setDiffLoading(false);
-              setConflictLoading(false);
             }
+          } else {
+            diffLoadSeqRef.current += 1;
+            setSelectedDiffPath(null);
+            setSelectedDiffSide(null);
+            setSelectedDiffRepoPath(null);
+            clearSelectedDiffContent();
+            setDiffLoading(false);
+            setConflictLoading(false);
           }
+        }
+      };
+
+      if (fromFocus) {
+        try {
+          const files = await applyFocusWorktreeRefresh(queryClient, pathAtStart);
+          if (activeRepoPathRef.current !== pathAtStart) return;
+          setListsError(null);
+          syncDiffAfterFileList(files);
         } catch (e) {
           if (activeRepoPathRef.current === pathAtStart) {
             setListsError(invokeErrorMessage(e));
@@ -2763,106 +2744,41 @@ export default function App({
         }
         return;
       }
-      const prevBranch = repo.branch;
-      const prevDetached = repo.detached;
-      const prevHeadHash = repo.headHash ?? null;
-      const prevAhead = repo.ahead ?? null;
-      const prevBehind = repo.behind ?? null;
-      try {
-        const meta = await invoke<RepoMetadata>("get_repo_metadata", {
-          path: pathAtStart,
-        });
-        if (activeRepoPathRef.current !== pathAtStart) return;
-        const branchContextChanged = meta.branch !== prevBranch || meta.detached !== prevDetached;
-        const headChanged = (meta.headHash ?? null) !== prevHeadHash;
-        const upstreamCountsChanged =
-          (meta.ahead ?? null) !== prevAhead || (meta.behind ?? null) !== prevBehind;
-        updateRepoSnapshot(queryClient, pathAtStart, (snapshot) => ({
-          ...snapshot,
-          metadata: meta,
-        }));
-        if (!meta.error) {
+
+      if (fromWatcher) {
+        const previous: WatcherPreviousHead = {
+          branch: repo.branch,
+          detached: repo.detached,
+          headHash: repo.headHash ?? null,
+          ahead: repo.ahead ?? null,
+          behind: repo.behind ?? null,
+        };
+        try {
+          const { files, branchContextChanged } = await applyFilesystemWatcherRepoRefresh(
+            queryClient,
+            pathAtStart,
+            previous,
+          );
+          if (activeRepoPathRef.current !== pathAtStart) return;
           if (branchContextChanged) {
             clearCommitBrowse();
           }
-
-          let files: WorkingTreeFile[] | null = null;
-
-          if (fromWatcher && !branchContextChanged && !headChanged && !upstreamCountsChanged) {
-            try {
-              const worktree = await invoke<WorkingTreeFile[]>("list_working_tree_files", {
-                path: pathAtStart,
-              });
-              if (activeRepoPathRef.current !== pathAtStart) return;
-              updateRepoSnapshot(queryClient, pathAtStart, (snapshot) => ({
-                ...snapshot,
-                workingTreeFiles: worktree,
-              }));
-              setListsError(null);
-              files = worktree;
-            } catch (e) {
-              if (activeRepoPathRef.current === pathAtStart) {
-                setListsError(invokeErrorMessage(e));
-              }
-              files = null;
-            }
-          } else if (!fromFocus) {
-            files = await refreshLists(pathAtStart, {
-              localBranches: true,
-              remoteBranches: true,
-              workingTreeFiles: true,
-              worktrees: false,
-              tags: false,
-              stashes: false,
-            });
-          }
-
-          if (activeRepoPathRef.current !== pathAtStart) return;
-
-          if (selectedDiffRepoPath === pathAtStart && selectedDiffPath && files) {
-            const next = files.find((w) => w.path === selectedDiffPath);
-            if (next && (next.staged || next.unstaged || next.conflict)) {
-              if (next.conflict) {
-                void loadConflictForFile(next, {
-                  clearCommitBrowse: false,
-                  preserveExisting: true,
-                });
-              } else {
-                const preferredSide = selectedDiffSide ?? (next.unstaged ? "unstaged" : "staged");
-                if (preferredSide === "unstaged" && next.unstaged) {
-                  void loadDiffForFile(next, "unstaged", {
-                    clearCommitBrowse: false,
-                    preserveExisting: true,
-                  });
-                } else if (preferredSide === "staged" && next.staged) {
-                  void loadDiffForFile(next, "staged", {
-                    clearCommitBrowse: false,
-                    preserveExisting: true,
-                  });
-                } else if (next.unstaged) {
-                  void loadDiffForFile(next, "unstaged", { clearCommitBrowse: false });
-                } else if (next.staged) {
-                  void loadDiffForFile(next, "staged", { clearCommitBrowse: false });
-                } else {
-                  diffLoadSeqRef.current += 1;
-                  setSelectedDiffPath(null);
-                  setSelectedDiffSide(null);
-                  setSelectedDiffRepoPath(null);
-                  clearSelectedDiffContent();
-                  setDiffLoading(false);
-                }
-              }
-            } else {
-              diffLoadSeqRef.current += 1;
-              setSelectedDiffPath(null);
-              setSelectedDiffSide(null);
-              setSelectedDiffRepoPath(null);
-              clearSelectedDiffContent();
-              setDiffLoading(false);
-              setConflictLoading(false);
-            }
+          setListsError(null);
+          syncDiffAfterFileList(files);
+        } catch (e) {
+          if (activeRepoPathRef.current === pathAtStart) {
+            setOperationError(invokeErrorMessage(e));
           }
         }
+        return;
+      }
+
+      try {
+        await applyRepoRefreshPlan(queryClient, pathAtStart, { kind: "full" });
+        if (activeRepoPathRef.current !== pathAtStart) return;
+        setListsError(null);
+        const files = getRepoSnapshot(queryClient, pathAtStart)?.workingTreeFiles ?? null;
+        syncDiffAfterFileList(files);
       } catch (e) {
         if (activeRepoPathRef.current === pathAtStart) {
           setOperationError(invokeErrorMessage(e));
@@ -2871,7 +2787,6 @@ export default function App({
     },
     [
       repo,
-      refreshLists,
       selectedDiffPath,
       selectedDiffRepoPath,
       selectedDiffSide,
@@ -3030,8 +2945,6 @@ export default function App({
           path: pathAtStart,
           branch: branchName,
         });
-        // Wait for the snapshot refetch from the mutation's onSettled invalidate before reading HEAD.
-        await queryClient.refetchQueries({ queryKey: repoQueryKeys.root(pathAtStart) });
         if (shouldFocusCurrentHead) {
           const headHash =
             getRepoSnapshot(queryClient, pathAtStart)?.metadata?.headHash?.trim() || null;
@@ -3156,9 +3069,7 @@ export default function App({
           branchOrRef: onto,
         });
         if (target.path !== repo.path) {
-          await queryClient.invalidateQueries({
-            queryKey: repoQueryKeys.root(repo.path),
-          });
+          await applyRepoRefreshPlan(queryClient, repo.path, { kind: "full" });
         }
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
@@ -3262,20 +3173,13 @@ export default function App({
           path: pathAtStart,
           branch,
         });
-        try {
-          await mergeRepoSnapshotAfterCheckout(queryClient, pathAtStart);
-        } catch {
-          await queryClient.invalidateQueries({
-            queryKey: repoQueryKeys.root(pathAtStart),
-          });
-        }
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, checkoutLocalBranchMutation, queryClient],
+    [repo, checkoutLocalBranchMutation],
   );
 
   const onCreateFromRemote = useCallback(
@@ -4027,14 +3931,7 @@ export default function App({
       listen("repository-mutated", () => {
         const path = activeRepoPathRef.current;
         if (!path) return;
-        // Debounced watcher (~450ms) often fires right after an in-app Git command; the UI may
-        // already have refetched (e.g. checkout merge). Skip duplicate refreshAfterMutation work.
-        if (queryClient.isFetching({ queryKey: repoQueryKeys.snapshot(path) })) {
-          return;
-        }
-        const state = queryClient.getQueryState(repoQueryKeys.snapshot(path));
-        const updatedAt = state?.dataUpdatedAt ?? 0;
-        if (updatedAt > 0 && Date.now() - updatedAt < 900) {
+        if (isGitOperationInFlight()) {
           return;
         }
         scheduleRepositoryMutationRefresh();
