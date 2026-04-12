@@ -484,6 +484,24 @@ fn format_notification_elapsed(elapsed: Duration) -> String {
 /// previous 5s floor meant pre-commit / pre-push runs almost never qualified.
 const GIT_COMPLETION_NOTIFY_MIN_ELAPSED: Duration = Duration::from_millis(500);
 
+/// Max characters for the commit subject line in a completion notification (ellipsis if longer).
+const GIT_COMPLETION_NOTIFY_SUBJECT_MAX_CHARS: usize = 200;
+
+fn head_commit_subject_for_notification(workdir: &Path) -> Option<String> {
+    let raw = git_output_allow_fail(workdir, &["log", "-1", "--format=%s"])?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut out: String = trimmed.to_string();
+    if out.chars().count() > GIT_COMPLETION_NOTIFY_SUBJECT_MAX_CHARS {
+        let take = GIT_COMPLETION_NOTIFY_SUBJECT_MAX_CHARS.saturating_sub(1);
+        out = trimmed.chars().take(take).collect::<String>();
+        out.push('…');
+    }
+    Some(out)
+}
+
 fn notify_git_completion(app: &AppHandle, operation: &str, workdir: &Path, elapsed: Duration) {
     if elapsed < GIT_COMPLETION_NOTIFY_MIN_ELAPSED || !should_notify_git_completion(operation) {
         return;
@@ -502,10 +520,13 @@ fn notify_git_completion(app: &AppHandle, operation: &str, workdir: &Path, elaps
     } else {
         "Commit"
     };
-    let body = format!(
-        "{repo_label} — {action} finished after {}.",
-        format_notification_elapsed(elapsed)
-    );
+    let elapsed_s = format_notification_elapsed(elapsed);
+    let body = match head_commit_subject_for_notification(workdir) {
+        Some(subject) => {
+            format!("{subject}\n\n{repo_label} — {action} finished after {elapsed_s}.")
+        }
+        None => format!("{repo_label} — {action} finished after {elapsed_s}."),
+    };
     let _ = app
         .notification()
         .builder()
