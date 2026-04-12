@@ -3029,7 +3029,8 @@ export default function App({
           path: pathAtStart,
           branch: branchName,
         });
-        await refreshAfterMutation();
+        // Wait for the snapshot refetch from the mutation's onSettled invalidate before reading HEAD.
+        await queryClient.refetchQueries({ queryKey: repoQueryKeys.root(pathAtStart) });
         if (shouldFocusCurrentHead) {
           const headHash =
             getRepoSnapshot(queryClient, pathAtStart)?.metadata?.headHash?.trim() || null;
@@ -3043,7 +3044,7 @@ export default function App({
         setBranchBusy(null);
       }
     },
-    [repo, pullLocalBranchMutation, refreshAfterMutation, queryClient, focusGraphOnCommitHash],
+    [repo, pullLocalBranchMutation, queryClient, focusGraphOnCommitHash],
   );
 
   const deleteLocalBranch = useCallback(
@@ -3260,14 +3261,13 @@ export default function App({
           path: pathAtStart,
           branch,
         });
-        await refreshAfterMutation();
       } catch (e) {
         setOperationError(invokeErrorMessage(e));
       } finally {
         setBranchBusy(null);
       }
     },
-    [repo, checkoutLocalBranchMutation, refreshAfterMutation],
+    [repo, checkoutLocalBranchMutation],
   );
 
   const onCreateFromRemote = useCallback(
