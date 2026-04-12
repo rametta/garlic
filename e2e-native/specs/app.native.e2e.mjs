@@ -46,6 +46,10 @@ function latestLogForCommand(logs, command) {
   return logs.find((entry) => entry.command === command) ?? null;
 }
 
+function latestSuccessfulLogForCommand(logs, command) {
+  return logs.find((entry) => entry.command === command && entry.status === "success") ?? null;
+}
+
 describe("Garlic native backend e2e", () => {
   it("boots from the native backend and stages files through the real Tauri bridge", async () => {
     await browser.waitUntil(
@@ -118,8 +122,8 @@ describe("Garlic native backend e2e", () => {
     );
 
     const logs = await getInvokeLogs();
-    const stageAllLog = latestLogForCommand(logs, "stage_all");
-    const worktreeRefreshLog = latestLogForCommand(logs, "list_working_tree_files");
+    const stageAllLog = latestSuccessfulLogForCommand(logs, "stage_all");
+    const worktreeRefreshLog = latestSuccessfulLogForCommand(logs, "list_working_tree_files");
     assert.ok(stageAllLog, "Expected stage_all to be logged.");
     assert.ok(worktreeRefreshLog, "Expected worktree refresh after stage_all.");
     assert.equal(stageAllLog.status, "success");
@@ -166,7 +170,7 @@ describe("Garlic native backend e2e", () => {
     const eventLogs = await getEventLogs();
     const invokeLogs = await getInvokeLogs();
     const watcherEvent = eventLogs.find((entry) => entry.event === "repository-mutated");
-    const worktreeRefreshLog = latestLogForCommand(invokeLogs, "list_working_tree_files");
+    const worktreeRefreshLog = latestSuccessfulLogForCommand(invokeLogs, "list_working_tree_files");
     assert.ok(watcherEvent, "Expected repository-mutated to be logged.");
     assert.ok(worktreeRefreshLog, "Expected watcher refresh to fetch working tree files.");
     assert.equal(worktreeRefreshLog.status, "success");
