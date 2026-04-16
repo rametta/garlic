@@ -339,6 +339,54 @@ describe("App bridge contract", () => {
     expect(harness.statusPorcelain()).toContain(" M README.md");
   });
 
+  it("stashes tracked and untracked changes through the bridge", async () => {
+    const harness = await createGitBridgeHarness({
+      withModifiedTrackedFile: true,
+      withUntrackedFile: true,
+    });
+    harnessesToCleanup.push(harness);
+    setTauriInvokeHandler((command, args) => harness.dispatch(command, args));
+
+    renderAppHarness(await harness.buildStartup());
+    await waitForInitialBridgeActivity();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Stash" }));
+
+    await waitFor(() => {
+      const logs = bridgeLogsAsc();
+      expect(logs.map((entry) => entry.command)).toEqual([
+        "stash_push",
+        "get_repo_metadata",
+        "list_working_tree_files",
+        "list_stashes",
+        "list_graph_commits",
+      ]);
+      expect(logs.every((entry) => entry.status === "success")).toBe(true);
+    });
+
+    const [stashPushLog, metadataLog, filesLog, stashesLog, graphLog] = bridgeLogsAsc();
+    expect(stashPushLog?.args).toEqual({
+      path: harness.repoPath,
+      message: null,
+    });
+    expect(metadataLog?.result).toEqual(
+      expect.objectContaining({
+        path: harness.repoPath,
+        branch: "main",
+      }),
+    );
+    expect(filesLog?.result).toEqual([]);
+    expect(stashesLog?.result).toEqual([
+      expect.objectContaining({
+        refName: "stash@{0}",
+      }),
+    ]);
+    expectGraphReloadResult(graphLog?.result);
+    expect(harness.statusPorcelain()).toBe("");
+    expect(harness.git("stash", "list")).toContain("stash@{0}");
+  });
+
   it("commits staged changes and performs the expected post-commit refresh sequence", async () => {
     const harness = await createGitBridgeHarness({ withModifiedTrackedFile: true });
     harnessesToCleanup.push(harness);

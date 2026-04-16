@@ -4923,18 +4923,25 @@ pub fn list_stashes(path: String) -> Result<Vec<StashEntry>, String> {
     Ok(out)
 }
 
-/// Stash tracked + untracked changes (`git stash push`).
+fn build_stash_push_args(message: Option<&str>) -> Vec<String> {
+    let trimmed = message.map(str::trim).filter(|s| !s.is_empty());
+    let mut args = Vec::with_capacity(if trimmed.is_some() { 5 } else { 3 });
+    args.push("stash".into());
+    args.push("push".into());
+    args.push("--include-untracked".into());
+    if let Some(m) = trimmed {
+        args.push("-m".into());
+        args.push(m.to_string());
+    }
+    args
+}
+
+/// Stash tracked + untracked changes (`git stash push --include-untracked`).
 #[tauri::command]
 pub fn stash_push(app: AppHandle, path: String, message: Option<String>) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
-    let mut args = Vec::with_capacity(if message.is_some() { 4 } else { 2 });
-    args.push("stash".into());
-    args.push("push".into());
-    if let Some(m) = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        args.push("-m".into());
-        args.push(m.to_string());
-    }
+    let args = build_stash_push_args(message.as_deref());
     run_git_streaming(&app, &path_buf, &args, "stash push")?;
     Ok(())
 }
@@ -5225,8 +5232,8 @@ pub async fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Re
 #[cfg(test)]
 mod tests {
     use super::{
-        commit_path_display_parts, parse_conflict_ranges, parse_porcelain_v1_z, parse_porcelain_xy,
-        parse_unmerged_index_z,
+        build_stash_push_args, commit_path_display_parts, parse_conflict_ranges,
+        parse_porcelain_v1_z, parse_porcelain_xy, parse_unmerged_index_z,
     };
 
     #[test]
@@ -5259,6 +5266,26 @@ mod tests {
     #[test]
     fn porcelain_xy_marks_conflicts() {
         assert_eq!(parse_porcelain_xy("UU"), Some((true, true, false, true)));
+    }
+
+    #[test]
+    fn stash_push_includes_untracked_files() {
+        assert_eq!(
+            build_stash_push_args(None),
+            vec!["stash", "push", "--include-untracked"]
+        );
+    }
+
+    #[test]
+    fn stash_push_trims_message_before_adding_flag() {
+        assert_eq!(
+            build_stash_push_args(Some("  WIP change  ")),
+            vec!["stash", "push", "--include-untracked", "-m", "WIP change"]
+        );
+        assert_eq!(
+            build_stash_push_args(Some("   ")),
+            vec!["stash", "push", "--include-untracked"]
+        );
     }
 
     #[test]

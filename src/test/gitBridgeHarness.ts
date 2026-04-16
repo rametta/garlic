@@ -49,6 +49,10 @@ type PullLocalBranchArgs = PathArgs & {
   branch: string;
 };
 
+type StashPushArgs = PathArgs & {
+  message: string | null;
+};
+
 export interface GitBridgeHarness {
   repoPath: string;
   dispatch(command: string, args?: unknown): Promise<unknown>;
@@ -214,8 +218,19 @@ export async function createGitBridgeHarness(options?: {
         runGit(targetPath, ["commit", "-m", message]);
         return undefined;
       }
+      case "stash_push": {
+        const { path: targetPath, message } = args as StashPushArgs;
+        const cmd = ["stash", "push", "--include-untracked"];
+        if (message?.trim()) {
+          cmd.push("-m", message.trim());
+        }
+        runGit(targetPath, cmd);
+        return undefined;
+      }
       case "list_working_tree_files":
         return listWorkingTreeFiles(getPathArg(args));
+      case "list_stashes":
+        return listStashes(getPathArg(args));
       case "create_local_branch": {
         const { path: targetPath, branch } = args as CreateBranchArgs;
         runGit(targetPath, ["switch", "-c", branch]);
