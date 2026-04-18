@@ -4943,20 +4943,11 @@ export default function App({
     if (!currentBranchName) return null;
     return localBranches.find((b) => b.name === currentBranchName)?.tipHash ?? null;
   }, [currentBranchName, localBranches]);
-  const graphToolbarBranchTargetHash = useMemo(() => {
-    if (selectedGraphCommitHashes.length === 1) {
-      return selectedGraphCommitHashes[0] ?? null;
-    }
-    if (graphFocusHash) return graphFocusHash;
-    return currentBranchTipHash ?? (repo?.headHash?.trim() || null);
-  }, [currentBranchTipHash, graphFocusHash, repo?.headHash, selectedGraphCommitHashes]);
-  const graphToolbarBranchTargetLabel = useMemo(() => {
-    if (!graphToolbarBranchTargetHash) return null;
-    return (
-      commits.find((commit) => commit.hash === graphToolbarBranchTargetHash)?.shortHash ??
-      graphToolbarBranchTargetHash.slice(0, 7)
-    );
-  }, [commits, graphToolbarBranchTargetHash]);
+  // The toolbar "Branch" action always creates a new branch from the tip of the
+  // currently checked-out branch (i.e. HEAD), regardless of graph selection or
+  // focus. Branching from a selected/focused commit is still available via the
+  // commit context menu.
+  const graphToolbarBranchTargetLabel = currentBranchName;
   const latestStashRef = stashes[0]?.refName ?? null;
   const graphToolbarActionBusy = Boolean(branchBusy) || pushBusy || stashBusy !== null;
   const refreshActionDisabled = refreshActionBusy || !repo?.path || Boolean(repo.error);
@@ -4972,7 +4963,8 @@ export default function App({
   const pullActionDisabled = graphToolbarActionBusy || currentBranchName === null;
   const pushActionDisabled =
     graphToolbarActionBusy || !repo?.path || Boolean(repo.error) || Boolean(repo.detached);
-  const branchActionDisabled = graphToolbarActionBusy || graphToolbarBranchTargetHash === null;
+  const branchActionDisabled =
+    graphToolbarActionBusy || !repo?.path || Boolean(repo?.error) || !repo?.headHash?.trim();
   const stashActionDisabled = graphToolbarActionBusy || wipChangedFileCount === 0;
   const popActionDisabled = graphToolbarActionBusy || latestStashRef === null;
   const handleGraphPullAction = useCallback(() => {
@@ -4983,9 +4975,8 @@ export default function App({
     void pushCurrentBranchToOrigin({ skipHooks: false });
   }, [pushCurrentBranchToOrigin]);
   const handleGraphBranchAction = useCallback(() => {
-    if (!graphToolbarBranchTargetHash) return;
-    openCreateBranchDialogAtCommit(graphToolbarBranchTargetHash);
-  }, [graphToolbarBranchTargetHash, openCreateBranchDialogAtCommit]);
+    openCreateBranchDialog();
+  }, [openCreateBranchDialog]);
   const handleGraphStashAction = useCallback(() => {
     void onStashPush();
   }, [onStashPush]);

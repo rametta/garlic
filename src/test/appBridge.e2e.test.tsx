@@ -148,7 +148,7 @@ describe("App bridge contract", () => {
     expect(harness.currentBranch()).toBe("feature");
   });
 
-  it("creates a branch at the current graph commit and sends only create_branch_at_commit", async () => {
+  it("creates a branch from the tip of the current branch and sends only create_local_branch", async () => {
     const harness = await createGitBridgeHarness();
     harnessesToCleanup.push(harness);
     setTauriInvokeHandler((command, args) => harness.dispatch(command, args));
@@ -165,7 +165,7 @@ describe("App bridge contract", () => {
     await waitFor(() => {
       expect(screen.queryByText("New local branch")).not.toBeInTheDocument();
       const logs = bridgeLogsAsc();
-      expect(logs.map((entry) => entry.command)).toEqual(["create_branch_at_commit"]);
+      expect(logs.map((entry) => entry.command)).toEqual(["create_local_branch"]);
       expect(logs.every((entry) => entry.status === "success")).toBe(true);
     });
 
@@ -173,7 +173,6 @@ describe("App bridge contract", () => {
     expect(createBranchLog?.args).toEqual({
       path: harness.repoPath,
       branch: "graph-branch",
-      commit: harness.git("rev-parse", "HEAD"),
     });
     expect(harness.currentBranch()).toBe("graph-branch");
   });

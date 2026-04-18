@@ -1336,8 +1336,8 @@ export const CommitGraphSection = memo(function CommitGraphSection({
               disabled={branchActionDisabled}
               title={
                 branchActionTargetLabel
-                  ? `Create a branch from ${branchActionTargetLabel}`
-                  : "Create a branch from the current graph position"
+                  ? `Create a new branch from the tip of ${branchActionTargetLabel}`
+                  : "Create a new branch from HEAD"
               }
               onClick={onBranchAction}
             >
