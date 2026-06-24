@@ -7,6 +7,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import { clearGitCommandStream, useGitCommandStream } from "../gitCommandStreamStore";
 
 const GITLAB_MERGE_REQUEST_URL_RE = /\bhttps?:\/\/[^\s)]+\/-\/merge_requests\/\d+\b/;
+const SECURITY_KEY_TOUCH_RE = /\bTouch your (?:YubiKey|security key)\b/i;
 
 function extractMergeRequestUrl(lines: { stream: string; text: string }[]): string | null {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
@@ -47,16 +48,20 @@ export const GitCommandPanel = memo(function GitCommandPanel({ repoPath }: GitCo
     () => (gitCommandStream ? extractMergeRequestUrl(gitCommandStream.lines) : null),
     [gitCommandStream],
   );
+  const needsSecurityKeyTouch = useMemo(
+    () => gitCommandStream?.lines.some((line) => SECURITY_KEY_TOUCH_RE.test(line.text)) ?? false,
+    [gitCommandStream],
+  );
 
   useEffect(() => {
     setOpen(false);
   }, [repoPath]);
 
   useEffect(() => {
-    if (mergeRequestUrl) {
+    if (mergeRequestUrl || needsSecurityKeyTouch) {
       setOpen(true);
     }
-  }, [mergeRequestUrl]);
+  }, [mergeRequestUrl, needsSecurityKeyTouch]);
 
   useLayoutEffect(() => {
     if (!gitCommandStream) return;
@@ -85,13 +90,15 @@ export const GitCommandPanel = memo(function GitCommandPanel({ repoPath }: GitCo
                   Git command
                 </h2>
                 <p className="mt-0.5 mb-0 text-xs text-base-content/60">
-                  {gitCommandStream
-                    ? gitCommandStream.finished
-                      ? gitCommandStream.success
-                        ? "Finished"
-                        : "Failed"
-                      : "Running…"
-                    : "No recent command output"}
+                  {needsSecurityKeyTouch && !gitCommandStream?.finished
+                    ? "Touch your YubiKey to sign"
+                    : gitCommandStream
+                      ? gitCommandStream.finished
+                        ? gitCommandStream.success
+                          ? "Finished"
+                          : "Failed"
+                        : "Running…"
+                      : "No recent command output"}
                 </p>
               </div>
               <IconChevronRight

@@ -265,6 +265,47 @@ fn ssh_session_env(_app: &AppHandle) -> Result<Vec<(String, String)>, String> {
 struct SshSigningPreparation {
     envs: Vec<(String, String)>,
     git_config_overrides: Vec<String>,
+    needs_security_key_touch: bool,
+}
+
+const SSH_SIGNING_TOUCH_LINE: &str =
+    "Touch your YubiKey or security key to sign this commit.";
+
+fn ssh_public_key_requires_user_presence(public_key: &str) -> bool {
+    let key_type = public_key
+        .trim()
+        .strip_prefix("key::")
+        .unwrap_or_else(|| public_key.trim())
+        .split_whitespace()
+        .next()
+        .unwrap_or_default();
+    key_type.starts_with("sk-") || key_type.contains("-sk")
+}
+
+fn signing_key_requires_user_presence(signing_key: &str, public_key_path: Option<&Path>) -> bool {
+    if ssh_public_key_requires_user_presence(signing_key) {
+        return true;
+    }
+
+    public_key_path
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .is_some_and(|public_key| ssh_public_key_requires_user_presence(&public_key))
+}
+
+fn notify_ssh_signing_touch_required(app: &AppHandle, workdir: &Path) {
+    let repo_label = workdir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("repository");
+    let _ = app
+        .notification()
+        .builder()
+        .title("Touch your YubiKey")
+        .body(format!(
+            "Git is waiting for your security key to sign the commit in {repo_label}."
+        ))
+        .show();
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -362,6 +403,7 @@ fn ssh_signing_preparation(
         return Ok(SshSigningPreparation {
             envs,
             git_config_overrides: Vec::new(),
+            needs_security_key_touch: signing_key_requires_user_presence(signing_key, None),
         });
     }
 
@@ -391,12 +433,17 @@ fn ssh_signing_preparation(
         return Ok(SshSigningPreparation {
             envs,
             git_config_overrides,
+            needs_security_key_touch: signing_key_requires_user_presence(
+                signing_key,
+                Some(&public_key_path),
+            ),
         });
     }
 
     Ok(SshSigningPreparation {
         envs,
         git_config_overrides: Vec::new(),
+        needs_security_key_touch: signing_key_requires_user_presence(signing_key, None),
     })
 }
 
@@ -547,6 +594,26 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
     stdin_text: Option<&str>,
     extra_envs: &[(&str, &str)],
 ) -> Result<(), String> {
+    run_git_streaming_with_input_env_and_initial_lines(
+        app,
+        workdir,
+        args,
+        operation,
+        stdin_text,
+        extra_envs,
+        &[],
+    )
+}
+
+fn run_git_streaming_with_input_env_and_initial_lines<S: AsRef<str>>(
+    app: &AppHandle,
+    workdir: &Path,
+    args: &[S],
+    operation: &str,
+    stdin_text: Option<&str>,
+    extra_envs: &[(&str, &str)],
+    initial_stderr_lines: &[&str],
+) -> Result<(), String> {
     let started_at = Instant::now();
     let session_id = next_git_stream_session_id();
     let repo_owned = workdir.to_string_lossy().into_owned();
@@ -561,6 +628,22 @@ fn run_git_streaming_with_input_and_env<S: AsRef<str>>(
             command_line: command_line.clone(),
         },
     );
+    for line in initial_stderr_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let _ = app.emit(
+            "git-command-stream-line",
+            GitCommandStreamLineEvent {
+                session_id,
+                repo_path: &repo_owned,
+                operation: &op_owned,
+                stream: "stderr",
+                line: trimmed,
+            },
+        );
+    }
 
     let mut cmd = git_cmd(workdir);
     cmd.args(args.iter().map(AsRef::as_ref))
@@ -3785,7 +3868,21 @@ fn commit_staged_blocking(app: AppHandle, path: String, message: String) -> Resu
     let mut args = prep.git_config_overrides;
     args.extend(["commit".to_string(), "-m".to_string(), msg.to_string()]);
     let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_git_streaming(&app, &path_buf, &args_ref, "commit")?;
+    let initial_stderr_lines = if prep.needs_security_key_touch {
+        notify_ssh_signing_touch_required(&app, &path_buf);
+        vec![SSH_SIGNING_TOUCH_LINE]
+    } else {
+        Vec::new()
+    };
+    run_git_streaming_with_input_env_and_initial_lines(
+        &app,
+        &path_buf,
+        &args_ref,
+        "commit",
+        None,
+        &[],
+        &initial_stderr_lines,
+    )?;
     Ok(())
 }
 
@@ -3815,7 +3912,21 @@ fn amend_last_commit_blocking(
                 m.to_string(),
             ]);
             let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
-            run_git_streaming(&app, &path_buf, &args_ref, "commit --amend")?;
+            let initial_stderr_lines = if prep.needs_security_key_touch {
+                notify_ssh_signing_touch_required(&app, &path_buf);
+                vec![SSH_SIGNING_TOUCH_LINE]
+            } else {
+                Vec::new()
+            };
+            run_git_streaming_with_input_env_and_initial_lines(
+                &app,
+                &path_buf,
+                &args_ref,
+                "commit --amend",
+                None,
+                &[],
+                &initial_stderr_lines,
+            )?;
         }
         None => {
             let mut args = prep.git_config_overrides;
@@ -3825,7 +3936,21 @@ fn amend_last_commit_blocking(
                 "--no-edit".to_string(),
             ]);
             let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
-            run_git_streaming(&app, &path_buf, &args_ref, "commit --amend")?;
+            let initial_stderr_lines = if prep.needs_security_key_touch {
+                notify_ssh_signing_touch_required(&app, &path_buf);
+                vec![SSH_SIGNING_TOUCH_LINE]
+            } else {
+                Vec::new()
+            };
+            run_git_streaming_with_input_env_and_initial_lines(
+                &app,
+                &path_buf,
+                &args_ref,
+                "commit --amend",
+                None,
+                &[],
+                &initial_stderr_lines,
+            )?;
         }
     }
     Ok(())
@@ -5234,6 +5359,7 @@ mod tests {
     use super::{
         build_stash_push_args, commit_path_display_parts, parse_conflict_ranges,
         parse_porcelain_v1_z, parse_porcelain_xy, parse_unmerged_index_z,
+        ssh_public_key_requires_user_presence,
     };
 
     #[test]
@@ -5286,6 +5412,19 @@ mod tests {
             build_stash_push_args(Some("   ")),
             vec!["stash", "push", "--include-untracked"]
         );
+    }
+
+    #[test]
+    fn ssh_public_key_requires_user_presence_detects_security_keys() {
+        assert!(ssh_public_key_requires_user_presence(
+            "sk-ssh-ed25519@openssh.com AAAA comment"
+        ));
+        assert!(ssh_public_key_requires_user_presence(
+            "key::sk-ecdsa-sha2-nistp256@openssh.com AAAA comment"
+        ));
+        assert!(!ssh_public_key_requires_user_presence(
+            "ssh-ed25519 AAAA comment"
+        ));
     }
 
     #[test]
