@@ -169,6 +169,30 @@ fn ensure_ssh_askpass_helper(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
+fn launchd_ssh_agent_env() -> Option<Vec<(String, String)>> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("launchctl")
+            .args(["getenv", "SSH_AUTH_SOCK"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let sock = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if sock.is_empty() {
+            return None;
+        }
+        return Some(vec![("SSH_AUTH_SOCK".to_string(), sock)]);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
 fn ensure_ssh_agent_env() -> Result<Vec<(String, String)>, String> {
     if let Ok(sock) = std::env::var("SSH_AUTH_SOCK") {
         let sock = sock.trim();
@@ -182,6 +206,10 @@ fn ensure_ssh_agent_env() -> Result<Vec<(String, String)>, String> {
             }
             return Ok(envs);
         }
+    }
+
+    if let Some(envs) = launchd_ssh_agent_env() {
+        return Ok(envs);
     }
 
     if let Ok(guard) = SSH_AGENT_ENV_OVERRIDES.lock() {
