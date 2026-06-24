@@ -43,6 +43,7 @@ type StagePathsArgs = PathArgs & {
 
 type CommitStagedArgs = PathArgs & {
   message: string;
+  signCommit: boolean;
 };
 
 type PullLocalBranchArgs = PathArgs & {
@@ -192,6 +193,8 @@ export async function createGitBridgeHarness(options?: {
         activeRepoPath = getPathArg(args);
         return undefined;
       }
+      case "set_sign_commits":
+        return undefined;
       case "list_graph_commits":
         return listGraphCommits(args as GraphCommitsArgs);
       case "stage_all": {
@@ -215,7 +218,7 @@ export async function createGitBridgeHarness(options?: {
       }
       case "commit_staged": {
         const { path: targetPath, message } = args as CommitStagedArgs;
-        runGit(targetPath, ["commit", "-m", message]);
+        runGit(targetPath, ["commit", "--no-gpg-sign", "-m", message]);
         return undefined;
       }
       case "stash_push": {
@@ -306,6 +309,7 @@ function runGit(repoPath: string, args: string[]): string {
 function configureTestGitIdentity(repoPath: string) {
   runGit(repoPath, ["config", "user.name", "Garlic Test"]);
   runGit(repoPath, ["config", "user.email", "garlic@example.com"]);
+  runGit(repoPath, ["config", "commit.gpgsign", "false"]);
 }
 
 function tryRunGit(repoPath: string, args: string[]): string | null {

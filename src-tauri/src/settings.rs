@@ -130,6 +130,9 @@ struct AppSettings {
     /// Desktop notification when a long-running push or commit completes (hooks included).
     #[serde(default = "default_true")]
     notify_git_completion: bool,
+    /// Whether new commits should use the machine's default Git signing configuration.
+    #[serde(default = "default_true")]
+    sign_commits: bool,
 }
 
 impl Default for AppSettings {
@@ -146,6 +149,7 @@ impl Default for AppSettings {
             graph_commits_page_size: git::DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
             graph_commit_title_font_size_px: default_graph_commit_title_font_size_px(),
             notify_git_completion: true,
+            sign_commits: true,
         }
     }
 }
@@ -371,6 +375,8 @@ pub struct AppBootstrap {
     pub graph_commit_title_font_size_px: u32,
     /// When true, show a system notification after a long-running push or commit completes.
     pub notify_git_completion: bool,
+    /// When true, commits use the machine's default Git signing configuration.
+    pub sign_commits: bool,
 }
 
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
@@ -416,6 +422,7 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
             settings.graph_commit_title_font_size_px,
         ),
         notify_git_completion: settings.notify_git_completion,
+        sign_commits: settings.sign_commits,
     })
 }
 
@@ -599,6 +606,14 @@ pub fn notify_git_completion_enabled(app: &AppHandle) -> bool {
 pub fn set_notify_git_completion(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut s = load_settings(&app)?;
     s.notify_git_completion = enabled;
+    save_settings(&app, &s)
+}
+
+/// Persists whether commits should use the machine's default Git signing configuration.
+#[tauri::command]
+pub fn set_sign_commits(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut s = load_settings(&app)?;
+    s.sign_commits = enabled;
     save_settings(&app, &s)
 }
 

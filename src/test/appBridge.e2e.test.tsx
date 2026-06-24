@@ -283,6 +283,7 @@ describe("App bridge contract", () => {
     await waitForInitialBridgeActivity();
 
     const user = userEvent.setup();
+    expect(screen.getByRole("checkbox", { name: "Sign commit" })).toBeChecked();
     await user.click(screen.getByRole("button", { name: "Stage README.md" }));
 
     await waitFor(() => {
@@ -425,6 +426,7 @@ describe("App bridge contract", () => {
     expect(commitLog?.args).toEqual({
       path: harness.repoPath,
       message: "Commit tracked change",
+      signCommit: true,
     });
     expect(metadataLog?.result).toEqual(
       expect.objectContaining({
@@ -438,5 +440,55 @@ describe("App bridge contract", () => {
     expect(filesLog?.result).toEqual([]);
     expectGraphReloadResult(graphLog?.result);
     expect(harness.git("log", "-1", "--format=%s")).toBe("Commit tracked change");
+  });
+
+  it("persists sign commit preference and sends unsigned commit requests", async () => {
+    const harness = await createGitBridgeHarness({ withModifiedTrackedFile: true });
+    harnessesToCleanup.push(harness);
+    setTauriInvokeHandler((command, args) => harness.dispatch(command, args));
+
+    renderAppHarness(await harness.buildStartup());
+    await waitForInitialBridgeActivity();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox", { name: "Sign commit" }));
+
+    await waitFor(() => {
+      const logs = bridgeLogsAsc();
+      expect(logs.map((entry) => entry.command)).toEqual(["set_sign_commits"]);
+      expect(logs[0]?.args).toEqual({ enabled: false });
+      expect(logs[0]?.status).toBe("success");
+    });
+
+    clearTauriBridgeLogs();
+    await user.click(screen.getByRole("button", { name: "Stage README.md" }));
+    await waitFor(() => {
+      expect(bridgeLogsAsc().map((entry) => entry.command)).toEqual([
+        "stage_paths",
+        "list_working_tree_files",
+      ]);
+    });
+
+    clearTauriBridgeLogs();
+    await user.type(screen.getByPlaceholderText("Title"), "Unsigned change");
+    await user.click(screen.getByRole("button", { name: "Commit" }));
+
+    await waitFor(() => {
+      const logs = bridgeLogsAsc();
+      expect(logs.map((entry) => entry.command)).toEqual([
+        "commit_staged",
+        "get_repo_metadata",
+        "list_local_branches",
+        "list_working_tree_files",
+        "list_graph_commits",
+      ]);
+      expect(logs.every((entry) => entry.status === "success")).toBe(true);
+    });
+
+    expect(bridgeLogsAsc()[0]?.args).toEqual({
+      path: harness.repoPath,
+      message: "Unsigned change",
+      signCommit: false,
+    });
   });
 });

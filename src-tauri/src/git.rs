@@ -398,7 +398,7 @@ fn ssh_signing_preparation(
         return Ok(SshSigningPreparation::default());
     }
 
-    let envs = ssh_session_env(app)?;
+    let mut envs = ssh_session_env(app)?;
     if signing_key.starts_with("key::") {
         return Ok(SshSigningPreparation {
             envs,
@@ -421,8 +421,24 @@ fn ssh_signing_preparation(
     };
 
     if public_key_path.is_file() {
-        ensure_ssh_key_added_to_agent(&envs, &private_key_path, &public_key_path)?;
-        let git_config_overrides = if configured_is_public {
+        let needs_security_key_touch =
+            signing_key_requires_user_presence(signing_key, Some(&public_key_path));
+        let use_private_security_key_file = needs_security_key_touch && private_key_path.is_file();
+        if !use_private_security_key_file {
+            ensure_ssh_key_added_to_agent(&envs, &private_key_path, &public_key_path)?;
+        } else {
+            envs.retain(|(key, _)| key != "SSH_AUTH_SOCK" && key != "SSH_AGENT_PID");
+            envs.extend([
+                ("SSH_AUTH_SOCK".to_string(), String::new()),
+                ("SSH_AGENT_PID".to_string(), String::new()),
+            ]);
+        }
+        let git_config_overrides = if configured_is_public && use_private_security_key_file {
+            vec![
+                "-c".to_string(),
+                format!("user.signingkey={}", private_key_path.to_string_lossy()),
+            ]
+        } else if configured_is_public || use_private_security_key_file {
             Vec::new()
         } else {
             vec![
@@ -433,10 +449,7 @@ fn ssh_signing_preparation(
         return Ok(SshSigningPreparation {
             envs,
             git_config_overrides,
-            needs_security_key_touch: signing_key_requires_user_presence(
-                signing_key,
-                Some(&public_key_path),
-            ),
+            needs_security_key_touch,
         });
     }
 
@@ -3857,16 +3870,31 @@ pub fn discard_path_changes(
     )
 }
 
-fn commit_staged_blocking(app: AppHandle, path: String, message: String) -> Result<(), String> {
+fn commit_staged_blocking(
+    app: AppHandle,
+    path: String,
+    message: String,
+    sign_commit: bool,
+) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let msg = message.trim();
     if msg.is_empty() {
         return Err("Commit message cannot be empty.".to_string());
     }
-    let prep = ssh_signing_preparation(&app, &path_buf)?;
+    let prep = if sign_commit {
+        ssh_signing_preparation(&app, &path_buf)?
+    } else {
+        SshSigningPreparation::default()
+    };
     let mut args = prep.git_config_overrides;
-    args.extend(["commit".to_string(), "-m".to_string(), msg.to_string()]);
+    args.push("commit".to_string());
+    args.push(if sign_commit {
+        "-S".to_string()
+    } else {
+        "--no-gpg-sign".to_string()
+    });
+    args.extend(["-m".to_string(), msg.to_string()]);
     let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
     let initial_stderr_lines = if prep.needs_security_key_touch {
         notify_ssh_signing_touch_required(&app, &path_buf);
@@ -3874,21 +3902,31 @@ fn commit_staged_blocking(app: AppHandle, path: String, message: String) -> Resu
     } else {
         Vec::new()
     };
+    let extra_envs = prep
+        .envs
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
     run_git_streaming_with_input_env_and_initial_lines(
         &app,
         &path_buf,
         &args_ref,
         "commit",
         None,
-        &[],
+        &extra_envs,
         &initial_stderr_lines,
     )?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn commit_staged(app: AppHandle, path: String, message: String) -> Result<(), String> {
-    run_blocking_git_command(move || commit_staged_blocking(app, path, message)).await
+pub async fn commit_staged(
+    app: AppHandle,
+    path: String,
+    message: String,
+    sign_commit: bool,
+) -> Result<(), String> {
+    run_blocking_git_command(move || commit_staged_blocking(app, path, message, sign_commit)).await
 }
 
 /// Amend `HEAD` with staged changes. With a non-empty `message`, replaces the commit message (`git commit --amend -m`).
@@ -3897,20 +3935,26 @@ fn amend_last_commit_blocking(
     app: AppHandle,
     path: String,
     message: Option<String>,
+    sign_commit: bool,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
     ensure_git_repo(&path_buf)?;
     let trimmed = message.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
-    let prep = ssh_signing_preparation(&app, &path_buf)?;
+    let prep = if sign_commit {
+        ssh_signing_preparation(&app, &path_buf)?
+    } else {
+        SshSigningPreparation::default()
+    };
     match trimmed {
         Some(m) => {
             let mut args = prep.git_config_overrides.clone();
-            args.extend([
-                "commit".to_string(),
-                "--amend".to_string(),
-                "-m".to_string(),
-                m.to_string(),
-            ]);
+            args.extend(["commit".to_string(), "--amend".to_string()]);
+            args.push(if sign_commit {
+                "-S".to_string()
+            } else {
+                "--no-gpg-sign".to_string()
+            });
+            args.extend(["-m".to_string(), m.to_string()]);
             let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
             let initial_stderr_lines = if prep.needs_security_key_touch {
                 notify_ssh_signing_touch_required(&app, &path_buf);
@@ -3918,23 +3962,30 @@ fn amend_last_commit_blocking(
             } else {
                 Vec::new()
             };
+            let extra_envs = prep
+                .envs
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect::<Vec<_>>();
             run_git_streaming_with_input_env_and_initial_lines(
                 &app,
                 &path_buf,
                 &args_ref,
                 "commit --amend",
                 None,
-                &[],
+                &extra_envs,
                 &initial_stderr_lines,
             )?;
         }
         None => {
             let mut args = prep.git_config_overrides;
-            args.extend([
-                "commit".to_string(),
-                "--amend".to_string(),
-                "--no-edit".to_string(),
-            ]);
+            args.extend(["commit".to_string(), "--amend".to_string()]);
+            args.push(if sign_commit {
+                "-S".to_string()
+            } else {
+                "--no-gpg-sign".to_string()
+            });
+            args.push("--no-edit".to_string());
             let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
             let initial_stderr_lines = if prep.needs_security_key_touch {
                 notify_ssh_signing_touch_required(&app, &path_buf);
@@ -3942,13 +3993,18 @@ fn amend_last_commit_blocking(
             } else {
                 Vec::new()
             };
+            let extra_envs = prep
+                .envs
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect::<Vec<_>>();
             run_git_streaming_with_input_env_and_initial_lines(
                 &app,
                 &path_buf,
                 &args_ref,
                 "commit --amend",
                 None,
-                &[],
+                &extra_envs,
                 &initial_stderr_lines,
             )?;
         }
@@ -3961,8 +4017,10 @@ pub async fn amend_last_commit(
     app: AppHandle,
     path: String,
     message: Option<String>,
+    sign_commit: bool,
 ) -> Result<(), String> {
-    run_blocking_git_command(move || amend_last_commit_blocking(app, path, message)).await
+    run_blocking_git_command(move || amend_last_commit_blocking(app, path, message, sign_commit))
+        .await
 }
 
 /// Rewrite a commit message on the current branch without changing file contents.

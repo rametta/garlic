@@ -204,6 +204,7 @@ pub fn run() {
             settings::set_graph_commits_page_size,
             settings::set_graph_commit_title_font_size,
             settings::set_notify_git_completion,
+            settings::set_sign_commits,
             write_export_text_file,
             export_bridge_debug_to_downloads,
             open_in_cursor::open_in_cursor,

@@ -40,8 +40,18 @@ export interface CommitComposerProps {
   repoOperationLabel: string | null;
   openaiApiKey: string;
   openaiModel: string;
-  onCommit: (options: { message: string; amendLastCommit: boolean }) => Promise<boolean>;
-  onCommitAndPush: (options: { message: string; skipHooks: boolean }) => Promise<boolean>;
+  signCommits: boolean;
+  onSignCommitsChange: (enabled: boolean) => void;
+  onCommit: (options: {
+    message: string;
+    amendLastCommit: boolean;
+    signCommit: boolean;
+  }) => Promise<boolean>;
+  onCommitAndPush: (options: {
+    message: string;
+    skipHooks: boolean;
+    signCommit: boolean;
+  }) => Promise<boolean>;
   onPushToOrigin: (options: { skipHooks: boolean }) => Promise<void>;
   onOperationError: (message: string | null) => void;
 }
@@ -59,6 +69,8 @@ export const CommitComposer = memo(function CommitComposer({
   repoOperationLabel,
   openaiApiKey,
   openaiModel,
+  signCommits,
+  onSignCommitsChange,
   onCommit,
   onCommitAndPush,
   onPushToOrigin,
@@ -133,7 +145,7 @@ export const CommitComposer = memo(function CommitComposer({
     const message = commitMessage.trim();
     if (!amendLastCommit && !message) return;
     if (amendLastCommit && message.length === 0 && !hasStagedFiles) return;
-    const shouldClearDraft = await onCommit({ message, amendLastCommit });
+    const shouldClearDraft = await onCommit({ message, amendLastCommit, signCommit: signCommits });
     if (shouldClearDraft) clearCommitDraft();
   }, [
     amendLastCommit,
@@ -143,6 +155,7 @@ export const CommitComposer = memo(function CommitComposer({
     invalidCommitDraft,
     onCommit,
     onOperationError,
+    signCommits,
   ]);
 
   const handleCommitAndPush = useCallback(async () => {
@@ -152,7 +165,11 @@ export const CommitComposer = memo(function CommitComposer({
     }
     const message = commitMessage.trim();
     if (!message || !hasStagedFiles) return;
-    const shouldClearDraft = await onCommitAndPush({ message, skipHooks: pushSkipHooks });
+    const shouldClearDraft = await onCommitAndPush({
+      message,
+      skipHooks: pushSkipHooks,
+      signCommit: signCommits,
+    });
     if (shouldClearDraft) clearCommitDraft();
   }, [
     clearCommitDraft,
@@ -162,6 +179,7 @@ export const CommitComposer = memo(function CommitComposer({
     onCommitAndPush,
     onOperationError,
     pushSkipHooks,
+    signCommits,
   ]);
 
   const handleAiGenerateCommitMessage = useCallback(async () => {
@@ -218,6 +236,23 @@ export const CommitComposer = memo(function CommitComposer({
               Commit
             </h2>
             <div className="flex flex-wrap items-center gap-2">
+              <label className="label cursor-pointer gap-1.5 py-0">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-xs"
+                  checked={signCommits}
+                  disabled={stageCommitBusy || commitPushBusy}
+                  onChange={(e) => {
+                    onSignCommitsChange(e.target.checked);
+                  }}
+                />
+                <span
+                  className="label-text text-[0.65rem] leading-tight"
+                  title="Sign commits with Git's default signing setup"
+                >
+                  Sign commit
+                </span>
+              </label>
               <label className="label cursor-pointer gap-1.5 py-0">
                 <input
                   type="checkbox"

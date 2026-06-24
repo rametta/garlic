@@ -36,6 +36,7 @@ export function renderAppHarness(startup: RestoreLastRepo) {
         graphCommitsPageSize={DEFAULT_GRAPH_COMMITS_PAGE_SIZE}
         graphCommitTitleFontSizePx={DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX}
         notifyGitCompletion
+        signCommits
       />
     </QueryClientProvider>,
   );

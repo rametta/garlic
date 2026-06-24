@@ -78,6 +78,7 @@ commands.allow = [
   "set_graph_commits_page_size",
   "set_graph_commit_title_font_size",
   "set_notify_git_completion",
+  "set_sign_commits",
   "write_export_text_file",
   "export_bridge_debug_to_downloads",
   "open_in_cursor",

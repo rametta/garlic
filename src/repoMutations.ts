@@ -757,7 +757,7 @@ export function useDiscardPatchMutation() {
 
 export function useAmendLastCommitMutation() {
   return useRepoCommandMutation({
-    mutationFn: (variables: { path: string; message: string | null }) =>
+    mutationFn: (variables: { path: string; message: string | null; signCommit: boolean }) =>
       invokeRepoMutation("amend_last_commit", variables),
     optimisticUpdate: (snapshot) =>
       withWorkingTreeFiles(snapshot, clearStagedWorkingTreeFiles(snapshot.workingTreeFiles)),
@@ -775,7 +775,7 @@ export function useRewordCommitMutation() {
 
 export function useCommitStagedMutation() {
   return useRepoCommandMutation({
-    mutationFn: (variables: { path: string; message: string }) =>
+    mutationFn: (variables: { path: string; message: string; signCommit: boolean }) =>
       invokeRepoMutation("commit_staged", variables),
     optimisticUpdate: (snapshot) =>
       withCurrentBranchAheadBumped(

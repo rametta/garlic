@@ -1114,6 +1114,7 @@ export default function App({
   graphCommitsPageSize: initialGraphCommitsPageSize,
   graphCommitTitleFontSizePx: initialGraphCommitTitleFontSizePx,
   notifyGitCompletion: initialNotifyGitCompletion,
+  signCommits: initialSignCommits,
 }: {
   startup: RestoreLastRepo;
   /** Persisted value: `auto` or a DaisyUI theme name. */
@@ -1134,6 +1135,8 @@ export default function App({
   graphCommitTitleFontSizePx: number;
   /** Notify when a long push or commit completes. */
   notifyGitCompletion: boolean;
+  /** Sign commits using Git's default signing setup. */
+  signCommits: boolean;
 }) {
   const [themePreference, setThemePreference] = useState(initialThemePreference);
   const [branchSidebarSections, setBranchSidebarSections] = useState<BranchSidebarSectionsState>(
@@ -1149,6 +1152,7 @@ export default function App({
     clampGraphCommitTitleFontSizePx(initialGraphCommitTitleFontSizePx),
   );
   const [notifyGitCompletion, setNotifyGitCompletion] = useState(initialNotifyGitCompletion);
+  const [signCommits, setSignCommits] = useState(initialSignCommits);
   const queryClient = useQueryClient();
   const [currentRepoPath, setCurrentRepoPath] = useState<string | null>(
     () => startup.metadata?.path ?? null,
@@ -4761,6 +4765,13 @@ export default function App({
     if (!preferredWipFile) return;
     void loadDiffForFile(preferredWipFile, preferredWipFile.unstaged ? "unstaged" : "staged");
   }, [loadDiffForFile, preferredWipFile]);
+  const handleSignCommitsChange = useCallback((enabled: boolean) => {
+    setSignCommits(enabled);
+    void invoke("set_sign_commits", { enabled }).catch((error: unknown) => {
+      setSignCommits(!enabled);
+      setOperationError(invokeErrorMessage(error));
+    });
+  }, []);
   const handleCheckoutLocal = useCallback(
     (branchName: string) => {
       void onCheckoutLocal(branchName);
@@ -4786,7 +4797,15 @@ export default function App({
     [openWorktreeBrowse],
   );
   const submitCommit = useCallback(
-    async ({ message, amendLastCommit }: { message: string; amendLastCommit: boolean }) => {
+    async ({
+      message,
+      amendLastCommit,
+      signCommit,
+    }: {
+      message: string;
+      amendLastCommit: boolean;
+      signCommit: boolean;
+    }) => {
       if (!repo?.path || repo.error) return false;
       if (!amendLastCommit && !message) return false;
       if (amendLastCommit && message.length === 0 && !hasStagedFiles) return false;
@@ -4797,9 +4816,10 @@ export default function App({
           await amendLastCommitMutation.mutateAsync({
             path: repo.path,
             message: message.length > 0 ? message : null,
+            signCommit,
           });
         } else {
-          await commitStagedMutation.mutateAsync({ path: repo.path, message });
+          await commitStagedMutation.mutateAsync({ path: repo.path, message, signCommit });
         }
         return true;
       } catch (e) {
@@ -4865,13 +4885,21 @@ export default function App({
     [branchBusy, forcePushCurrentBranchToOrigin, pushBusy, repo, stashBusy],
   );
   const submitCommitAndPush = useCallback(
-    async ({ message, skipHooks }: { message: string; skipHooks: boolean }) => {
+    async ({
+      message,
+      skipHooks,
+      signCommit,
+    }: {
+      message: string;
+      skipHooks: boolean;
+      signCommit: boolean;
+    }) => {
       if (!repo?.path || repo.error || repo.detached || !message || !hasStagedFiles) return false;
       setCommitPushBusy(true);
       setOperationError(null);
       let committed = false;
       try {
-        await commitStagedMutation.mutateAsync({ path: repo.path, message });
+        await commitStagedMutation.mutateAsync({ path: repo.path, message, signCommit });
         committed = true;
         await pushToOriginMutation.mutateAsync({
           path: repo.path,
@@ -6921,6 +6949,8 @@ export default function App({
                 repoOperationLabel={repo?.operationState?.label ?? null}
                 openaiApiKey={openaiApiKey}
                 openaiModel={openaiModel}
+                signCommits={signCommits}
+                onSignCommitsChange={handleSignCommitsChange}
                 onCommit={submitCommit}
                 onCommitAndPush={submitCommitAndPush}
                 onPushToOrigin={pushCurrentBranchToOrigin}

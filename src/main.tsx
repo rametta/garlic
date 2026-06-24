@@ -34,6 +34,8 @@ export interface AppBootstrap {
   graphCommitTitleFontSizePx: number;
   /** System notification after long push/commit (default on). */
   notifyGitCompletion: boolean;
+  /** Whether commits should be signed with Git's default signing setup (default on). */
+  signCommits: boolean;
 }
 
 interface WireAppBootstrap extends Omit<AppBootstrap, "repo"> {
@@ -69,6 +71,7 @@ export const emptyAppBootstrap: AppBootstrap = {
   graphCommitsPageSize: DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
   graphCommitTitleFontSizePx: DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX,
   notifyGitCompletion: true,
+  signCommits: true,
 };
 
 async function bootstrap() {
@@ -101,6 +104,7 @@ async function bootstrap() {
             data.graphCommitTitleFontSizePx ?? DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX
           }
           notifyGitCompletion={data.notifyGitCompletion ?? true}
+          signCommits={data.signCommits ?? true}
         />
         {import.meta.env.DEV ? <ReactQueryDevtools buttonPosition="bottom-left" /> : null}
         {TAURI_RUNTIME_DEBUG_ENABLED ? <TauriBridgeInspector /> : null}
