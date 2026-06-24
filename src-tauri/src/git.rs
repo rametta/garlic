@@ -296,8 +296,7 @@ struct SshSigningPreparation {
     needs_security_key_touch: bool,
 }
 
-const SSH_SIGNING_TOUCH_LINE: &str =
-    "Touch your YubiKey or security key to sign this commit.";
+const SSH_SIGNING_TOUCH_LINE: &str = "Touch your YubiKey or security key to sign this commit.";
 
 fn ssh_public_key_requires_user_presence(public_key: &str) -> bool {
     let key_type = public_key
@@ -962,6 +961,22 @@ pub struct CommitSignatureResultEvent {
     pub commit_hash: String,
     pub request_id: u32,
     pub verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<CommitSignatureDetails>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitSignatureDetails {
+    pub format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signing_key_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signing_key_label: Option<String>,
 }
 
 /// Remote-tracking branch (`refs/remotes/...`) with tip OID.
@@ -4837,13 +4852,135 @@ pub fn list_commit_files(
         .collect())
 }
 
-/// `%G?` plus `git verify-commit` so both GPG and SSH signing are recognized when Git’s trust
-/// letter alone is ambiguous.
+fn commit_object_text_has_signature(object: &str) -> bool {
+    object.lines().any(|line| line.starts_with("gpgsig "))
+}
+
+fn commit_object_text_signature_format(object: &str) -> Option<&'static str> {
+    for line in object.lines() {
+        if line.starts_with("gpgsig -----BEGIN SSH SIGNATURE-----") {
+            return Some("ssh");
+        }
+        if line.starts_with("gpgsig -----BEGIN PGP SIGNATURE-----") {
+            return Some("gpg");
+        }
+        if line.starts_with("gpgsig -----BEGIN SIGNED MESSAGE-----")
+            || line.starts_with("gpgsig -----BEGIN X509 SIGNATURE-----")
+        {
+            return Some("x509");
+        }
+    }
+    None
+}
+
+fn commit_object_has_signature(workdir: &Path, hash: &str) -> bool {
+    let Ok(object) = git_output(workdir, &["cat-file", "-p", hash]) else {
+        return false;
+    };
+    commit_object_text_has_signature(&object)
+}
+
+fn commit_object_signature_format(workdir: &Path, hash: &str) -> Option<String> {
+    let object = git_output(workdir, &["cat-file", "-p", hash]).ok()?;
+    commit_object_text_signature_format(&object).map(str::to_string)
+}
+
+fn public_key_label(public_key: &str) -> Option<String> {
+    let mut parts = public_key.split_whitespace();
+    let key_type = parts.next()?.trim();
+    if key_type.is_empty() {
+        return None;
+    }
+    let _key_blob = parts.next()?;
+    let comment = parts.collect::<Vec<_>>().join(" ");
+    if comment.is_empty() {
+        Some(key_type.to_string())
+    } else {
+        Some(format!("{key_type} {comment}"))
+    }
+}
+
+fn configured_ssh_signing_key_details(workdir: &Path) -> (Option<String>, Option<String>) {
+    let Some(signing_key) =
+        git_output_allow_fail(workdir, &["config", "--path", "--get", "user.signingkey"])
+    else {
+        return (None, None);
+    };
+    let signing_key = signing_key.trim();
+    if signing_key.is_empty() {
+        return (None, None);
+    }
+    if signing_key.starts_with("key::") {
+        return (
+            None,
+            public_key_label(signing_key.trim_start_matches("key::")),
+        );
+    }
+
+    let configured_path = PathBuf::from(signing_key);
+    let public_key_path = if signing_key.ends_with(".pub") {
+        configured_path.clone()
+    } else {
+        PathBuf::from(format!("{signing_key}.pub"))
+    };
+    let label = std::fs::read_to_string(&public_key_path)
+        .ok()
+        .and_then(|contents| public_key_label(&contents));
+
+    (Some(configured_path.to_string_lossy().to_string()), label)
+}
+
+fn commit_signature_details(
+    workdir: &Path,
+    hash: &str,
+    has_signature: bool,
+) -> Option<CommitSignatureDetails> {
+    if !has_signature {
+        return None;
+    }
+    let signature_format = commit_object_signature_format(workdir, hash)
+        .or_else(|| {
+            git_output_allow_fail(workdir, &["config", "--get", "gpg.format"])
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| "gpg".to_string());
+    let (signing_key_path, signing_key_label) = if signature_format == "ssh" {
+        configured_ssh_signing_key_details(workdir)
+    } else {
+        (None, None)
+    };
+    let metadata = git_output_allow_fail(workdir, &["log", "-1", "--format=%GS%x1f%GK", hash])
+        .unwrap_or_default();
+    let mut parts = metadata.splitn(2, '\x1f');
+    let signer = parts
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let key = parts
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    Some(CommitSignatureDetails {
+        format: signature_format,
+        signer,
+        key,
+        signing_key_path,
+        signing_key_label,
+    })
+}
+
+/// `%G?` plus `git verify-commit` and object inspection so SSH signatures are not marked
+/// unsigned just because local trust (`gpg.ssh.allowedSignersFile`) is not configured.
 fn commit_signature_verified_flag(workdir: &Path, hash: &str) -> Option<bool> {
     let workdir = workdir.to_path_buf();
     let hash_owned = hash.to_string();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let has_signature = commit_object_has_signature(&workdir, &hash_owned);
         let mut cmd = git_cmd(&workdir);
         cmd.args(["log", "-1", "--format=%G?", &hash_owned])
             .env("GIT_TERMINAL_PROMPT", "0");
@@ -4855,7 +4992,7 @@ fn commit_signature_verified_flag(workdir: &Path, hash: &str) -> Option<bool> {
                 if ch == 'G' {
                     Some(true)
                 } else if ch == 'N' {
-                    Some(false)
+                    Some(has_signature)
                 } else if flag.is_empty() {
                     verify_commit_quiet(&workdir, &hash_owned)
                 } else if ch == 'B' {
@@ -4906,6 +5043,11 @@ pub fn start_commit_signature_check(
 
     std::thread::spawn(move || {
         let verified = commit_signature_verified_flag(&workdir, &hash_owned);
+        let details = commit_signature_details(
+            &workdir,
+            &hash_owned,
+            verified.unwrap_or(false) || commit_object_has_signature(&workdir, &hash_owned),
+        );
         let _ = app.emit(
             "commit-signature-result",
             CommitSignatureResultEvent {
@@ -4913,6 +5055,7 @@ pub fn start_commit_signature_check(
                 commit_hash: hash_owned,
                 request_id,
                 verified,
+                details,
             },
         );
     });
@@ -5443,7 +5586,8 @@ pub async fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Re
 #[cfg(test)]
 mod tests {
     use super::{
-        build_stash_push_args, commit_path_display_parts, parse_conflict_ranges,
+        build_stash_push_args, commit_object_text_has_signature,
+        commit_object_text_signature_format, commit_path_display_parts, parse_conflict_ranges,
         parse_porcelain_v1_z, parse_porcelain_xy, parse_unmerged_index_z,
         ssh_public_key_requires_user_presence,
     };
@@ -5511,6 +5655,39 @@ mod tests {
         assert!(!ssh_public_key_requires_user_presence(
             "ssh-ed25519 AAAA comment"
         ));
+    }
+
+    #[test]
+    fn commit_object_text_has_signature_detects_ssh_signature_block() {
+        let ssh_signed = "\
+tree abc
+author A <a@example.com> 1 +0000
+committer A <a@example.com> 1 +0000
+gpgsig -----BEGIN SSH SIGNATURE-----
+ AAAA
+ -----END SSH SIGNATURE-----
+
+subject
+";
+        let gpg_signed = "\
+tree abc
+author A <a@example.com> 1 +0000
+committer A <a@example.com> 1 +0000
+gpgsig -----BEGIN PGP SIGNATURE-----
+ AAAA
+ -----END PGP SIGNATURE-----
+
+subject
+";
+        assert!(commit_object_text_has_signature(ssh_signed));
+        assert_eq!(commit_object_text_signature_format(ssh_signed), Some("ssh"));
+        assert!(commit_object_text_has_signature(gpg_signed));
+        assert_eq!(commit_object_text_signature_format(gpg_signed), Some("gpg"));
+        assert!(!commit_object_text_has_signature("tree abc\n\nsubject\n"));
+        assert_eq!(
+            commit_object_text_signature_format("tree abc\n\nsubject\n"),
+            None
+        );
     }
 
     #[test]

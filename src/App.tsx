@@ -254,11 +254,20 @@ function parseGitCloneProgressPercent(line: string): number | null {
 }
 
 /** Emitted after `start_commit_signature_check` (Rust thread; does not block invoke). */
+interface CommitSignatureDetailsPayload {
+  format: string;
+  signer?: string | null;
+  key?: string | null;
+  signingKeyPath?: string | null;
+  signingKeyLabel?: string | null;
+}
+
 interface CommitSignatureResultPayload {
   path: string;
   commitHash: string;
   requestId: number;
   verified: boolean | null;
+  details?: CommitSignatureDetailsPayload | null;
 }
 
 /** One file changed in a commit from `list_commit_files`. */
@@ -1305,7 +1314,8 @@ export default function App({
   const [commitSignature, setCommitSignature] = useState<{
     loading: boolean;
     verified: boolean | null;
-  }>({ loading: false, verified: null });
+    details: CommitSignatureDetailsPayload | null;
+  }>({ loading: false, verified: null, details: null });
   const [commitDiffPath, setCommitDiffPath] = useState<string | null>(null);
   const [commitDiffText, setCommitDiffText] = useState<string | null>(null);
   const [commitDiffLoading, setCommitDiffLoading] = useState(false);
@@ -1885,7 +1895,7 @@ export default function App({
     setCommitDetailsLoading(false);
     setCommitDetailsError(null);
     setCommitDetailsExpanded(false);
-    setCommitSignature({ loading: false, verified: null });
+    setCommitSignature({ loading: false, verified: null, details: null });
     setCommitDiffPath(null);
     setCommitDiffText(null);
     setCommitDiffLoading(false);
@@ -2320,7 +2330,7 @@ export default function App({
       setCommitDetailsExpanded(false);
       setCommitBrowseLoading(true);
       setCommitBrowseError(null);
-      setCommitSignature({ loading: false, verified: null });
+      setCommitSignature({ loading: false, verified: null, details: null });
 
       void invoke<CommitDetails>("get_commit_details", {
         path: pathAtStart,
@@ -3943,7 +3953,7 @@ export default function App({
         const p = e.payload;
         if (activeRepoPathRef.current !== p.path) return;
         if (p.requestId !== selectCommitSeqRef.current) return;
-        setCommitSignature({ loading: false, verified: p.verified });
+        setCommitSignature({ loading: false, verified: p.verified, details: p.details ?? null });
       }),
       listen<CloneProgressPayload>("clone-progress", (e) => {
         const p = e.payload;
@@ -6304,7 +6314,11 @@ export default function App({
                                             }
                                             const pathAtStart = repo.path;
                                             const seq = selectCommitSeqRef.current;
-                                            setCommitSignature({ loading: true, verified: null });
+                                            setCommitSignature({
+                                              loading: true,
+                                              verified: null,
+                                              details: null,
+                                            });
                                             void invoke("start_commit_signature_check", {
                                               path: pathAtStart,
                                               commitHash: commitBrowseHash,
@@ -6319,6 +6333,7 @@ export default function App({
                                               setCommitSignature({
                                                 loading: false,
                                                 verified: null,
+                                                details: null,
                                               });
                                             });
                                           }}
@@ -6379,7 +6394,58 @@ export default function App({
                                                         checking…
                                                       </span>
                                                     ) : commitSignature.verified === true ? (
-                                                      <span className="text-success">signed ⛨</span>
+                                                      <div className="space-y-1">
+                                                        <span className="text-success">
+                                                          signed ⛨
+                                                        </span>
+                                                        {commitSignature.details ? (
+                                                          <div className="text-base-content/55">
+                                                            <span>
+                                                              {commitSignature.details.format.toUpperCase()}
+                                                              {commitSignature.details
+                                                                .signingKeyLabel
+                                                                ? ` · ${commitSignature.details.signingKeyLabel}`
+                                                                : commitSignature.details.signer
+                                                                  ? ` · ${commitSignature.details.signer}`
+                                                                  : commitSignature.details.key
+                                                                    ? ` · ${commitSignature.details.key}`
+                                                                    : ""}
+                                                            </span>
+                                                            {commitSignature.details
+                                                              .signingKeyPath ? (
+                                                              <>
+                                                                <span> · </span>
+                                                                <button
+                                                                  type="button"
+                                                                  className="link font-mono text-[0.65rem] link-hover"
+                                                                  title={
+                                                                    commitSignature.details
+                                                                      .signingKeyPath
+                                                                  }
+                                                                  onClick={() => {
+                                                                    const keyPath =
+                                                                      commitSignature.details
+                                                                        ?.signingKeyPath;
+                                                                    if (!repo?.path || !keyPath) {
+                                                                      return;
+                                                                    }
+                                                                    void invoke("open_in_cursor", {
+                                                                      path: repo.path,
+                                                                      filePath: keyPath,
+                                                                    }).catch((error: unknown) => {
+                                                                      setOperationError(
+                                                                        invokeErrorMessage(error),
+                                                                      );
+                                                                    });
+                                                                  }}
+                                                                >
+                                                                  open key
+                                                                </button>
+                                                              </>
+                                                            ) : null}
+                                                          </div>
+                                                        ) : null}
+                                                      </div>
                                                     ) : commitSignature.verified === false ? (
                                                       <span className="text-base-content/70">
                                                         unsigned
