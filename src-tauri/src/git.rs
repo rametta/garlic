@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
 
 /// Serialized Git object name from the UI: `%H`, abbreviated SHA-1, or full SHA-256 hex (64 chars max).
@@ -325,14 +326,13 @@ fn notify_ssh_signing_touch_required(app: &AppHandle, workdir: &Path) {
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .unwrap_or("repository");
-    let _ = app
-        .notification()
-        .builder()
-        .title("Touch your YubiKey")
-        .body(format!(
-            "Git is waiting for your security key to sign the commit in {repo_label}."
+    app.dialog()
+        .message(format!(
+            "Git is waiting for your security key to sign the commit in {repo_label}.\n\nTouch your YubiKey or security key when it flashes."
         ))
-        .show();
+        .title("Touch your YubiKey")
+        .kind(MessageDialogKind::Info)
+        .show(|_| {});
 }
 
 #[cfg(not(target_os = "windows"))]
