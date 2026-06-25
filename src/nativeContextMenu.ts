@@ -507,14 +507,12 @@ export async function popupTagSidebarMenu(
   args: {
     disabled: boolean;
     hasOrigin: boolean;
-    onOrigin: boolean;
     onDeleteLocal: () => void;
     onDeleteRemote: () => void;
     onPushToOrigin: () => void;
   },
 ): Promise<void> {
-  const deleteRemoteEnabled = !args.disabled && args.hasOrigin && args.onOrigin;
-  const pushEnabled = !args.disabled && args.hasOrigin && !args.onOrigin;
+  const remoteActionsEnabled = !args.disabled && args.hasOrigin;
   try {
     await showMenuAt(clientX, clientY, [
       {
@@ -528,7 +526,7 @@ export async function popupTagSidebarMenu(
       {
         id: "tag_sidebar_delete_remote",
         text: "Delete tag on origin…",
-        enabled: deleteRemoteEnabled,
+        enabled: remoteActionsEnabled,
         action: () => {
           args.onDeleteRemote();
         },
@@ -536,7 +534,7 @@ export async function popupTagSidebarMenu(
       {
         id: "tag_sidebar_push_origin",
         text: "Push tag to origin…",
-        enabled: pushEnabled,
+        enabled: remoteActionsEnabled,
         action: () => {
           args.onPushToOrigin();
         },

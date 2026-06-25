@@ -65,7 +65,6 @@ import type {
   CommitEntry,
   StashEntry,
   TagEntry,
-  TagOriginStatus,
   WireCommitEntry,
   WorktreeEntry,
 } from "./repoTypes";
@@ -159,7 +158,6 @@ export type {
   RemoteBranchEntry,
   StashEntry,
   TagEntry,
-  TagOriginStatus,
   WorktreeEntry,
 } from "./repoTypes";
 export type { LineStat, RepoMetadata, RestoreLastRepo, WorkingTreeFile } from "./gitTypes";
@@ -4368,22 +4366,13 @@ export default function App({
     }
   }
 
-  async function openTagSidebarMenu(tagName: string, clientX: number, clientY: number) {
+  function openTagSidebarMenu(tagName: string, clientX: number, clientY: number) {
     if (!repo?.path || repo.error) return;
     if (branchBusy || stashBusy !== null || pushBusy) return;
-    let status: TagOriginStatus = { hasOrigin: false, onOrigin: false };
-    try {
-      status = await invoke<TagOriginStatus>("tag_origin_status", {
-        path: repo.path,
-        tag: tagName,
-      });
-    } catch {
-      // e.g. ls-remote failed while offline
-    }
+    const hasOrigin = repo.remotes.some((remote) => remote.name === "origin");
     void popupTagSidebarMenu(clientX, clientY, {
       disabled: Boolean(branchBusy) || stashBusy !== null || pushBusy,
-      hasOrigin: status.hasOrigin,
-      onOrigin: status.onOrigin,
+      hasOrigin,
       onDeleteLocal: () => void onDeleteTag(tagName),
       onDeleteRemote: () => void onDeleteRemoteTag(tagName),
       onPushToOrigin: () => void runPushTagToOrigin(tagName),
