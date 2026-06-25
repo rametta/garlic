@@ -20,6 +20,15 @@ function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
+function cleanupFixtureRoot(rootDir) {
+  rmSync(rootDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  });
+}
+
 export function createNativeRepoFixture() {
   const rootDir = mkdtempSync(path.join(os.tmpdir(), "garlic-native-e2e-"));
   const repoPath = path.join(rootDir, "repo");
@@ -49,7 +58,7 @@ export function createNativeRepoFixture() {
       return runGit(repoPath, args);
     },
     cleanup() {
-      rmSync(rootDir, { recursive: true, force: true });
+      cleanupFixtureRoot(rootDir);
     },
   };
 }
@@ -62,6 +71,8 @@ export function createLinuxLauncherScript({ rootDir, repoPath, fakeHome, appBina
 set -euo pipefail
 export HOME=${shellEscape(fakeHome)}
 export XDG_CONFIG_HOME=${shellEscape(path.join(fakeHome, ".config"))}
+export XDG_CACHE_HOME=${shellEscape(path.join(fakeHome, ".cache"))}
+export MESA_SHADER_CACHE_DISABLE=true
 export GARLIC_E2E_REPO_PATH=${shellEscape(repoPath)}
 exec ${shellEscape(appBinaryPath)} "$@"
 `,
