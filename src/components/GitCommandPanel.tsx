@@ -70,123 +70,139 @@ export const GitCommandPanel = memo(function GitCommandPanel({ repoPath }: GitCo
   }, [gitCommandStream]);
 
   return (
-    <div className="shrink-0 border-base-300 bg-base-100">
-      <div className="card-body gap-0 p-0">
-        <div
-          className={`collapse border-0 bg-transparent shadow-none ${open ? "collapse-open" : ""}`}
-        >
-          <input
-            type="checkbox"
-            checked={open}
-            onChange={(e) => {
-              setOpen(e.target.checked);
-            }}
-            aria-label="Show or hide git command output"
-          />
-          <div className="collapse-title block! min-h-0 min-w-0 border-b border-base-300/80 px-3! py-2! text-left!">
-            <div className="flex min-w-0 items-start justify-between gap-2">
-              <div className="min-w-0">
-                <h2 className="m-0 text-xs font-semibold tracking-wide uppercase opacity-70">
-                  Git command
-                </h2>
-                <p className="mt-0.5 mb-0 text-xs text-base-content/60">
-                  {needsSecurityKeyTouch && !gitCommandStream?.finished
-                    ? "Touch your YubiKey to sign"
-                    : gitCommandStream
-                      ? gitCommandStream.finished
-                        ? gitCommandStream.success
-                          ? "Finished"
-                          : "Failed"
-                        : "Running…"
-                      : "No recent command output"}
-                </p>
-              </div>
-              <IconChevronRight
-                className={`mt-0.5 h-4 w-4 shrink-0 opacity-60 transition-transform ${
-                  open ? "rotate-90" : ""
-                }`}
-              />
+    <>
+      {needsSecurityKeyTouch && !gitCommandStream?.finished ? (
+        <div className="pointer-events-none fixed top-4 right-4 z-50 max-w-sm rounded-xl border border-warning/30 bg-base-100/95 p-4 text-base-content shadow-2xl backdrop-blur">
+          <div className="flex items-start gap-3">
+            <span className="loading mt-0.5 loading-sm loading-spinner text-warning" />
+            <div>
+              <div className="text-sm font-semibold">Touch your YubiKey</div>
+              <p className="m-0 mt-1 text-xs leading-snug text-base-content/70">
+                Git is waiting for your security key to sign this commit. This will disappear when
+                signing finishes.
+              </p>
             </div>
           </div>
-          <div className="collapse-content px-0! pt-0! pb-0!">
-            <div className="space-y-2 p-3">
-              {gitCommandStream ? (
-                <>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="m-0 text-sm font-semibold text-base-content">
-                        {gitCommandStream.operation}
-                      </p>
-                      <code
-                        className="mt-1 block max-h-10 overflow-y-auto font-mono text-[10px] leading-tight wrap-anywhere text-base-content/70"
-                        title={gitCommandStream.commandLine}
-                      >
-                        {gitCommandStream.commandLine}
-                      </code>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {mergeRequestUrl ? (
+        </div>
+      ) : null}
+      <div className="shrink-0 border-base-300 bg-base-100">
+        <div className="card-body gap-0 p-0">
+          <div
+            className={`collapse border-0 bg-transparent shadow-none ${open ? "collapse-open" : ""}`}
+          >
+            <input
+              type="checkbox"
+              checked={open}
+              onChange={(e) => {
+                setOpen(e.target.checked);
+              }}
+              aria-label="Show or hide git command output"
+            />
+            <div className="collapse-title block! min-h-0 min-w-0 border-b border-base-300/80 px-3! py-2! text-left!">
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="m-0 text-xs font-semibold tracking-wide uppercase opacity-70">
+                    Git command
+                  </h2>
+                  <p className="mt-0.5 mb-0 text-xs text-base-content/60">
+                    {needsSecurityKeyTouch && !gitCommandStream?.finished
+                      ? "Touch your YubiKey to sign"
+                      : gitCommandStream
+                        ? gitCommandStream.finished
+                          ? gitCommandStream.success
+                            ? "Finished"
+                            : "Failed"
+                          : "Running…"
+                        : "No recent command output"}
+                  </p>
+                </div>
+                <IconChevronRight
+                  className={`mt-0.5 h-4 w-4 shrink-0 opacity-60 transition-transform ${
+                    open ? "rotate-90" : ""
+                  }`}
+                />
+              </div>
+            </div>
+            <div className="collapse-content px-0! pt-0! pb-0!">
+              <div className="space-y-2 p-3">
+                {gitCommandStream ? (
+                  <>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="m-0 text-sm font-semibold text-base-content">
+                          {gitCommandStream.operation}
+                        </p>
+                        <code
+                          className="mt-1 block max-h-10 overflow-y-auto font-mono text-[10px] leading-tight wrap-anywhere text-base-content/70"
+                          title={gitCommandStream.commandLine}
+                        >
+                          {gitCommandStream.commandLine}
+                        </code>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {mergeRequestUrl ? (
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-primary"
+                            title={mergeRequestUrl}
+                            onClick={() => {
+                              void openUrl(mergeRequestUrl);
+                            }}
+                          >
+                            View MR
+                          </button>
+                        ) : null}
                         <button
                           type="button"
-                          className="btn btn-xs btn-primary"
-                          title={mergeRequestUrl}
+                          className="btn shrink-0 btn-ghost btn-xs"
                           onClick={() => {
-                            void openUrl(mergeRequestUrl);
+                            clearGitCommandStream(repoPath);
                           }}
                         >
-                          View MR
+                          Clear
                         </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="btn shrink-0 btn-ghost btn-xs"
-                        onClick={() => {
-                          clearGitCommandStream(repoPath);
-                        }}
-                      >
-                        Clear
-                      </button>
+                      </div>
                     </div>
-                  </div>
-                  <div
-                    ref={scrollRef}
-                    className="max-h-[min(12rem,35vh)] min-h-12 overflow-x-hidden overflow-y-auto rounded border border-base-300 bg-base-200/40 px-2 py-1.5 font-mono text-[11px] leading-snug wrap-anywhere [scrollbar-gutter:stable]"
-                  >
-                    {gitCommandStream.lines.length === 0 && !gitCommandStream.finished ? (
-                      <span className="text-base-content/60">Running…</span>
-                    ) : null}
-                    {gitCommandStream.lines.map((line, index) => (
-                      <div
-                        key={index}
-                        className={
-                          line.stream === "stderr" ? "text-warning" : "text-base-content/85"
-                        }
-                      >
-                        {line.text}
-                      </div>
-                    ))}
-                    {gitCommandStream.finished ? (
-                      <div
-                        className={
-                          gitCommandStream.success
-                            ? "mt-1 border-t border-base-300 pt-1 text-success"
-                            : "mt-1 border-t border-base-300 pt-1 text-error"
-                        }
-                      >
-                        {gitCommandStream.success
-                          ? "Finished."
-                          : gitCommandStream.error?.trim() || "Command failed."}
-                      </div>
-                    ) : null}
-                  </div>
-                </>
-              ) : (
-                <p className="m-0 text-xs text-base-content/50">No recent command output</p>
-              )}
+                    <div
+                      ref={scrollRef}
+                      className="max-h-[min(12rem,35vh)] min-h-12 overflow-x-hidden overflow-y-auto rounded border border-base-300 bg-base-200/40 px-2 py-1.5 font-mono text-[11px] leading-snug wrap-anywhere [scrollbar-gutter:stable]"
+                    >
+                      {gitCommandStream.lines.length === 0 && !gitCommandStream.finished ? (
+                        <span className="text-base-content/60">Running…</span>
+                      ) : null}
+                      {gitCommandStream.lines.map((line, index) => (
+                        <div
+                          key={index}
+                          className={
+                            line.stream === "stderr" ? "text-warning" : "text-base-content/85"
+                          }
+                        >
+                          {line.text}
+                        </div>
+                      ))}
+                      {gitCommandStream.finished ? (
+                        <div
+                          className={
+                            gitCommandStream.success
+                              ? "mt-1 border-t border-base-300 pt-1 text-success"
+                              : "mt-1 border-t border-base-300 pt-1 text-error"
+                          }
+                        >
+                          {gitCommandStream.success
+                            ? "Finished."
+                            : gitCommandStream.error?.trim() || "Command failed."}
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="m-0 text-xs text-base-content/50">No recent command output</p>
+                )}
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 });

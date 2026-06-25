@@ -19,7 +19,6 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
 
 /// Serialized Git object name from the UI: `%H`, abbreviated SHA-1, or full SHA-256 hex (64 chars max).
@@ -320,19 +319,8 @@ fn signing_key_requires_user_presence(signing_key: &str, public_key_path: Option
         .is_some_and(|public_key| ssh_public_key_requires_user_presence(&public_key))
 }
 
-fn notify_ssh_signing_touch_required(app: &AppHandle, workdir: &Path) {
-    let repo_label = workdir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("repository");
-    app.dialog()
-        .message(format!(
-            "Git is waiting for your security key to sign the commit in {repo_label}.\n\nTouch your YubiKey or security key when it flashes."
-        ))
-        .title("Touch your YubiKey")
-        .kind(MessageDialogKind::Info)
-        .show(|_| {});
+fn notify_ssh_signing_touch_required(_app: &AppHandle, _workdir: &Path) {
+    // The frontend renders this from the git command stream and auto-hides it when the command ends.
 }
 
 #[cfg(not(target_os = "windows"))]
