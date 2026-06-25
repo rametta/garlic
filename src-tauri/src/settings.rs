@@ -362,6 +362,8 @@ fn restore_repo_snapshot(
 #[serde(rename_all = "camelCase")]
 pub struct AppBootstrap {
     pub repo: RestoreLastRepo,
+    /// Most recently opened repo paths (newest first), used by the in-app repo tabs.
+    pub recent_repo_paths: Vec<String>,
     pub theme: Option<String>,
     pub openai_api_key: Option<String>,
     /// Resolved model id (defaults to `gpt-5.4-mini` when unset).
@@ -409,6 +411,12 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
     }
     Ok(AppBootstrap {
         repo,
+        recent_repo_paths: settings
+            .recent_repo_paths
+            .iter()
+            .take(MAX_RECENT_REPO_PATHS)
+            .cloned()
+            .collect(),
         theme,
         openai_api_key,
         openai_model,

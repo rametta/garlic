@@ -166,6 +166,7 @@ const WINDOW_FOCUS_REFRESH_DELAY_MS = 250;
 
 /** Initial row height for virtualized “files in commit” list (`measureElement` refines). */
 const COMMIT_BROWSE_FILE_ROW_ESTIMATE_PX = 44;
+const RECENT_REPO_TAB_LIMIT = 5;
 /** Remote name before `remote/branch` (e.g. `origin/main` → `origin`). */
 function remoteNameFromRemoteRef(fullRef: string): string | null {
   const i = fullRef.indexOf("/");
@@ -177,6 +178,40 @@ function remoteNameFromRemoteRef(fullRef: string): string | null {
 function remoteNameFromSidebarPath(remotePath: string): string | null {
   const [remoteName] = remotePath.split("/", 1);
   return remoteName || null;
+}
+
+function recentRepoPathSegments(path: string): string[] {
+  return path
+    .trim()
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]+/)
+    .filter(Boolean);
+}
+
+function recentRepoTabName(path: string): string {
+  const segments = recentRepoPathSegments(path);
+  const trimmed = path.trim();
+  return segments[segments.length - 1] ?? (trimmed || path);
+}
+
+function recentRepoTabParent(path: string): string | null {
+  const segments = recentRepoPathSegments(path);
+  return segments.length > 1 ? (segments[segments.length - 2] ?? null) : null;
+}
+
+function normalizeRecentRepoPaths(paths: string[]): string[] {
+  const normalized: string[] = [];
+  for (const raw of paths) {
+    const path = raw.trim();
+    if (!path || normalized.includes(path)) continue;
+    normalized.push(path);
+    if (normalized.length >= RECENT_REPO_TAB_LIMIT) break;
+  }
+  return normalized;
+}
+
+function promoteRecentRepoPath(paths: string[], nextPath: string): string[] {
+  return normalizeRecentRepoPaths([nextPath, ...paths]);
 }
 
 function graphLocalVisible(graphBranchVisible: Record<string, boolean>, name: string): boolean {
@@ -1114,6 +1149,7 @@ const FileHistoryPane = memo(function FileHistoryPane({
 
 export default function App({
   startup,
+  recentRepoPaths: initialRecentRepoPaths,
   themePreference: initialThemePreference,
   openaiApiKey: initialOpenaiApiKey,
   openaiModel: initialOpenaiModel,
@@ -1126,6 +1162,8 @@ export default function App({
   signCommits: initialSignCommits,
 }: {
   startup: RestoreLastRepo;
+  /** Last opened repo paths, newest first, for the top repo tabs. */
+  recentRepoPaths: string[];
   /** Persisted value: `auto` or a DaisyUI theme name. */
   themePreference: string;
   /** Saved OpenAI API key for AI commit messages (may be empty). */
@@ -1165,6 +1203,9 @@ export default function App({
   const queryClient = useQueryClient();
   const [currentRepoPath, setCurrentRepoPath] = useState<string | null>(
     () => startup.metadata?.path ?? null,
+  );
+  const [recentRepoPaths, setRecentRepoPaths] = useState(() =>
+    normalizeRecentRepoPaths(initialRecentRepoPaths),
   );
   const startupRepoSnapshot = useMemo(() => repoSnapshotFromStartup(startup), [startup]);
   const repoSnapshotQuery = useQuery({
@@ -2505,6 +2546,7 @@ export default function App({
         if (!snapshot.metadata?.error) {
           await invoke("set_last_repo_path", { path: target });
           if (pendingLoadRepoRef.current !== target) return;
+          setRecentRepoPaths((prev) => promoteRecentRepoPath(prev, target));
         } else {
           setCommits([]);
           setGraphCommitsHasMore(false);
@@ -5025,8 +5067,43 @@ export default function App({
 
   return (
     <main className="relative box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 text-base-content antialiased [font-synthesis:none]">
+      {recentRepoPaths.length > 0 ? (
+        <nav
+          aria-label="Recent repositories"
+          className="flex shrink-0 items-center gap-2 border-b border-base-300 bg-base-100/95 px-3"
+        >
+          <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+            {recentRepoPaths.map((path) => {
+              const active = currentRepoPath === path || repo?.path === path;
+              const name = recentRepoTabName(path);
+              return (
+                <button
+                  key={path}
+                  type="button"
+                  className={`flex max-w-48 min-w-32 shrink-0 flex-col items-start rounded-t-md border border-b-0 px-3 py-1.5 text-left transition-colors ${
+                    active
+                      ? "border-primary bg-base-200 text-primary"
+                      : "border-base-300 bg-base-200/70 text-base-content hover:bg-base-300/70"
+                  }`}
+                  title={path}
+                  aria-current={active ? "page" : undefined}
+                  aria-label={`Open recent repository ${name}`}
+                  onClick={() => {
+                    if (active) return;
+                    void loadRepo(path);
+                  }}
+                >
+                  <span className="max-w-full truncate text-xs font-semibold">{name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      ) : null}
       <div
-        className="grid min-h-0 min-w-0 flex-1 grid-cols-12 border-t border-base-300 lg:min-h-0 lg:grid-rows-1 lg:items-stretch"
+        className={`grid min-h-0 min-w-0 flex-1 grid-cols-12 border-base-300 lg:min-h-0 lg:grid-rows-1 lg:items-stretch ${
+          recentRepoPaths.length > 0 ? "" : "border-t"
+        }`}
         aria-live="polite"
         aria-busy={loading}
       >

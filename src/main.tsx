@@ -24,6 +24,7 @@ import { resolveThemePreference } from "./theme";
 
 export interface AppBootstrap {
   repo: RestoreLastRepo;
+  recentRepoPaths: string[];
   theme: string | null;
   openaiApiKey: string | null;
   openaiModel: string;
@@ -56,6 +57,7 @@ export const emptyAppBootstrap: AppBootstrap = {
     workingTreeFiles: [],
     listsError: null,
   },
+  recentRepoPaths: [],
   theme: null,
   openaiApiKey: null,
   openaiModel: "gpt-5.4-mini",
@@ -93,6 +95,7 @@ async function bootstrap() {
       <QueryClientProvider client={queryClient}>
         <App
           startup={data.repo}
+          recentRepoPaths={data.recentRepoPaths ?? []}
           themePreference={data.theme ?? "light"}
           openaiApiKey={data.openaiApiKey ?? null}
           openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}

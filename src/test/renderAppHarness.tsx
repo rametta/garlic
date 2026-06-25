@@ -21,6 +21,7 @@ export function renderAppHarness(startup: RestoreLastRepo) {
     <QueryClientProvider client={queryClient}>
       <App
         startup={startup}
+        recentRepoPaths={[]}
         themePreference="light"
         openaiApiKey={null}
         openaiModel="gpt-5.4-mini"
