@@ -11,12 +11,18 @@ import {
 } from "../commitGraphLayout";
 import { DEFAULT_OPENAI_MODEL } from "../generateCommitMessage";
 import {
+  useSetAutoFetchSettingsMutation,
   useSetGraphCommitTitleFontSizeMutation,
   useSetNotifyGitCompletionMutation,
   useSetOpenAiSettingsMutation,
   useSetThemeMutation,
 } from "../repoMutations";
 import { resolveThemePreference } from "../theme";
+import {
+  AUTO_FETCH_INTERVAL_MINUTES_MAX,
+  AUTO_FETCH_INTERVAL_MINUTES_MIN,
+  clampAutoFetchIntervalMinutes,
+} from "../gitTypes";
 
 function invokeErrorMessage(error: unknown): string {
   if (typeof error === "string") return error;
@@ -39,6 +45,9 @@ export type SettingsPageProps = {
   onGraphCommitTitleFontSizeChange: (px: number) => void;
   notifyGitCompletion: boolean;
   onNotifyGitCompletionChange: (enabled: boolean) => void;
+  autoFetchEnabled: boolean;
+  autoFetchIntervalMinutes: number;
+  onAutoFetchSettingsChange: (next: { enabled: boolean; intervalMinutes: number }) => void;
   onError: (message: string | null) => void;
 };
 
@@ -53,17 +62,24 @@ export const SettingsPage = memo(function SettingsPage({
   onGraphCommitTitleFontSizeChange,
   notifyGitCompletion,
   onNotifyGitCompletionChange,
+  autoFetchEnabled,
+  autoFetchIntervalMinutes,
+  onAutoFetchSettingsChange,
   onError,
 }: SettingsPageProps) {
   const [themeDraft, setThemeDraft] = useState(themePreference);
   const [keyDraft, setKeyDraft] = useState(openaiApiKey);
   const [modelDraft, setModelDraft] = useState(openaiModel);
   const [fontDraft, setFontDraft] = useState(() => String(graphCommitTitleFontSizePx));
+  const [autoFetchIntervalDraft, setAutoFetchIntervalDraft] = useState(() =>
+    String(clampAutoFetchIntervalMinutes(autoFetchIntervalMinutes)),
+  );
 
   const setThemeMutation = useSetThemeMutation();
   const setOpenAiMutation = useSetOpenAiSettingsMutation();
   const setGraphFontMutation = useSetGraphCommitTitleFontSizeMutation();
   const setNotifyGitCompletionMutation = useSetNotifyGitCompletionMutation();
+  const setAutoFetchSettingsMutation = useSetAutoFetchSettingsMutation();
 
   useEffect(() => {
     setThemeDraft(themePreference);
@@ -78,10 +94,15 @@ export const SettingsPage = memo(function SettingsPage({
     setModelDraft(openaiModel);
   }, [openaiApiKey, openaiModel]);
 
+  useEffect(() => {
+    setAutoFetchIntervalDraft(String(clampAutoFetchIntervalMinutes(autoFetchIntervalMinutes)));
+  }, [autoFetchIntervalMinutes]);
+
   const themeBusy = setThemeMutation.isPending;
   const openAiBusy = setOpenAiMutation.isPending;
   const graphFontBusy = setGraphFontMutation.isPending;
   const notifyGitBusy = setNotifyGitCompletionMutation.isPending;
+  const autoFetchBusy = setAutoFetchSettingsMutation.isPending;
 
   const applyTheme = useCallback(
     async (next: string) => {
@@ -141,6 +162,27 @@ export const SettingsPage = memo(function SettingsPage({
       }
     },
     [onError, onNotifyGitCompletionChange, setNotifyGitCompletionMutation],
+  );
+
+  const persistAutoFetchSettings = useCallback(
+    async (next: { enabled: boolean; intervalMinutes: number }) => {
+      const intervalMinutes = clampAutoFetchIntervalMinutes(next.intervalMinutes);
+      onError(null);
+      try {
+        await setAutoFetchSettingsMutation.mutateAsync({
+          enabled: next.enabled,
+          intervalMinutes,
+        });
+        onAutoFetchSettingsChange({
+          enabled: next.enabled,
+          intervalMinutes,
+        });
+        setAutoFetchIntervalDraft(String(intervalMinutes));
+      } catch (e) {
+        onError(invokeErrorMessage(e));
+      }
+    },
+    [onAutoFetchSettingsChange, onError, setAutoFetchSettingsMutation],
   );
 
   return (
@@ -235,6 +277,67 @@ export const SettingsPage = memo(function SettingsPage({
                 Applies to commit subject lines in the main history graph. Row height adjusts
                 automatically.
               </span>
+            </label>
+          </section>
+
+          <section className="flex flex-col gap-3">
+            <h2 className="m-0 text-sm font-semibold tracking-wide text-base-content/80 uppercase">
+              Git
+            </h2>
+            <label className="flex max-w-md cursor-pointer flex-row items-start gap-3">
+              <input
+                type="checkbox"
+                className="toggle mt-0.5 shrink-0 toggle-sm"
+                checked={autoFetchEnabled}
+                disabled={autoFetchBusy}
+                onChange={(e) => {
+                  void persistAutoFetchSettings({
+                    enabled: e.target.checked,
+                    intervalMinutes: autoFetchIntervalMinutes,
+                  });
+                }}
+              />
+              <span className="flex min-w-0 flex-col gap-1">
+                <span className="font-medium text-base-content">Auto-fetch remotes</span>
+                <span className="text-sm text-base-content/70">
+                  Run <code className="font-mono">git fetch --all --quiet</code> for the open repo
+                  on an interval. Auth failures pause auto-fetch until the repo watch restarts.
+                </span>
+              </span>
+            </label>
+            <label className="form-control w-full max-w-xs">
+              <span className="label-text mb-1">Auto-fetch interval</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  className="input-bordered input input-sm w-24 font-mono tabular-nums"
+                  min={AUTO_FETCH_INTERVAL_MINUTES_MIN}
+                  max={AUTO_FETCH_INTERVAL_MINUTES_MAX}
+                  step={1}
+                  disabled={autoFetchBusy || !autoFetchEnabled}
+                  value={autoFetchIntervalDraft}
+                  onChange={(e) => {
+                    setAutoFetchIntervalDraft(e.target.value);
+                  }}
+                  onBlur={() => {
+                    const n = parseInt(autoFetchIntervalDraft, 10);
+                    if (!Number.isFinite(n)) {
+                      setAutoFetchIntervalDraft(String(autoFetchIntervalMinutes));
+                      return;
+                    }
+                    void persistAutoFetchSettings({
+                      enabled: autoFetchEnabled,
+                      intervalMinutes: n,
+                    });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                />
+                <span className="text-sm text-base-content/60">minutes</span>
+              </div>
             </label>
           </section>
 

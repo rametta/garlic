@@ -52,6 +52,9 @@ export const GitCommandPanel = memo(function GitCommandPanel({ repoPath }: GitCo
     () => gitCommandStream?.lines.some((line) => SECURITY_KEY_TOUCH_RE.test(line.text)) ?? false,
     [gitCommandStream],
   );
+  const securityKeyTouchContext = gitCommandStream?.operation.toLowerCase().includes("fetch")
+    ? "fetch"
+    : "commit";
 
   useEffect(() => {
     setOpen(false);
@@ -78,8 +81,9 @@ export const GitCommandPanel = memo(function GitCommandPanel({ repoPath }: GitCo
             <div>
               <div className="text-sm font-semibold">Touch your YubiKey</div>
               <p className="m-0 mt-1 text-xs leading-snug text-base-content/70">
-                Git is waiting for your security key to sign this commit. This will disappear when
-                signing finishes.
+                {securityKeyTouchContext === "fetch"
+                  ? "Git is waiting for your security key to authenticate with the remote. This will disappear when the fetch finishes."
+                  : "Git is waiting for your security key to sign this commit. This will disappear when signing finishes."}
               </p>
             </div>
           </div>
@@ -106,7 +110,9 @@ export const GitCommandPanel = memo(function GitCommandPanel({ repoPath }: GitCo
                   </h2>
                   <p className="mt-0.5 mb-0 text-xs text-base-content/60">
                     {needsSecurityKeyTouch && !gitCommandStream?.finished
-                      ? "Touch your YubiKey to sign"
+                      ? securityKeyTouchContext === "fetch"
+                        ? "Touch your YubiKey to fetch"
+                        : "Touch your YubiKey to sign"
                       : gitCommandStream
                         ? gitCommandStream.finished
                           ? gitCommandStream.success

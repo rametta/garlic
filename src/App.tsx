@@ -80,7 +80,9 @@ import {
 } from "./graphCommitFilters";
 import {
   combineLineStats,
+  clampAutoFetchIntervalMinutes,
   clampGraphCommitsPageSize,
+  DEFAULT_AUTO_FETCH_INTERVAL_MINUTES,
   type ConflictFileDetails as RepoConflictFileDetails,
   type LineStat,
   repoSnapshotFromStartup,
@@ -107,6 +109,7 @@ import {
   useDropCommitMutation,
   useDiscardPatchMutation,
   useDiscardPathsChangesMutation,
+  useFetchAllRemotesMutation,
   useForcePushToOriginMutation,
   useMergeBranchMutation,
   usePullLocalBranchMutation,
@@ -192,11 +195,6 @@ function recentRepoTabName(path: string): string {
   const segments = recentRepoPathSegments(path);
   const trimmed = path.trim();
   return segments[segments.length - 1] ?? (trimmed || path);
-}
-
-function recentRepoTabParent(path: string): string | null {
-  const segments = recentRepoPathSegments(path);
-  return segments.length > 1 ? (segments[segments.length - 2] ?? null) : null;
 }
 
 function normalizeRecentRepoPaths(paths: string[]): string[] {
@@ -1160,6 +1158,8 @@ export default function App({
   graphCommitTitleFontSizePx: initialGraphCommitTitleFontSizePx,
   notifyGitCompletion: initialNotifyGitCompletion,
   signCommits: initialSignCommits,
+  autoFetchEnabled: initialAutoFetchEnabled,
+  autoFetchIntervalMinutes: initialAutoFetchIntervalMinutes,
 }: {
   startup: RestoreLastRepo;
   /** Last opened repo paths, newest first, for the top repo tabs. */
@@ -1184,6 +1184,10 @@ export default function App({
   notifyGitCompletion: boolean;
   /** Sign commits using Git's default signing setup. */
   signCommits: boolean;
+  /** Whether to periodically fetch all remotes while a repo is open. */
+  autoFetchEnabled: boolean;
+  /** Auto-fetch cadence in minutes. */
+  autoFetchIntervalMinutes: number;
 }) {
   const [themePreference, setThemePreference] = useState(initialThemePreference);
   const [branchSidebarSections, setBranchSidebarSections] = useState<BranchSidebarSectionsState>(
@@ -1200,6 +1204,12 @@ export default function App({
   );
   const [notifyGitCompletion, setNotifyGitCompletion] = useState(initialNotifyGitCompletion);
   const [signCommits, setSignCommits] = useState(initialSignCommits);
+  const [autoFetchEnabled, setAutoFetchEnabled] = useState(initialAutoFetchEnabled);
+  const [autoFetchIntervalMinutes, setAutoFetchIntervalMinutes] = useState(() =>
+    clampAutoFetchIntervalMinutes(
+      initialAutoFetchIntervalMinutes ?? DEFAULT_AUTO_FETCH_INTERVAL_MINUTES,
+    ),
+  );
   const queryClient = useQueryClient();
   const [currentRepoPath, setCurrentRepoPath] = useState<string | null>(
     () => startup.metadata?.path ?? null,
@@ -1450,6 +1460,7 @@ export default function App({
   const squashCommitsMutation = useSquashCommitsMutation();
   const discardPathsChangesMutation = useDiscardPathsChangesMutation();
   const pushTagToOriginMutation = usePushTagToOriginMutation();
+  const fetchAllRemotesMutation = useFetchAllRemotesMutation();
   const createBranchAtCommitMutation = useCreateBranchAtCommitMutation();
   const createLocalBranchMutation = useCreateLocalBranchMutation();
   const createTagMutation = useCreateTagMutation();
@@ -1527,8 +1538,12 @@ export default function App({
 
   useEffect(() => {
     if (!repo?.path || repo.error) return;
-    void invoke("start_repo_watch", { path: repo.path }).catch(() => {});
-  }, [repo?.path, repo?.error]);
+    void invoke("start_repo_watch", {
+      path: repo.path,
+      autoFetchEnabled,
+      autoFetchIntervalMinutes,
+    }).catch(() => {});
+  }, [repo?.path, repo?.error, autoFetchEnabled, autoFetchIntervalMinutes]);
 
   useEffect(() => {
     return () => {
@@ -1578,6 +1593,17 @@ export default function App({
   }, [localBranches, remoteBranches, graphBranchVisible, remoteGraphDefaultsVisible]);
 
   const hiddenGraphRefsKey = useMemo(() => hiddenGraphRefs.join("\0"), [hiddenGraphRefs]);
+  const loadedGraphCommitHashes = useMemo(
+    () => new Set(commits.map((commit) => commit.hash)),
+    [commits],
+  );
+  const graphMissingRefTipsKey = useMemo(() => {
+    const hidden = new Set(hiddenGraphRefs);
+    return [...localBranches, ...remoteBranches]
+      .filter((branch) => !hidden.has(branch.name) && !loadedGraphCommitHashes.has(branch.tipHash))
+      .map((branch) => `${branch.name}:${branch.tipHash}`)
+      .join("\0");
+  }, [hiddenGraphRefs, loadedGraphCommitHashes, localBranches, remoteBranches]);
   graphRefsRef.current = hiddenGraphRefs;
   const stashRefsKey = useMemo(
     () => stashes.map((stash) => `${stash.refName}:${stash.commitHash}`).join("\0"),
@@ -1600,6 +1626,7 @@ export default function App({
       pathAtStart,
       repo.headHash ?? "",
       hiddenGraphRefsKey,
+      graphMissingRefTipsKey,
       stashRefsKey,
       graphCommitsPageSize,
     ].join("\0");
@@ -1634,6 +1661,7 @@ export default function App({
     repo?.error,
     repo?.headHash,
     hiddenGraphRefsKey,
+    graphMissingRefTipsKey,
     stashRefsKey,
     graphCommitsPageSize,
   ]);
@@ -5029,7 +5057,9 @@ export default function App({
   // commit context menu.
   const graphToolbarBranchTargetLabel = currentBranchName;
   const latestStashRef = stashes[0]?.refName ?? null;
-  const graphToolbarActionBusy = Boolean(branchBusy) || pushBusy || stashBusy !== null;
+  const fetchRemotesBusy = fetchAllRemotesMutation.isPending;
+  const graphToolbarActionBusy =
+    Boolean(branchBusy) || pushBusy || stashBusy !== null || fetchRemotesBusy;
   const refreshActionDisabled = refreshActionBusy || !repo?.path || Boolean(repo.error);
   const handleGraphRefreshAction = useCallback(() => {
     if (!repo?.path || repo.error || refreshActionBusy) return;
@@ -5040,6 +5070,19 @@ export default function App({
         setRefreshActionBusy(false);
       });
   }, [repo?.error, repo?.path, refreshActionBusy, refreshAfterMutation]);
+  const fetchRemoteActionDisabled =
+    fetchRemotesBusy ||
+    Boolean(branchBusy) ||
+    pushBusy ||
+    stashBusy !== null ||
+    !repo?.path ||
+    Boolean(repo.error);
+  const handleGraphFetchRemoteAction = useCallback(() => {
+    if (!repo?.path || repo.error || fetchRemotesBusy) return;
+    void fetchAllRemotesMutation.mutateAsync({ path: repo.path }).catch((e) => {
+      setOperationError(invokeErrorMessage(e));
+    });
+  }, [fetchAllRemotesMutation, fetchRemotesBusy, repo?.error, repo?.path]);
   const pullActionDisabled = graphToolbarActionBusy || currentBranchName === null;
   const pushActionDisabled =
     graphToolbarActionBusy || !repo?.path || Boolean(repo.error) || Boolean(repo.detached);
@@ -5068,37 +5111,28 @@ export default function App({
   return (
     <main className="relative box-border flex min-h-0 flex-1 flex-col overflow-hidden bg-base-200 text-base-content antialiased [font-synthesis:none]">
       {recentRepoPaths.length > 0 ? (
-        <nav
-          aria-label="Recent repositories"
-          className="flex shrink-0 items-center gap-2 border-b border-base-300 bg-base-100/95 px-3"
-        >
-          <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
-            {recentRepoPaths.map((path) => {
-              const active = currentRepoPath === path || repo?.path === path;
-              const name = recentRepoTabName(path);
-              return (
-                <button
-                  key={path}
-                  type="button"
-                  className={`flex max-w-48 min-w-32 shrink-0 flex-col items-start rounded-t-md border border-b-0 px-3 py-1.5 text-left transition-colors ${
-                    active
-                      ? "border-primary bg-base-200 text-primary"
-                      : "border-base-300 bg-base-200/70 text-base-content hover:bg-base-300/70"
-                  }`}
-                  title={path}
-                  aria-current={active ? "page" : undefined}
-                  aria-label={`Open recent repository ${name}`}
-                  onClick={() => {
-                    if (active) return;
-                    void loadRepo(path);
-                  }}
-                >
-                  <span className="max-w-full truncate text-xs font-semibold">{name}</span>
-                </button>
-              );
-            })}
-          </div>
-        </nav>
+        <div aria-label="Recent repositories" role="tablist" className="tabs-lift tabs">
+          {recentRepoPaths.map((path) => {
+            const active = currentRepoPath === path || repo?.path === path;
+            const name = recentRepoTabName(path);
+            return (
+              <button
+                key={path}
+                type="button"
+                className={`tab ${active ? "tab-active" : ""}`}
+                title={path}
+                aria-current={active ? "page" : undefined}
+                aria-label={`Open recent repository ${name}`}
+                onClick={() => {
+                  if (active) return;
+                  void loadRepo(path);
+                }}
+              >
+                <span className="max-w-full truncate text-xs font-semibold">{name}</span>
+              </button>
+            );
+          })}
+        </div>
       ) : null}
       <div
         className={`grid min-h-0 min-w-0 flex-1 grid-cols-12 border-base-300 lg:min-h-0 lg:grid-rows-1 lg:items-stretch ${
@@ -6836,6 +6870,9 @@ export default function App({
                                   refreshActionDisabled={refreshActionDisabled}
                                   refreshActionBusy={refreshActionBusy}
                                   onRefreshAction={handleGraphRefreshAction}
+                                  fetchRemoteActionDisabled={fetchRemoteActionDisabled}
+                                  fetchRemoteActionBusy={fetchRemotesBusy}
+                                  onFetchRemoteAction={handleGraphFetchRemoteAction}
                                   pullActionDisabled={pullActionDisabled}
                                   onPullAction={handleGraphPullAction}
                                   pushActionDisabled={pushActionDisabled}
@@ -7119,6 +7156,12 @@ export default function App({
             onGraphCommitTitleFontSizeChange={setGraphCommitTitleFontSizePx}
             notifyGitCompletion={notifyGitCompletion}
             onNotifyGitCompletionChange={setNotifyGitCompletion}
+            autoFetchEnabled={autoFetchEnabled}
+            autoFetchIntervalMinutes={autoFetchIntervalMinutes}
+            onAutoFetchSettingsChange={({ enabled, intervalMinutes }) => {
+              setAutoFetchEnabled(enabled);
+              setAutoFetchIntervalMinutes(clampAutoFetchIntervalMinutes(intervalMinutes));
+            }}
             onError={setOperationError}
           />
         </div>

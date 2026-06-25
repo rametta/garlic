@@ -96,6 +96,16 @@ fn default_graph_commit_title_font_size_px() -> u32 {
     11
 }
 
+pub const DEFAULT_AUTO_FETCH_INTERVAL_MINUTES: u32 = 10;
+
+fn default_auto_fetch_interval_minutes() -> u32 {
+    DEFAULT_AUTO_FETCH_INTERVAL_MINUTES
+}
+
+pub fn clamp_auto_fetch_interval_minutes(minutes: u32) -> u32 {
+    minutes.clamp(1, 24 * 60)
+}
+
 /// Clamp persisted commit-title font size for the main graph (px).
 pub fn clamp_graph_commit_title_font_size_px(px: u32) -> u32 {
     px.clamp(9, 20)
@@ -133,6 +143,12 @@ struct AppSettings {
     /// Whether new commits should use the machine's default Git signing configuration.
     #[serde(default = "default_true")]
     sign_commits: bool,
+    /// Whether to periodically fetch all remotes while a repo is open.
+    #[serde(default = "default_true")]
+    auto_fetch_enabled: bool,
+    /// Auto-fetch cadence in minutes (default 10).
+    #[serde(default = "default_auto_fetch_interval_minutes")]
+    auto_fetch_interval_minutes: u32,
 }
 
 impl Default for AppSettings {
@@ -150,6 +166,8 @@ impl Default for AppSettings {
             graph_commit_title_font_size_px: default_graph_commit_title_font_size_px(),
             notify_git_completion: true,
             sign_commits: true,
+            auto_fetch_enabled: true,
+            auto_fetch_interval_minutes: DEFAULT_AUTO_FETCH_INTERVAL_MINUTES,
         }
     }
 }
@@ -172,6 +190,8 @@ fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
     s.graph_commits_page_size = git::clamp_graph_commits_page_size(s.graph_commits_page_size);
     s.graph_commit_title_font_size_px =
         clamp_graph_commit_title_font_size_px(s.graph_commit_title_font_size_px);
+    s.auto_fetch_interval_minutes =
+        clamp_auto_fetch_interval_minutes(s.auto_fetch_interval_minutes);
     if s.recent_repo_paths.is_empty() {
         if let Some(ref p) = s.last_repo_path {
             s.recent_repo_paths.push(p.clone());
@@ -379,6 +399,10 @@ pub struct AppBootstrap {
     pub notify_git_completion: bool,
     /// When true, commits use the machine's default Git signing configuration.
     pub sign_commits: bool,
+    /// When true, periodically run `git fetch --all --quiet` while a repo is open.
+    pub auto_fetch_enabled: bool,
+    /// Auto-fetch cadence in minutes.
+    pub auto_fetch_interval_minutes: u32,
 }
 
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
@@ -431,6 +455,10 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
         ),
         notify_git_completion: settings.notify_git_completion,
         sign_commits: settings.sign_commits,
+        auto_fetch_enabled: settings.auto_fetch_enabled,
+        auto_fetch_interval_minutes: clamp_auto_fetch_interval_minutes(
+            settings.auto_fetch_interval_minutes,
+        ),
     })
 }
 
@@ -622,6 +650,19 @@ pub fn set_notify_git_completion(app: AppHandle, enabled: bool) -> Result<(), St
 pub fn set_sign_commits(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut s = load_settings(&app)?;
     s.sign_commits = enabled;
+    save_settings(&app, &s)
+}
+
+/// Persists auto-fetch behavior for open repositories.
+#[tauri::command]
+pub fn set_auto_fetch_settings(
+    app: AppHandle,
+    enabled: bool,
+    interval_minutes: u32,
+) -> Result<(), String> {
+    let mut s = load_settings(&app)?;
+    s.auto_fetch_enabled = enabled;
+    s.auto_fetch_interval_minutes = clamp_auto_fetch_interval_minutes(interval_minutes);
     save_settings(&app, &s)
 }
 

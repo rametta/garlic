@@ -309,14 +309,18 @@ fn ssh_public_key_requires_user_presence(public_key: &str) -> bool {
     key_type.starts_with("sk-") || key_type.contains("-sk")
 }
 
+fn public_key_file_requires_user_presence(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .is_some_and(|public_key| ssh_public_key_requires_user_presence(&public_key))
+}
+
 fn signing_key_requires_user_presence(signing_key: &str, public_key_path: Option<&Path>) -> bool {
     if ssh_public_key_requires_user_presence(signing_key) {
         return true;
     }
 
-    public_key_path
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .is_some_and(|public_key| ssh_public_key_requires_user_presence(&public_key))
+    public_key_path.is_some_and(public_key_file_requires_user_presence)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -5354,57 +5358,178 @@ impl Default for AutoFetchInFlight {
     }
 }
 
-fn git_fetch_all_quiet(workdir: &Path) -> Result<(), String> {
-    let output = git_cmd(workdir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .args(["fetch", "--all", "--quiet"])
-        .output()
-        .map_err(|e| format!("Could not run git: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            "git fetch --all failed".to_string()
-        } else {
-            stderr
-        };
-        write_git_audit_line(workdir, &["fetch", "--all", "--quiet"], false, &msg);
-        return Err(msg);
+fn ssh_fetch_host_from_url(url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() || url.starts_with("http://") || url.starts_with("https://") {
+        return None;
     }
-    write_git_audit_line(workdir, &["fetch", "--all", "--quiet"], true, "");
-    Ok(())
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let authority = rest.split('/').next()?.trim();
+        let host_port = authority.rsplit('@').next().unwrap_or(authority);
+        let host = host_port.split(':').next()?.trim();
+        return (!host.is_empty()).then(|| host.to_string());
+    }
+    if let Some((left, _)) = url.split_once(':') {
+        let host = left.rsplit('@').next().unwrap_or(left).trim();
+        return (!host.is_empty()).then(|| host.to_string());
+    }
+    None
 }
 
-/// Queues `git fetch --all` on the async runtime’s blocking pool and returns immediately.
-/// Used by the periodic auto-fetch timer in [`crate::repo_watch`].
+fn expand_ssh_identity_path(path: &str) -> PathBuf {
+    let trimmed = path.trim();
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(trimmed)
+}
+
+fn identity_path_requires_user_presence(path: &Path) -> bool {
+    if public_key_file_requires_user_presence(path) {
+        return true;
+    }
+    let public_key_path = if path
+        .extension()
+        .is_some_and(|ext| ext == std::ffi::OsStr::new("pub"))
+    {
+        path.to_path_buf()
+    } else {
+        PathBuf::from(format!("{}.pub", path.to_string_lossy()))
+    };
+    public_key_file_requires_user_presence(&public_key_path)
+}
+
+fn default_security_key_identity_files() -> Vec<PathBuf> {
+    let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) else {
+        return Vec::new();
+    };
+    let ssh_dir = PathBuf::from(home).join(".ssh");
+    ["id_ed25519_sk", "id_ecdsa_sk"]
+        .into_iter()
+        .map(|name| ssh_dir.join(name))
+        .collect()
+}
+
+fn ssh_host_uses_security_key_identity(host: &str) -> bool {
+    let output = Command::new("ssh")
+        .args(["-G", host])
+        .stdin(Stdio::null())
+        .output();
+    if let Ok(output) = output {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if text.lines().any(|line| {
+                let line = line.trim();
+                let Some(identity) = line.strip_prefix("identityfile ") else {
+                    return false;
+                };
+                identity_path_requires_user_presence(&expand_ssh_identity_path(identity))
+            }) {
+                return true;
+            }
+        }
+    }
+    default_security_key_identity_files()
+        .iter()
+        .any(|path| identity_path_requires_user_presence(path))
+}
+
+fn fetch_security_key_touch_hint(workdir: &Path) -> Option<String> {
+    let remotes_text = git_output_allow_fail(workdir, &["remote", "-v"])?;
+    parse_remotes(&remotes_text)
+        .iter()
+        .filter_map(|remote| ssh_fetch_host_from_url(&remote.fetch_url))
+        .any(|host| ssh_host_uses_security_key_identity(&host))
+        .then(|| "Touch your YubiKey to authenticate this fetch.".to_string())
+}
+
+fn fetch_all_auth_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("permission denied (publickey)")
+        || lower.contains("sign_and_send_pubkey")
+        || lower.contains("device not found")
+        || lower.contains("could not read from remote repository")
+}
+
+pub struct FetchAllRemotesResult {
+    error: Option<String>,
+}
+
+impl FetchAllRemotesResult {
+    pub fn is_auth_error(&self) -> bool {
+        self.error.as_deref().is_some_and(fetch_all_auth_error)
+    }
+}
+
+fn git_fetch_all_streaming(app: &AppHandle, workdir: &Path, operation: &str) -> Result<(), String> {
+    let hint = fetch_security_key_touch_hint(workdir);
+    let initial_lines = hint.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_streaming_with_input_env_and_initial_lines(
+        app,
+        workdir,
+        &["fetch", "--all", "--quiet"],
+        operation,
+        None,
+        &[("GIT_TERMINAL_PROMPT", "0")],
+        &initial_lines,
+    )
+}
+
+/// Runs `git fetch --all --quiet` unless another fetch for this repo is already in flight.
+/// Used by manual fetch and the periodic auto-fetch timer in [`crate::repo_watch`].
 pub fn schedule_fetch_all_remotes(
+    app: AppHandle,
     path: PathBuf,
     in_flight: &AutoFetchInFlight,
-) -> Result<(), String> {
+) -> Option<FetchAllRemotesResult> {
     if path.to_string_lossy().trim().is_empty() {
-        return Err("Path is empty.".to_string());
+        return Some(FetchAllRemotesResult {
+            error: Some("Path is empty.".to_string()),
+        });
     }
-    ensure_git_repo(&path)?;
+    if let Err(e) = ensure_git_repo(&path) {
+        return Some(FetchAllRemotesResult { error: Some(e) });
+    }
     let path_key = path
         .canonicalize()
         .unwrap_or_else(|_| path.clone())
         .to_string_lossy()
         .to_string();
     {
-        let mut guard = in_flight.0.lock().map_err(|e| e.to_string())?;
+        let Ok(mut guard) = in_flight.0.lock() else {
+            return Some(FetchAllRemotesResult {
+                error: Some("Could not lock fetch state.".to_string()),
+            });
+        };
         if !guard.insert(path_key.clone()) {
-            return Ok(());
+            return None;
         }
     }
-    let in_flight_arc = in_flight.0.clone();
-    let path_for_git = path;
-    tauri::async_runtime::spawn(async move {
-        let _ =
-            tauri::async_runtime::spawn_blocking(move || git_fetch_all_quiet(&path_for_git)).await;
-        if let Ok(mut guard) = in_flight_arc.lock() {
-            guard.remove(&path_key);
-        }
-    });
-    Ok(())
+    let result = git_fetch_all_streaming(&app, &path, "fetch remotes");
+    if let Ok(mut guard) = in_flight.0.lock() {
+        guard.remove(&path_key);
+    }
+    Some(FetchAllRemotesResult {
+        error: result.err(),
+    })
+}
+
+#[tauri::command]
+pub async fn fetch_all_remotes(app: AppHandle, path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    let in_flight = app.state::<AutoFetchInFlight>().inner().clone();
+    run_blocking_git_command(
+        move || match schedule_fetch_all_remotes(app, path_buf, &in_flight) {
+            Some(result) => match result.error {
+                Some(error) => Err(error),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        },
+    )
+    .await
 }
 
 /// Push the current branch to `origin`, setting upstream if needed (`git push -u origin HEAD`).

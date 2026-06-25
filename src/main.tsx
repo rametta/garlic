@@ -12,6 +12,7 @@ import {
   type RestoreLastRepo,
   type WireRestoreLastRepo,
   DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
+  DEFAULT_AUTO_FETCH_INTERVAL_MINUTES,
   normalizeRestoreLastRepo,
 } from "./gitTypes";
 import type { BranchSidebarSectionsState } from "./repoTypes";
@@ -37,6 +38,10 @@ export interface AppBootstrap {
   notifyGitCompletion: boolean;
   /** Whether commits should be signed with Git's default signing setup (default on). */
   signCommits: boolean;
+  /** Whether to periodically fetch all remotes while a repo is open (default on). */
+  autoFetchEnabled: boolean;
+  /** Auto-fetch cadence in minutes (default 10). */
+  autoFetchIntervalMinutes: number;
 }
 
 interface WireAppBootstrap extends Omit<AppBootstrap, "repo"> {
@@ -74,6 +79,8 @@ export const emptyAppBootstrap: AppBootstrap = {
   graphCommitTitleFontSizePx: DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX,
   notifyGitCompletion: true,
   signCommits: true,
+  autoFetchEnabled: true,
+  autoFetchIntervalMinutes: DEFAULT_AUTO_FETCH_INTERVAL_MINUTES,
 };
 
 async function bootstrap() {
@@ -108,6 +115,10 @@ async function bootstrap() {
           }
           notifyGitCompletion={data.notifyGitCompletion ?? true}
           signCommits={data.signCommits ?? true}
+          autoFetchEnabled={data.autoFetchEnabled ?? true}
+          autoFetchIntervalMinutes={
+            data.autoFetchIntervalMinutes ?? DEFAULT_AUTO_FETCH_INTERVAL_MINUTES
+          }
         />
         {import.meta.env.DEV ? <ReactQueryDevtools buttonPosition="bottom-left" /> : null}
         {TAURI_RUNTIME_DEBUG_ENABLED ? <TauriBridgeInspector /> : null}

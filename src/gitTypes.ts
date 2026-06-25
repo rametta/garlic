@@ -177,6 +177,18 @@ export function clampGraphCommitsPageSize(n: number): number {
   );
 }
 
+export const AUTO_FETCH_INTERVAL_MINUTES_MIN = 1;
+export const AUTO_FETCH_INTERVAL_MINUTES_MAX = 24 * 60;
+export const DEFAULT_AUTO_FETCH_INTERVAL_MINUTES = 10;
+
+export function clampAutoFetchIntervalMinutes(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_AUTO_FETCH_INTERVAL_MINUTES;
+  return Math.min(
+    AUTO_FETCH_INTERVAL_MINUTES_MAX,
+    Math.max(AUTO_FETCH_INTERVAL_MINUTES_MIN, Math.round(n)),
+  );
+}
+
 export function combineLineStats(a?: LineStat, b?: LineStat): LineStat | undefined {
   if (!a) return b ? { ...b } : undefined;
   if (!b) return { ...a };

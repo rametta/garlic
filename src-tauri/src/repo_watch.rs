@@ -1,5 +1,5 @@
 //! Debounced filesystem watch for the open repo; emits `repository-mutated` when files change.
-//! Also runs a periodic `git fetch --all` in a background thread while a repo is watched.
+//! Optionally runs periodic `git fetch --all` in a background thread while a repo is watched.
 
 use crate::git::{schedule_fetch_all_remotes, AutoFetchInFlight};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -10,8 +10,6 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
-
-const AUTO_FETCH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 pub struct RepoWatchState(pub Mutex<Option<RepoWatchGuard>>);
 
@@ -52,7 +50,12 @@ fn path_is_ignored_git_artifact(root: &Path, path: &Path) -> bool {
 
 /// Stop any previous watch and watch `path` recursively (debounced).
 #[tauri::command]
-pub fn start_repo_watch(app: AppHandle, path: String) -> Result<(), String> {
+pub fn start_repo_watch(
+    app: AppHandle,
+    path: String,
+    auto_fetch_enabled: bool,
+    auto_fetch_interval_minutes: u32,
+) -> Result<(), String> {
     let path = path.trim();
     if path.is_empty() {
         return Err("Path is empty.".to_string());
@@ -97,18 +100,41 @@ pub fn start_repo_watch(app: AppHandle, path: String) -> Result<(), String> {
         .map_err(|e| format!("Could not watch repository: {e}"))?;
 
     let (auto_fetch_stop_tx, auto_fetch_stop_rx) = mpsc::channel::<()>();
-    let path_for_auto_fetch = root.clone();
-    let in_flight = app.state::<AutoFetchInFlight>().inner().clone();
-    // Fresh remote refs as soon as a repo is opened or switched (same as periodic auto-fetch).
-    let _ = schedule_fetch_all_remotes(root.clone(), &in_flight);
-    std::thread::spawn(move || loop {
-        match auto_fetch_stop_rx.recv_timeout(AUTO_FETCH_INTERVAL) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = schedule_fetch_all_remotes(path_for_auto_fetch.clone(), &in_flight);
+    if auto_fetch_enabled {
+        let path_for_auto_fetch = root.clone();
+        let in_flight = app.state::<AutoFetchInFlight>().inner().clone();
+        let app_for_auto_fetch = app.clone();
+        let interval = Duration::from_secs(
+            u64::from(crate::settings::clamp_auto_fetch_interval_minutes(
+                auto_fetch_interval_minutes,
+            )) * 60,
+        );
+        std::thread::spawn(move || {
+            let mut suppress_after_auth_error = schedule_fetch_all_remotes(
+                app_for_auto_fetch.clone(),
+                path_for_auto_fetch.clone(),
+                &in_flight,
+            )
+            .is_some_and(|result| result.is_auth_error());
+
+            loop {
+                match auto_fetch_stop_rx.recv_timeout(interval) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if suppress_after_auth_error {
+                            continue;
+                        }
+                        suppress_after_auth_error = schedule_fetch_all_remotes(
+                            app_for_auto_fetch.clone(),
+                            path_for_auto_fetch.clone(),
+                            &in_flight,
+                        )
+                        .is_some_and(|result| result.is_auth_error());
+                    }
+                }
             }
-        }
-    });
+        });
+    }
 
     *g = Some(RepoWatchGuard {
         _watcher: watcher,

@@ -265,6 +265,21 @@ export function useSetNotifyGitCompletionMutation() {
   });
 }
 
+export function useSetAutoFetchSettingsMutation() {
+  return useMutation<void, unknown, { enabled: boolean; intervalMinutes: number }>({
+    mutationFn: async (variables) => {
+      await invoke("set_auto_fetch_settings", variables);
+    },
+  });
+}
+
+export function useFetchAllRemotesMutation() {
+  return useRepoCommandMutation({
+    mutationFn: (variables: { path: string }) => invokeRepoMutation("fetch_all_remotes", variables),
+    refreshOp: RepoGitRefreshOp.FetchAllRemotes,
+  });
+}
+
 export function useStashPushMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; message: string | null }) =>

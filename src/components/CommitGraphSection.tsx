@@ -271,6 +271,9 @@ export interface CommitGraphSectionProps {
   refreshActionDisabled: boolean;
   refreshActionBusy: boolean;
   onRefreshAction: () => void;
+  fetchRemoteActionDisabled: boolean;
+  fetchRemoteActionBusy: boolean;
+  onFetchRemoteAction: () => void;
   pullActionDisabled: boolean;
   onPullAction: () => void;
   pushActionDisabled: boolean;
@@ -566,7 +569,7 @@ const GraphBranchTipsCell = memo(function GraphBranchTipsCell({
             ref={popoverRef}
             role="group"
             aria-label="More branch tips at this commit"
-            className="fixed z-[9999] max-h-48 max-w-[min(20rem,calc(100vw-1rem))] min-w-[10rem] overflow-y-auto rounded-md border border-base-300 bg-base-100 py-1 shadow-lg"
+            className="fixed z-9999 max-h-48 max-w-[min(20rem,calc(100vw-1rem))] min-w-40 overflow-y-auto rounded-md border border-base-300 bg-base-100 py-1 shadow-lg"
             style={{ top: popoverPos.top, left: popoverPos.left }}
             onMouseEnter={cancelClose}
             onMouseLeave={scheduleClose}
@@ -1102,6 +1105,9 @@ export const CommitGraphSection = memo(function CommitGraphSection({
   refreshActionDisabled,
   refreshActionBusy,
   onRefreshAction,
+  fetchRemoteActionDisabled,
+  fetchRemoteActionBusy,
+  onFetchRemoteAction,
   pullActionDisabled,
   onPullAction,
   pushActionDisabled,
@@ -1287,6 +1293,22 @@ export const CommitGraphSection = memo(function CommitGraphSection({
               ) : (
                 <IconRefresh className="h-3.5 w-3.5 shrink-0" />
               )}
+            </button>
+          </li>
+          <li className={fetchRemoteActionDisabled ? "menu-disabled" : undefined}>
+            <button
+              type="button"
+              className="flex items-center gap-1.5"
+              disabled={fetchRemoteActionDisabled}
+              title="Fetch all remotes"
+              onClick={onFetchRemoteAction}
+            >
+              {fetchRemoteActionBusy ? (
+                <span className="loading loading-xs shrink-0 loading-spinner" />
+              ) : (
+                <IconPull className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>Fetch</span>
             </button>
           </li>
           <li className={pullActionDisabled ? "menu-disabled" : undefined}>

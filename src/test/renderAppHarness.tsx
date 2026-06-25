@@ -1,7 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import App from "../App";
-import { DEFAULT_GRAPH_COMMITS_PAGE_SIZE, type RestoreLastRepo } from "../gitTypes";
+import {
+  DEFAULT_AUTO_FETCH_INTERVAL_MINUTES,
+  DEFAULT_GRAPH_COMMITS_PAGE_SIZE,
+  type RestoreLastRepo,
+} from "../gitTypes";
 import { DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX } from "../commitGraphLayout";
 
 export function renderAppHarness(startup: RestoreLastRepo) {
@@ -38,6 +42,8 @@ export function renderAppHarness(startup: RestoreLastRepo) {
         graphCommitTitleFontSizePx={DEFAULT_GRAPH_COMMIT_TITLE_FONT_SIZE_PX}
         notifyGitCompletion
         signCommits
+        autoFetchEnabled
+        autoFetchIntervalMinutes={DEFAULT_AUTO_FETCH_INTERVAL_MINUTES}
       />
     </QueryClientProvider>,
   );

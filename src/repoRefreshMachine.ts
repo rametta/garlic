@@ -21,6 +21,7 @@ import {
 export const RepoGitRefreshOp = {
   StashPush: "stashPush",
   SetRemoteUrl: "setRemoteUrl",
+  FetchAllRemotes: "fetchAllRemotes",
   PullLocalBranch: "pullLocalBranch",
   DeleteLocalBranch: "deleteLocalBranch",
   DeleteRemoteBranch: "deleteRemoteBranch",
@@ -183,6 +184,9 @@ export function planFor<TVariables extends { path: string }>(
   switch (op) {
     case RepoGitRefreshOp.PullLocalBranch:
       return { kind: "lists", metadata: true, selection: LOCAL_REMOTE_BRANCHES_AND_WORKTREE };
+
+    case RepoGitRefreshOp.FetchAllRemotes:
+      return { kind: "lists", metadata: true, selection: LOCAL_REMOTE_BRANCHES_ONLY };
 
     case RepoGitRefreshOp.DeleteLocalBranch:
       return { kind: "lists", metadata: false, selection: LOCAL_BRANCHES_ONLY };
