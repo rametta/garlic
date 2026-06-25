@@ -319,10 +319,6 @@ fn signing_key_requires_user_presence(signing_key: &str, public_key_path: Option
         .is_some_and(|public_key| ssh_public_key_requires_user_presence(&public_key))
 }
 
-fn notify_ssh_signing_touch_required(_app: &AppHandle, _workdir: &Path) {
-    // The frontend renders this from the git command stream and auto-hides it when the command ends.
-}
-
 #[cfg(not(target_os = "windows"))]
 fn ssh_agent_has_public_key(
     agent_envs: &[(String, String)],
@@ -3928,7 +3924,6 @@ fn commit_staged_blocking(
     args.extend(["-m".to_string(), msg.to_string()]);
     let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
     let initial_stderr_lines = if prep.needs_security_key_touch {
-        notify_ssh_signing_touch_required(&app, &path_buf);
         vec![SSH_SIGNING_TOUCH_LINE]
     } else {
         Vec::new()
@@ -3988,7 +3983,6 @@ fn amend_last_commit_blocking(
             args.extend(["-m".to_string(), m.to_string()]);
             let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
             let initial_stderr_lines = if prep.needs_security_key_touch {
-                notify_ssh_signing_touch_required(&app, &path_buf);
                 vec![SSH_SIGNING_TOUCH_LINE]
             } else {
                 Vec::new()
@@ -4019,7 +4013,6 @@ fn amend_last_commit_blocking(
             args.push("--no-edit".to_string());
             let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
             let initial_stderr_lines = if prep.needs_security_key_touch {
-                notify_ssh_signing_touch_required(&app, &path_buf);
                 vec![SSH_SIGNING_TOUCH_LINE]
             } else {
                 Vec::new()
