@@ -26,9 +26,14 @@ serde_json = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 notify = "7"
+keyring = { version = "3.6", features = [
+  "apple-native",
+  "crypto-rust",
+  "sync-secret-service",
+  "windows-native",
+] }
 tauri-plugin-updater = "2.10.0"
 tauri-plugin-process = "2.3.1"
 serde_repr = "0.1.20"
 arrayvec = { version = "0.7.6", features = ["serde"] }
 tauri-plugin-notification = "2"
-

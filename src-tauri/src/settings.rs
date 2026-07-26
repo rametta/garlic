@@ -1,5 +1,5 @@
-//! Persistence for app-level settings stored under the Tauri app config directory.
-//! Search tags: settings.json, theme preference, recent repos, OpenAI key, graph preferences, bootstrap.
+//! Persistence for app-level settings and secrets stored in the native credential store.
+//! Search tags: settings.json, theme preference, recent repos, OpenAI key, keychain, graph preferences, bootstrap.
 
 use crate::git;
 use crate::window_title;
@@ -9,6 +9,9 @@ use std::fs;
 use tauri::AppHandle;
 use tauri::Manager;
 use tauri_plugin_opener::reveal_item_in_dir;
+
+const CREDENTIAL_SERVICE: &str = "com.garlic.desktop";
+const OPENAI_CREDENTIAL_USER: &str = "openai-api-key";
 
 /// DaisyUI theme names (excluding `auto`, handled in the frontend).
 pub const DAISY_THEMES: &[&str] = &[
@@ -119,8 +122,8 @@ struct AppSettings {
     recent_repo_paths: Vec<String>,
     #[serde(default)]
     theme: Option<String>,
-    /// User-supplied OpenAI API key for AI commit messages (stored locally).
-    #[serde(default)]
+    /// Legacy plaintext key. Kept only to migrate existing settings into the native credential store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     openai_api_key: Option<String>,
     /// OpenAI model id for commit messages (`None` → default in bootstrap).
     #[serde(default)]
@@ -204,6 +207,56 @@ fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<(), String> 
     let path = settings_path(app)?;
     let content = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+fn openai_credential() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(CREDENTIAL_SERVICE, OPENAI_CREDENTIAL_USER)
+        .map_err(|e| format!("Could not access the system credential store: {e}"))
+}
+
+fn read_openai_api_key() -> Result<Option<String>, String> {
+    match openai_credential()?.get_password() {
+        Ok(key) => Ok(Some(key)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!(
+            "Could not read the OpenAI API key from the system credential store: {e}"
+        )),
+    }
+}
+
+fn store_openai_api_key(key: Option<&str>) -> Result<(), String> {
+    let credential = openai_credential()?;
+    match key {
+        Some(key) => credential.set_password(key).map_err(|e| {
+            format!("Could not save the OpenAI API key in the system credential store: {e}")
+        }),
+        None => match credential.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(format!(
+                "Could not delete the OpenAI API key from the system credential store: {e}"
+            )),
+        },
+    }
+}
+
+fn load_and_migrate_openai_api_key(
+    app: &AppHandle,
+    settings: &mut AppSettings,
+) -> Result<Option<String>, String> {
+    if let Some(key) = settings
+        .openai_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+    {
+        store_openai_api_key(Some(&key))?;
+        settings.openai_api_key = None;
+        save_settings(app, settings)?;
+        return Ok(Some(key));
+    }
+
+    read_openai_api_key()
 }
 
 /// Opens the system file manager with `settings.json` selected (writes default settings if the file does not exist yet).
@@ -408,7 +461,7 @@ pub struct AppBootstrap {
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
 #[tauri::command]
 pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
-    let settings = load_settings(&app)?;
+    let mut settings = load_settings(&app)?;
     let override_repo_path = std::env::var("GARLIC_E2E_REPO_PATH")
         .ok()
         .map(|path| path.trim().to_string())
@@ -416,7 +469,7 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
     let has_override_repo_path = override_repo_path.is_some();
     let bootstrap_repo_path = override_repo_path.or_else(|| settings.last_repo_path.clone());
     let theme = settings.theme.clone();
-    let openai_api_key = settings.openai_api_key.clone();
+    let openai_api_key = load_and_migrate_openai_api_key(&app, &mut settings)?;
     let openai_model = resolve_openai_model(&settings);
     // Repo-scoped visibility is keyed off the last opened repo so the graph can remember which
     // branches were hidden without mixing preferences across repositories.
@@ -519,7 +572,7 @@ fn hidden_graph_refs_from_visibility(
     refs
 }
 
-/// Persists OpenAI API key and model for AI-generated commit messages.
+/// Persists the OpenAI API key in the native credential store and its model in settings.json.
 #[tauri::command]
 pub fn set_openai_settings(
     app: AppHandle,
@@ -527,7 +580,9 @@ pub fn set_openai_settings(
     model: Option<String>,
 ) -> Result<(), String> {
     let mut s = load_settings(&app)?;
-    s.openai_api_key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    let key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    store_openai_api_key(key.as_deref())?;
+    s.openai_api_key = None;
     s.openai_model = model
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty());

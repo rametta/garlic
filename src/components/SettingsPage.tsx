@@ -372,8 +372,8 @@ export const SettingsPage = memo(function SettingsPage({
               OpenAI
             </h2>
             <p className="m-0 max-w-md text-sm text-base-content/70">
-              Stored only on this device in Garlic settings. Used to suggest commit titles and
-              descriptions from your staged diff via the OpenAI API.
+              Stored in your operating system&apos;s secure credential store. Used to suggest commit
+              titles and descriptions from your staged diff via the OpenAI API.
             </p>
             <label className="form-control w-full max-w-md">
               <span className="label-text mb-1">API key</span>
