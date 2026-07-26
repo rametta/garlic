@@ -143,15 +143,6 @@ const LOCAL_BRANCHES_AND_WORKTREE: RepoListSelection = {
   workingTreeFiles: true,
 };
 
-const METADATA_AND_WORKTREE: RepoListSelection = {
-  localBranches: false,
-  remoteBranches: false,
-  worktrees: false,
-  tags: false,
-  stashes: false,
-  workingTreeFiles: true,
-};
-
 const LOCAL_REMOTE_BRANCHES_AND_WORKTREE: RepoListSelection = {
   localBranches: true,
   remoteBranches: true,
@@ -244,7 +235,7 @@ export function planFor<TVariables extends { path: string }>(
 
     case RepoGitRefreshOp.ResolveConflictChoice:
     case RepoGitRefreshOp.ResolveConflictText:
-      return { kind: "lists", metadata: true, selection: METADATA_AND_WORKTREE };
+      return { kind: "lists", metadata: false, selection: WORKTREE_ONLY };
 
     case RepoGitRefreshOp.PushToOrigin:
     case RepoGitRefreshOp.ForcePushToOrigin:
@@ -293,8 +284,8 @@ export async function applyRepoRefreshPlan(
       return;
     }
     case "metadataOnly": {
-      const prev = getRepoSnapshot(queryClient, path);
       const meta: RepoMetadata = await invoke<RepoMetadata>("get_repo_metadata", { path });
+      const prev = getRepoSnapshot(queryClient, path);
       if (!prev) return;
       if (meta.error) {
         setRepoSnapshot(queryClient, path, emptyRepoSnapshot(meta));
@@ -304,13 +295,13 @@ export async function applyRepoRefreshPlan(
       return;
     }
     case "lists": {
-      const prev = getRepoSnapshot(queryClient, path);
-      if (!prev) return;
       if (plan.metadata) {
         const [metadataResult, lists] = await Promise.all([
           invoke<RepoMetadata>("get_repo_metadata", { path }),
           loadRepoLists(path, plan.selection),
         ]);
+        const prev = getRepoSnapshot(queryClient, path);
+        if (!prev) return;
         if (metadataResult.error) {
           setRepoSnapshot(queryClient, path, emptyRepoSnapshot(metadataResult));
           return;
@@ -319,6 +310,8 @@ export async function applyRepoRefreshPlan(
         setRepoSnapshot(queryClient, path, merged);
       } else {
         const lists = await loadRepoLists(path, plan.selection);
+        const prev = getRepoSnapshot(queryClient, path);
+        if (!prev) return;
         let merged = mergeRepoLists(prev, lists, plan.selection);
         if (plan.selection.workingTreeFiles !== false) {
           merged = withWorkingTreeFiles(merged, lists.workingTreeFiles);

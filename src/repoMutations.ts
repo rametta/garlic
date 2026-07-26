@@ -40,6 +40,8 @@ type RepoMutationOptions<TVariables extends RepoMutationVariables> = {
   mutationFn: (variables: TVariables) => Promise<void>;
   optimisticUpdate?: (snapshot: RepoSnapshot, variables: TVariables) => RepoSnapshot;
   successUpdate?: (snapshot: RepoSnapshot, variables: TVariables) => RepoSnapshot;
+  /** Reconcile commands that can change Git state before returning a non-zero exit code. */
+  refreshOnError?: boolean;
   /** Which repo slices to reload after success — see `planFor` in `repoRefreshMachine.ts`. */
   refreshOp: RepoGitRefreshOp;
 };
@@ -168,6 +170,7 @@ function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
   mutationFn,
   optimisticUpdate,
   successUpdate,
+  refreshOnError = false,
   refreshOp,
 }: RepoMutationOptions<TVariables>) {
   const queryClient = useQueryClient();
@@ -187,7 +190,7 @@ function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
         setRepoSnapshot(queryClient, variables.path, optimisticUpdate(previousSnapshot, variables));
       }
 
-      return { previousSnapshot };
+      return { previousSnapshot: optimisticUpdate ? previousSnapshot : undefined };
     },
     onError: (_error, variables, context) => {
       if (context?.previousSnapshot) {
@@ -202,7 +205,7 @@ function useRepoCommandMutation<TVariables extends RepoMutationVariables>({
     },
     onSettled: async (_data, error, variables) => {
       try {
-        if (!error) {
+        if (!error || refreshOnError) {
           const plan = planFor(refreshOp, { queryClient, variables });
           await applyRepoRefreshPlan(queryClient, variables.path, plan);
         }
@@ -329,6 +332,7 @@ export function usePullLocalBranchMutation() {
 
       return nextSnapshot;
     },
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.PullLocalBranch,
   });
 }
@@ -363,6 +367,7 @@ export function useRebaseCurrentBranchOntoMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; onto: string; interactive: boolean }) =>
       invokeRepoMutation("rebase_current_branch_onto", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.RebaseCurrentBranchOnto,
   });
 }
@@ -391,6 +396,7 @@ export function useMergeBranchMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; branchOrRef: string }) =>
       invokeRepoMutation("merge_branch", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.MergeBranch,
   });
 }
@@ -456,6 +462,7 @@ export function useCherryPickCommitMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHash: string }) =>
       invokeRepoMutation("cherry_pick_commit", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.CherryPickCommit,
   });
 }
@@ -464,6 +471,7 @@ export function useDropCommitMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHash: string }) =>
       invokeRepoMutation("drop_commit", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.DropCommit,
   });
 }
@@ -472,6 +480,7 @@ export function useSquashCommitsMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHashes: string[]; message: string }) =>
       invokeRepoMutation("squash_commits", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.SquashCommits,
   });
 }
@@ -657,6 +666,7 @@ export function useStashPopMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; stashRef: string }) =>
       invokeRepoMutation("stash_pop", variables),
+    refreshOnError: true,
     optimisticUpdate: (snapshot, variables) => ({
       ...snapshot,
       stashes: snapshot.stashes.filter((stash) => stash.refName !== variables.stashRef),
@@ -754,6 +764,7 @@ export function useResolveConflictChoiceMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; filePath: string; choice: ResolveConflictChoice }) =>
       invokeRepoMutation("resolve_conflict_choice", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.ResolveConflictChoice,
   });
 }
@@ -762,6 +773,7 @@ export function useResolveConflictTextMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; filePath: string; resolvedText: string }) =>
       invokeRepoMutation("resolve_conflict_text", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.ResolveConflictText,
   });
 }
@@ -788,6 +800,7 @@ export function useRewordCommitMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string; commitHash: string; message: string }) =>
       invokeRepoMutation("reword_commit", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.RewordCommit,
   });
 }
@@ -828,6 +841,7 @@ export function useContinueRepoOperationMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string }) =>
       invokeRepoMutation("continue_repo_operation", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.ContinueRepoOperation,
   });
 }
@@ -836,6 +850,7 @@ export function useAbortRepoOperationMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string }) =>
       invokeRepoMutation("abort_repo_operation", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.AbortRepoOperation,
   });
 }
@@ -844,6 +859,7 @@ export function useSkipRepoOperationMutation() {
   return useRepoCommandMutation({
     mutationFn: (variables: { path: string }) =>
       invokeRepoMutation("skip_repo_operation", variables),
+    refreshOnError: true,
     refreshOp: RepoGitRefreshOp.SkipRepoOperation,
   });
 }

@@ -1529,9 +1529,31 @@ fn git_output_allow_fail(workdir: &Path, args: &[&str]) -> Option<String> {
 
 fn detect_repo_operation_state_from_git_dir(git_dir: &Path) -> Option<RepoOperationState> {
     if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
+        let progress = [
+            ("rebase-merge", "msgnum", "end"),
+            ("rebase-apply", "next", "last"),
+        ]
+        .into_iter()
+        .find_map(|(dir, current, total)| {
+            let dir = git_dir.join(dir);
+            let current = std::fs::read_to_string(dir.join(current))
+                .ok()?
+                .trim()
+                .parse::<u32>()
+                .ok()?;
+            let total = std::fs::read_to_string(dir.join(total))
+                .ok()?
+                .trim()
+                .parse::<u32>()
+                .ok()?;
+            Some((current, total))
+        });
+        let label = progress
+            .map(|(current, total)| format!("Rebase in progress ({current} of {total})"))
+            .unwrap_or_else(|| "Rebase in progress".into());
         return Some(RepoOperationState {
             kind: "rebase".into(),
-            label: "Rebase in progress".into(),
+            label,
             can_continue: true,
             can_abort: true,
             can_skip: true,
@@ -2743,26 +2765,31 @@ pub fn set_remote_url(
 /// Rebase the current branch onto `onto` (local branch name or remote ref such as `origin/main`).
 /// With `interactive`, runs `git rebase -i` using the user's configured sequence/core editor.
 #[tauri::command]
-pub fn rebase_current_branch_onto(
+pub async fn rebase_current_branch_onto(
     app: AppHandle,
     path: String,
     onto: String,
     interactive: bool,
 ) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    ensure_git_repo(&path_buf)?;
-    let onto = onto.trim();
-    if onto.is_empty() {
-        return Err("Branch or ref is empty.".to_string());
-    }
-    let verify_spec = format!("{onto}^{{commit}}");
-    git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
-    if interactive {
-        run_git_streaming(&app, &path_buf, &["rebase", "-i", onto], "rebase")?;
-    } else {
-        run_git_streaming(&app, &path_buf, &["rebase", onto], "rebase")?;
-    }
-    Ok(())
+    run_blocking_git_command(move || {
+        let path_buf = PathBuf::from(&path);
+        ensure_git_repo(&path_buf)?;
+        let onto = onto.trim();
+        if onto.is_empty() {
+            return Err("Branch or ref is empty.".to_string());
+        }
+        git_output(&path_buf, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .map_err(|_| "Rebase requires the current branch to be checked out.".to_string())?;
+        let verify_spec = format!("{onto}^{{commit}}");
+        git_output(&path_buf, &["rev-parse", "--verify", &verify_spec])?;
+        if interactive {
+            run_git_streaming(&app, &path_buf, &["rebase", "-i", onto], "rebase")?;
+        } else {
+            run_git_streaming(&app, &path_buf, &["rebase", onto], "rebase")?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[derive(Debug, Clone, Copy, Deserialize_repr)]
@@ -3142,6 +3169,7 @@ struct WtAcc {
 
 #[derive(Debug, Default, Clone, Copy)]
 struct ConflictStagePresence {
+    has_base: bool,
     has_ours: bool,
     has_theirs: bool,
 }
@@ -3248,6 +3276,7 @@ fn parse_unmerged_index_z(out: &str) -> HashMap<String, ConflictStagePresence> {
         };
         let acc = by_path.entry(path.to_string()).or_default();
         match stage {
+            "1" => acc.has_base = true,
             "2" => acc.has_ours = true,
             "3" => acc.has_theirs = true,
             _ => {}
@@ -3262,6 +3291,18 @@ fn conflict_choice_labels(has_ours: bool, has_theirs: bool) -> (bool, bool, Stri
         (true, false) => (true, true, "Keep ours".into(), "Keep deletion".into()),
         (false, true) => (true, true, "Keep deletion".into(), "Keep theirs".into()),
         (false, false) => (true, false, "Keep deletion".into(), String::new()),
+    }
+}
+
+fn conflict_status_code_from_stages(stages: ConflictStagePresence) -> &'static str {
+    match (stages.has_base, stages.has_ours, stages.has_theirs) {
+        (true, true, true) => "UU",
+        (false, true, true) => "AA",
+        (true, true, false) => "UD",
+        (false, true, false) => "AU",
+        (true, false, true) => "DU",
+        (false, false, true) => "UA",
+        _ => "DD",
     }
 }
 
@@ -3664,83 +3705,109 @@ pub fn unstage_patch(app: AppHandle, path: String, patch: String) -> Result<(), 
     Ok(())
 }
 
+fn write_and_stage_resolved_file(workdir: &Path, rel: &str, contents: &[u8]) -> Result<(), String> {
+    let worktree_path = workdir.join(rel);
+    let original = match std::fs::read(&worktree_path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("Could not read conflicted file: {error}")),
+    };
+    std::fs::write(&worktree_path, contents)
+        .map_err(|error| format!("Could not write resolved file: {error}"))?;
+    if let Err(stage_error) = git_output(workdir, &["add", "--", rel]) {
+        let restore_result = match original {
+            Some(bytes) => std::fs::write(&worktree_path, bytes),
+            None => std::fs::remove_file(&worktree_path),
+        };
+        return match restore_result {
+            Ok(()) => Err(stage_error),
+            Err(restore_error) => Err(format!(
+                "{stage_error}\nThe previous file contents could not be restored: {restore_error}"
+            )),
+        };
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub fn resolve_conflict_choice(
+pub async fn resolve_conflict_choice(
     app: AppHandle,
     path: String,
     file_path: String,
     choice: ResolveConflictChoice,
 ) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    ensure_git_repo(&path_buf)?;
-    let rel = file_path.trim();
-    if rel.is_empty() {
-        return Err("File path cannot be empty.".to_string());
-    }
-    let unmerged = parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
-    let Some(stages) = unmerged.get(rel).copied() else {
-        return Err("This path is not currently conflicted.".to_string());
-    };
-    if choice == ResolveConflictChoice::Both {
-        if !stages.has_ours || !stages.has_theirs {
-            return Err(
-                "Select both is only available when both sides have file contents.".to_string(),
-            );
+    run_blocking_git_command(move || {
+        let path_buf = PathBuf::from(&path);
+        ensure_git_repo(&path_buf)?;
+        if file_path.is_empty() {
+            return Err("File path cannot be empty.".to_string());
         }
-        let worktree_text = utf8_text_from_bytes(read_working_tree_bytes(&path_buf, rel)?)
-            .ok_or_else(|| "Select both is only available for text conflicts.".to_string())?;
-        let resolved = resolve_conflict_markers_keep_both(&worktree_text).ok_or_else(|| {
-            "Could not combine both sides for this conflict automatically.".to_string()
-        })?;
-        std::fs::write(path_buf.join(rel), resolved)
-            .map_err(|e| format!("Could not write resolved file: {e}"))?;
+        let rel = file_path.as_str();
+        let unmerged =
+            parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
+        let Some(stages) = unmerged.get(rel).copied() else {
+            return Err("This path is not currently conflicted.".to_string());
+        };
+        if choice == ResolveConflictChoice::Both {
+            if !stages.has_ours || !stages.has_theirs {
+                return Err(
+                    "Select both is only available when both sides have file contents.".to_string(),
+                );
+            }
+            let worktree_text = utf8_text_from_bytes(read_working_tree_bytes(&path_buf, rel)?)
+                .ok_or_else(|| "Select both is only available for text conflicts.".to_string())?;
+            let resolved = resolve_conflict_markers_keep_both(&worktree_text).ok_or_else(|| {
+                "Could not combine both sides for this conflict automatically.".to_string()
+            })?;
+            return write_and_stage_resolved_file(&path_buf, rel, resolved.as_bytes());
+        }
+        let delete_path = match choice {
+            ResolveConflictChoice::Ours => !stages.has_ours,
+            ResolveConflictChoice::Theirs => !stages.has_theirs,
+            ResolveConflictChoice::Both => false,
+        };
+        if delete_path {
+            run_git_streaming(
+                &app,
+                &path_buf,
+                &["rm", "--force", "--", rel],
+                "resolve conflict",
+            )?;
+            return Ok(());
+        }
+        let checkout_args = if choice == ResolveConflictChoice::Ours {
+            ["checkout", "--ours", "--", rel]
+        } else {
+            ["checkout", "--theirs", "--", rel]
+        };
+        run_git_streaming(&app, &path_buf, &checkout_args, "resolve conflict")?;
         git_output(&path_buf, &["add", "--", rel])?;
-        return Ok(());
-    }
-    let delete_path = match choice {
-        ResolveConflictChoice::Ours => !stages.has_ours,
-        ResolveConflictChoice::Theirs => !stages.has_theirs,
-        ResolveConflictChoice::Both => false,
-    };
-    if delete_path {
-        run_git_streaming(
-            &app,
-            &path_buf,
-            &["rm", "--force", "--", rel],
-            "resolve conflict",
-        )?;
-        return Ok(());
-    }
-    let checkout_args = if choice == ResolveConflictChoice::Ours {
-        ["checkout", "--ours", "--", rel]
-    } else {
-        ["checkout", "--theirs", "--", rel]
-    };
-    run_git_streaming(&app, &path_buf, &checkout_args, "resolve conflict")?;
-    git_output(&path_buf, &["add", "--", rel])?;
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn resolve_conflict_text(
+pub async fn resolve_conflict_text(
     path: String,
     file_path: String,
     resolved_text: String,
 ) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    ensure_git_repo(&path_buf)?;
-    let rel = file_path.trim();
-    if rel.is_empty() {
-        return Err("File path cannot be empty.".to_string());
-    }
-    let unmerged = parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
-    if !unmerged.contains_key(rel) {
-        return Err("This path is not currently conflicted.".to_string());
-    }
-    std::fs::write(path_buf.join(rel), resolved_text)
-        .map_err(|e| format!("Could not write resolved file: {e}"))?;
-    git_output(&path_buf, &["add", "--", rel])?;
-    Ok(())
+    run_blocking_git_command(move || {
+        let path_buf = PathBuf::from(&path);
+        ensure_git_repo(&path_buf)?;
+        if file_path.is_empty() {
+            return Err("File path cannot be empty.".to_string());
+        }
+        let rel = file_path.as_str();
+        let unmerged =
+            parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
+        if !unmerged.contains_key(rel) {
+            return Err("This path is not currently conflicted.".to_string());
+        }
+        write_and_stage_resolved_file(&path_buf, rel, resolved_text.as_bytes())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -4253,74 +4320,83 @@ fn current_repo_operation_state(workdir: &Path) -> Result<RepoOperationState, St
 }
 
 #[tauri::command]
-pub fn continue_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    ensure_git_repo(&path_buf)?;
-    let op = current_repo_operation_state(&path_buf)?;
-    let editor_env = non_interactive_git_editor_env();
-    match op.kind.as_str() {
-        "rebase" => run_git_streaming_with_env(
-            &app,
-            &path_buf,
-            &["rebase", "--continue"],
-            "continue rebase",
-            &editor_env,
-        )?,
-        "merge" => run_git_streaming_with_env(
-            &app,
-            &path_buf,
-            &["merge", "--continue"],
-            "continue merge",
-            &editor_env,
-        )?,
-        "cherryPick" => run_git_streaming_with_env(
-            &app,
-            &path_buf,
-            &["cherry-pick", "--continue"],
-            "continue cherry-pick",
-            &editor_env,
-        )?,
-        _ => return Err("Unsupported operation.".to_string()),
-    }
-    Ok(())
+pub async fn continue_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
+    run_blocking_git_command(move || {
+        let path_buf = PathBuf::from(&path);
+        ensure_git_repo(&path_buf)?;
+        let op = current_repo_operation_state(&path_buf)?;
+        let editor_env = non_interactive_git_editor_env();
+        match op.kind.as_str() {
+            "rebase" => run_git_streaming_with_env(
+                &app,
+                &path_buf,
+                &["rebase", "--continue"],
+                "continue rebase",
+                &editor_env,
+            )?,
+            "merge" => run_git_streaming_with_env(
+                &app,
+                &path_buf,
+                &["merge", "--continue"],
+                "continue merge",
+                &editor_env,
+            )?,
+            "cherryPick" => run_git_streaming_with_env(
+                &app,
+                &path_buf,
+                &["cherry-pick", "--continue"],
+                "continue cherry-pick",
+                &editor_env,
+            )?,
+            _ => return Err("Unsupported operation.".to_string()),
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn abort_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    ensure_git_repo(&path_buf)?;
-    let op = current_repo_operation_state(&path_buf)?;
-    match op.kind.as_str() {
-        "rebase" => run_git_streaming(&app, &path_buf, &["rebase", "--abort"], "abort rebase")?,
-        "merge" => run_git_streaming(&app, &path_buf, &["merge", "--abort"], "abort merge")?,
-        "cherryPick" => run_git_streaming(
-            &app,
-            &path_buf,
-            &["cherry-pick", "--abort"],
-            "abort cherry-pick",
-        )?,
-        _ => return Err("Unsupported operation.".to_string()),
-    }
-    Ok(())
+pub async fn abort_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
+    run_blocking_git_command(move || {
+        let path_buf = PathBuf::from(&path);
+        ensure_git_repo(&path_buf)?;
+        let op = current_repo_operation_state(&path_buf)?;
+        match op.kind.as_str() {
+            "rebase" => run_git_streaming(&app, &path_buf, &["rebase", "--abort"], "abort rebase")?,
+            "merge" => run_git_streaming(&app, &path_buf, &["merge", "--abort"], "abort merge")?,
+            "cherryPick" => run_git_streaming(
+                &app,
+                &path_buf,
+                &["cherry-pick", "--abort"],
+                "abort cherry-pick",
+            )?,
+            _ => return Err("Unsupported operation.".to_string()),
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn skip_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
-    ensure_git_repo(&path_buf)?;
-    let op = current_repo_operation_state(&path_buf)?;
-    match op.kind.as_str() {
-        "rebase" => run_git_streaming(&app, &path_buf, &["rebase", "--skip"], "skip rebase")?,
-        "cherryPick" => run_git_streaming(
-            &app,
-            &path_buf,
-            &["cherry-pick", "--skip"],
-            "skip cherry-pick",
-        )?,
-        "merge" => return Err("Merge does not support skip.".to_string()),
-        _ => return Err("Unsupported operation.".to_string()),
-    }
-    Ok(())
+pub async fn skip_repo_operation(app: AppHandle, path: String) -> Result<(), String> {
+    run_blocking_git_command(move || {
+        let path_buf = PathBuf::from(&path);
+        ensure_git_repo(&path_buf)?;
+        let op = current_repo_operation_state(&path_buf)?;
+        match op.kind.as_str() {
+            "rebase" => run_git_streaming(&app, &path_buf, &["rebase", "--skip"], "skip rebase")?,
+            "cherryPick" => run_git_streaming(
+                &app,
+                &path_buf,
+                &["cherry-pick", "--skip"],
+                "skip cherry-pick",
+            )?,
+            "merge" => return Err("Merge does not support skip.".to_string()),
+            _ => return Err("Unsupported operation.".to_string()),
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// History of commits touching `file_path` (`git log --follow`), newest first.
@@ -4667,57 +4743,45 @@ fn resolve_conflict_markers_keep_both(worktree_text: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn get_conflict_file_details(
+pub async fn get_conflict_file_details(
     path: String,
     file_path: String,
 ) -> Result<ConflictFileDetails, String> {
-    let path_buf = PathBuf::from(&path);
-    ensure_git_repo(&path_buf)?;
-    let rel = file_path.trim();
-    if rel.is_empty() {
-        return Err("File path cannot be empty.".to_string());
-    }
-    let unmerged = parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
-    let Some(stages) = unmerged.get(rel).copied() else {
-        return Err("This path is not currently conflicted.".to_string());
-    };
-    let porcelain = git_output_raw(
-        &path_buf,
-        &[
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--find-renames",
-            "-z",
-            "--",
-            rel,
-        ],
-    )?;
-    let entries = parse_porcelain_v1_z(&porcelain);
-    let entry = entries
-        .into_iter()
-        .find(|entry| entry.path == rel || entry.rename_from.as_deref() == Some(rel))
-        .ok_or_else(|| "Could not read the conflict state for this path.".to_string())?;
-    let conflict = build_conflict_state(&entry.status_code, stages)
-        .ok_or_else(|| "This path is not currently conflicted.".to_string())?;
-    let ours = git_show_blob_bytes(&path_buf, &format!(":2:{rel}"))?;
-    let theirs = git_show_blob_bytes(&path_buf, &format!(":3:{rel}"))?;
-    let worktree_text = utf8_text_from_bytes(read_working_tree_bytes(&path_buf, rel)?);
-    let conflict_ranges = worktree_text
-        .as_deref()
-        .map(parse_conflict_ranges)
-        .unwrap_or(ConflictRangesBySide {
-            ours: Vec::new(),
-            theirs: Vec::new(),
-        });
-    Ok(ConflictFileDetails {
-        status_code: conflict.status_code,
-        summary: conflict.summary,
-        ours: conflict_preview_from_bytes("Ours", ours),
-        theirs: conflict_preview_from_bytes("Theirs", theirs),
-        conflict_ranges,
-        worktree_text,
+    run_blocking_git_task(move || {
+        let path_buf = PathBuf::from(&path);
+        ensure_git_repo(&path_buf)?;
+        if file_path.is_empty() {
+            return Err("File path cannot be empty.".to_string());
+        }
+        let rel = file_path.as_str();
+        let unmerged =
+            parse_unmerged_index_z(&git_output_raw(&path_buf, &["ls-files", "-u", "-z"])?);
+        let Some(stages) = unmerged.get(rel).copied() else {
+            return Err("This path is not currently conflicted.".to_string());
+        };
+        let status_code = conflict_status_code_from_stages(stages);
+        let conflict = build_conflict_state(status_code, stages)
+            .ok_or_else(|| "This path is not currently conflicted.".to_string())?;
+        let ours = git_show_blob_bytes(&path_buf, &format!(":2:{rel}"))?;
+        let theirs = git_show_blob_bytes(&path_buf, &format!(":3:{rel}"))?;
+        let worktree_text = utf8_text_from_bytes(read_working_tree_bytes(&path_buf, rel)?);
+        let conflict_ranges = worktree_text
+            .as_deref()
+            .map(parse_conflict_ranges)
+            .unwrap_or(ConflictRangesBySide {
+                ours: Vec::new(),
+                theirs: Vec::new(),
+            });
+        Ok(ConflictFileDetails {
+            status_code: conflict.status_code,
+            summary: conflict.summary,
+            ours: conflict_preview_from_bytes("Ours", ours),
+            theirs: conflict_preview_from_bytes("Theirs", theirs),
+            conflict_ranges,
+            worktree_text,
+        })
     })
+    .await
 }
 
 const MAX_COMMIT_FILE_PATH_DISPLAY: usize = 40;
@@ -5693,9 +5757,10 @@ pub async fn push_tag_to_origin(app: AppHandle, path: String, tag: String) -> Re
 mod tests {
     use super::{
         build_stash_push_args, commit_object_text_has_signature,
-        commit_object_text_signature_format, commit_path_display_parts, parse_conflict_ranges,
-        parse_porcelain_v1_z, parse_porcelain_xy, parse_unmerged_index_z,
-        ssh_public_key_requires_user_presence,
+        commit_object_text_signature_format, commit_path_display_parts,
+        conflict_status_code_from_stages, parse_conflict_ranges, parse_porcelain_v1_z,
+        parse_porcelain_xy, parse_unmerged_index_z, resolve_conflict_markers_keep_both,
+        ssh_public_key_requires_user_presence, ConflictStagePresence,
     };
 
     #[test]
@@ -5828,11 +5893,40 @@ subject
     #[test]
     fn parse_unmerged_index_tracks_stage_presence() {
         let parsed = parse_unmerged_index_z(
-            "100644 abcdef 2\tconflicted.txt\0100644 fedcba 3\tconflicted.txt\0",
+            "100644 000000 1\tconflicted.txt\0100644 abcdef 2\tconflicted.txt\0100644 fedcba 3\tconflicted.txt\0",
         );
         let stages = parsed.get("conflicted.txt").copied().unwrap_or_default();
+        assert!(stages.has_base);
         assert!(stages.has_ours);
         assert!(stages.has_theirs);
+    }
+
+    #[test]
+    fn conflict_status_is_derived_from_index_stages() {
+        assert_eq!(
+            conflict_status_code_from_stages(ConflictStagePresence {
+                has_base: true,
+                has_ours: true,
+                has_theirs: false,
+            }),
+            "UD"
+        );
+        assert_eq!(
+            conflict_status_code_from_stages(ConflictStagePresence {
+                has_base: false,
+                has_ours: true,
+                has_theirs: true,
+            }),
+            "AA"
+        );
+    }
+
+    #[test]
+    fn keep_both_preserves_crlf_content() {
+        let resolved = resolve_conflict_markers_keep_both(
+            "<<<<<<< ours\r\nleft\r\n=======\r\nright\r\n>>>>>>> theirs\r\n",
+        );
+        assert_eq!(resolved.as_deref(), Some("left\r\nright\r\n"));
     }
 
     #[test]

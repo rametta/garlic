@@ -173,13 +173,12 @@ export async function mergeRepoSnapshotAfterCheckout(
   queryClient: QueryClient,
   path: string,
 ): Promise<void> {
-  const prev = getRepoSnapshot(queryClient, path);
-  if (!prev) return;
-
   const [metadata, lists] = await Promise.all([
     invoke<RepoMetadata>("get_repo_metadata", { path }),
     loadRepoLists(path, CHECKOUT_LIST_SELECTION),
   ]);
+  const prev = getRepoSnapshot(queryClient, path);
+  if (!prev) return;
 
   if (metadata.error) {
     setRepoSnapshot(queryClient, path, emptyRepoSnapshot(metadata));

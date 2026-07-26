@@ -8,6 +8,7 @@ import type { BundledLanguage } from "shiki";
 
 import {
   buildResolvedConflictLines,
+  buildResolvedConflictText,
   createEmptyConflictSelectionDraft,
   isConflictBlockResolved,
   parseConflictWorktreeText,
@@ -22,6 +23,8 @@ import { pathToShikiLang } from "../diffLanguage";
 import { useDiffShikiTheme, useShikiHighlighter } from "../diffShiki";
 import type { ConflictFileDetails as RepoConflictFileDetails } from "../gitTypes";
 import { ConflictVersionPanel, type ConflictSelectionControls } from "./ConflictVersionPanel";
+
+const RESOLVED_PREVIEW_LINE_LIMIT = 1000;
 
 function shikiTokenStyleToReact(style: Record<string, string>): CSSProperties {
   const out: Record<string, string> = {};
@@ -71,7 +74,8 @@ const ResolvedTextHighlight = memo(function ResolvedTextHighlight({
   const highlighter = useShikiHighlighter();
   const shikiTheme = useDiffShikiTheme();
   const lang = useMemo(() => pathToShikiLang(path), [path]);
-  const textLines = useMemo(() => lines.map((l) => l.text), [lines]);
+  const visibleLines = useMemo(() => lines.slice(0, RESOLVED_PREVIEW_LINE_LIMIT), [lines]);
+  const textLines = useMemo(() => visibleLines.map((l) => l.text), [visibleLines]);
 
   const tokenRows = useMemo(() => {
     if (!highlighter || !lang) return null;
@@ -91,7 +95,7 @@ const ResolvedTextHighlight = memo(function ResolvedTextHighlight({
 
   return (
     <div className="unified-diff-panel unified-diff-grid pb-3">
-      {lines.map((row, lineIndex) => {
+      {visibleLines.map((row, lineIndex) => {
         const { gutter: gutterExtra, code: codeClass, title } = resolvedRowDiffClasses(row.source);
         const lineText = row.text;
         const tokenRow = tokenRows?.[lineIndex];
@@ -127,6 +131,12 @@ const ResolvedTextHighlight = memo(function ResolvedTextHighlight({
           </div>
         );
       })}
+      {lines.length > visibleLines.length ? (
+        <div className="border-t border-base-300/70 px-3 py-2 font-sans text-xs text-base-content/55">
+          Preview limited to {visibleLines.length.toLocaleString()} lines. The complete resolution
+          will still be staged.
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -135,6 +145,8 @@ type ConflictResolutionDraftProps = {
   path: string;
   details: RepoConflictFileDetails;
   busy?: boolean;
+  oursName: string;
+  theirsName: string;
   onStageResolved: (resolvedText: string) => void;
 };
 
@@ -167,6 +179,8 @@ export const ConflictResolutionDraft = memo(function ConflictResolutionDraft({
   path,
   details,
   busy = false,
+  oursName,
+  theirsName,
   onStageResolved,
 }: ConflictResolutionDraftProps) {
   const parsed = useMemo(
@@ -235,6 +249,28 @@ export const ConflictResolutionDraft = memo(function ConflictResolutionDraft({
     );
   }, []);
 
+  const resolveAllFromSide = useCallback(
+    (side: ConflictResolutionSide) => {
+      if (!parsed) return;
+      const next: Record<number, ConflictBlockSelectionDraft> = {};
+      for (const conflict of parsed.conflicts) {
+        const lineNumbers = (side === "ours" ? conflict.oursLines : conflict.theirsLines).map(
+          (line) => line.lineNumber,
+        );
+        next[conflict.conflictIndex] =
+          lineNumbers.length === 0
+            ? withResolvedEmptySelection()
+            : {
+                oursLineNumbers: side === "ours" ? lineNumbers : [],
+                theirsLineNumbers: side === "theirs" ? lineNumbers : [],
+                resolvedAsEmpty: false,
+              };
+      }
+      setDrafts(next);
+    },
+    [parsed],
+  );
+
   const oursSelectionControls = useMemo<ConflictSelectionControls>(
     () => ({
       blockActionLabel: "Take block",
@@ -297,9 +333,7 @@ export const ConflictResolutionDraft = memo(function ConflictResolutionDraft({
       return { text: null as string | null, lines: null as ResolvedPreviewLine[] | null };
     const lines = buildResolvedConflictLines(parsed, drafts);
     if (lines === null) return { text: null, lines: null };
-    const outputLines = lines.map((l) => l.text);
-    const resolved = outputLines.join(parsed.eol);
-    const text = parsed.hasTrailingNewline ? `${resolved}${parsed.eol}` : resolved;
+    const text = buildResolvedConflictText(parsed, drafts);
     return { text, lines };
   }, [drafts, parsed]);
   const resolvedText = resolvedAssembly.text;
@@ -313,14 +347,14 @@ export const ConflictResolutionDraft = memo(function ConflictResolutionDraft({
     <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto bg-base-200/40 2xl:grid-cols-3">
       <ConflictVersionPanel
         path={path}
-        preview={details.ours}
+        preview={{ ...details.ours, label: oursName }}
         ranges={details.conflictRanges.ours}
         busy={busy}
         selectionControls={oursSelectionControls}
       />
       <ConflictVersionPanel
         path={path}
-        preview={details.theirs}
+        preview={{ ...details.theirs, label: theirsName }}
         ranges={details.conflictRanges.theirs}
         busy={busy}
         selectionControls={theirsSelectionControls}
@@ -335,17 +369,39 @@ export const ConflictResolutionDraft = memo(function ConflictResolutionDraft({
               Take whole conflict blocks or individual lines, then stage the assembled result.
             </p>
           </div>
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            disabled={busy || resolvedText === null}
-            onClick={() => {
-              if (resolvedText === null) return;
-              onStageResolved(resolvedText);
-            }}
-          >
-            Stage resolved selection
-          </button>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              disabled={busy}
+              onClick={() => {
+                resolveAllFromSide("ours");
+              }}
+            >
+              Use all {oursName.toLowerCase()}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              disabled={busy}
+              onClick={() => {
+                resolveAllFromSide("theirs");
+              }}
+            >
+              Use all {theirsName.toLowerCase()}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={busy || resolvedText === null}
+              onClick={() => {
+                if (resolvedText === null) return;
+                onStageResolved(resolvedText);
+              }}
+            >
+              Stage resolution
+            </button>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           <div className="mb-3 bg-base-100/40 px-3 py-2 text-xs text-base-content/65">
@@ -366,7 +422,7 @@ export const ConflictResolutionDraft = memo(function ConflictResolutionDraft({
                     {summary.resolved
                       ? summary.resolvedAsEmpty
                         ? "Resolved as empty output."
-                        : `${summary.oursSelected} ours, ${summary.theirsSelected} theirs selected.`
+                        : `${summary.oursSelected} ${oursName.toLowerCase()}, ${summary.theirsSelected} ${theirsName.toLowerCase()} selected.`
                       : "Waiting for a block or line selection."}
                   </div>
                 </div>

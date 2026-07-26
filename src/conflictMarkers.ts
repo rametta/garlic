@@ -237,6 +237,9 @@ export function buildResolvedConflictText(
     return null;
   }
   const outputLines = lines.map((l) => l.text);
+  if (outputLines.length === 0) {
+    return "";
+  }
   const resolved = outputLines.join(parsed.eol);
   return parsed.hasTrailingNewline ? `${resolved}${parsed.eol}` : resolved;
 }

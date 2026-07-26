@@ -43,7 +43,7 @@ export async function popupBranchContextMenu(
   const isCurrentLocalBranch = args.kind === "local" && args.branchName === args.currentBranchName;
 
   const mergeDisabled = args.branchBusy || disableRebaseOnto || args.repoDetached;
-  const rebaseDisabled = args.branchBusy || disableRebaseOnto;
+  const rebaseDisabled = args.branchBusy || disableRebaseOnto || args.repoDetached;
   const deleteDisabled = args.branchBusy || isCurrentLocalBranch;
 
   const items: MenuItemOptions[] = [];

@@ -84,6 +84,7 @@ import {
   DEFAULT_AUTO_FETCH_INTERVAL_MINUTES,
   type ConflictFileDetails as RepoConflictFileDetails,
   type LineStat,
+  type RepoOperationState,
   repoSnapshotFromStartup,
   type RestoreLastRepo,
   type WorkingTreeFile,
@@ -800,14 +801,29 @@ const StandaloneDiffPane = memo(function StandaloneDiffPane({
   );
 });
 
+function conflictResolutionSideNames(kind: RepoOperationState["kind"] | null): {
+  ours: string;
+  theirs: string;
+} {
+  switch (kind) {
+    case "rebase":
+      return { ours: "Rebase target", theirs: "Commit being replayed" };
+    case "merge":
+      return { ours: "Current branch", theirs: "Incoming branch" };
+    case "cherryPick":
+      return { ours: "Current branch", theirs: "Commit being picked" };
+    default:
+      return { ours: "Ours", theirs: "Theirs" };
+  }
+}
+
 const ConflictResolutionPane = memo(function ConflictResolutionPane({
   path,
+  repoOperationKind,
   loading,
   error,
   details,
   busy,
-  oursLabel,
-  theirsLabel,
   canChooseOurs,
   canChooseTheirs,
   onChooseOurs,
@@ -818,23 +834,21 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
   onDismissError,
 }: {
   path: string;
-  repoOperationLabel: string | null;
+  repoOperationKind: RepoOperationState["kind"] | null;
   loading: boolean;
   error: string | null;
   details: RepoConflictFileDetails | null;
   busy: boolean;
-  oursLabel: string;
-  theirsLabel: string;
   canChooseOurs: boolean;
   canChooseTheirs: boolean;
   onChooseOurs: () => void;
   onChooseTheirs: () => void;
-  onChooseBoth: () => void;
   onStageResolvedText: (resolvedText: string) => void;
   onOpenInCursor: () => void;
   onBack: () => void;
   onDismissError: () => void;
 }) {
+  const sideNames = conflictResolutionSideNames(repoOperationKind);
   const hasCustomDraftResolution = Boolean(
     details &&
     details.worktreeText != null &&
@@ -866,15 +880,19 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
         </div>
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {loading ? (
+        {error ? (
+          <DismissibleAlert
+            className="m-3 mb-0 alert shrink-0 text-sm alert-error"
+            onDismiss={onDismissError}
+          >
+            <span className="wrap-break-word">{error}</span>
+          </DismissibleAlert>
+        ) : null}
+        {loading && !details ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 py-20">
             <span className="loading loading-md loading-spinner text-primary" />
             <p className="m-0 text-sm text-base-content/70">Loading conflict choices...</p>
           </div>
-        ) : error ? (
-          <DismissibleAlert className="alert text-sm alert-error" onDismiss={onDismissError}>
-            <span className="wrap-break-word">{error}</span>
-          </DismissibleAlert>
         ) : details ? (
           hasCustomDraftResolution ? (
             <ConflictResolutionDraft
@@ -882,31 +900,45 @@ const ConflictResolutionPane = memo(function ConflictResolutionPane({
               path={path}
               details={details}
               busy={busy}
+              oursName={sideNames.ours}
+              theirsName={sideNames.theirs}
               onStageResolved={onStageResolvedText}
             />
           ) : (
             <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-auto bg-base-200/40 p-3 xl:grid-cols-2">
               <ConflictVersionPanel
                 path={path}
-                preview={details.ours}
+                preview={{ ...details.ours, label: sideNames.ours }}
                 ranges={details.conflictRanges.ours}
-                actionLabel={canChooseOurs ? oursLabel : undefined}
+                actionLabel={
+                  canChooseOurs
+                    ? details.ours.deleted
+                      ? "Keep deletion"
+                      : `Use ${sideNames.ours.toLowerCase()}`
+                    : undefined
+                }
                 actionKind="primary"
                 busy={busy}
                 onAction={canChooseOurs ? onChooseOurs : undefined}
               />
               <ConflictVersionPanel
                 path={path}
-                preview={details.theirs}
+                preview={{ ...details.theirs, label: sideNames.theirs }}
                 ranges={details.conflictRanges.theirs}
-                actionLabel={canChooseTheirs ? theirsLabel : undefined}
+                actionLabel={
+                  canChooseTheirs
+                    ? details.theirs.deleted
+                      ? "Keep deletion"
+                      : `Use ${sideNames.theirs.toLowerCase()}`
+                    : undefined
+                }
                 actionKind="outline"
                 busy={busy}
                 onAction={canChooseTheirs ? onChooseTheirs : undefined}
               />
             </div>
           )
-        ) : (
+        ) : error ? null : (
           <div className="flex flex-1 items-center justify-center px-4 py-10">
             <p className="m-0 text-sm text-base-content/60">No conflict details loaded.</p>
           </div>
@@ -1622,7 +1654,7 @@ export default function App({
   );
 
   useEffect(() => {
-    if (!repo?.path || repo.error) return;
+    if (!repo?.path || repo.error || repo.operationState) return;
     const pathAtStart = repo.path;
     const graphReloadKey = [
       pathAtStart,
@@ -1662,6 +1694,7 @@ export default function App({
     repo?.path,
     repo?.error,
     repo?.headHash,
+    repo?.operationState,
     hiddenGraphRefsKey,
     graphMissingRefTipsKey,
     stashRefsKey,
@@ -3111,7 +3144,7 @@ export default function App({
 
   const rebaseCurrentBranchOnto = useCallback(
     async (onto: string, interactive: boolean) => {
-      if (!repo?.path || repo.error) return;
+      if (!repo?.path || repo.error || repo.detached || repo.operationState) return;
       const ok = await ask(
         interactive
           ? `Interactive rebase the current branch onto "${onto}"? Your Git editor (sequence.editor or core.editor) will open for the rebase todo list.`
@@ -3302,7 +3335,7 @@ export default function App({
         fullRef: spec.kind === "remote" ? spec.fullRef : undefined,
         currentBranchName: repo?.detached ? null : (repo?.branch ?? null),
         repoDetached: Boolean(repo?.detached),
-        branchBusy: Boolean(branchBusy),
+        branchBusy: Boolean(branchBusy || repo?.operationState),
         canPull: localBranch?.upstreamName != null,
         onCheckout:
           spec.kind === "local"
@@ -3419,6 +3452,13 @@ export default function App({
 
   const skipRepoOperation = useCallback(async () => {
     if (!repo?.path || repo.error || !repo.operationState?.canSkip) return;
+    const ok = await ask(
+      repo.operationState.kind === "rebase"
+        ? "Skip the commit currently being replayed? Its changes will not be included in the rebased branch."
+        : "Skip the current cherry-picked commit? Its changes will not be included.",
+      { title: "Garlic", kind: "warning" },
+    );
+    if (!ok) return;
     setBranchBusy("skip-operation");
     setOperationError(null);
     try {
@@ -3441,8 +3481,6 @@ export default function App({
         next.add(filePath);
         return next;
       });
-      clearSelectedDiffContent();
-      setConflictLoading(true);
       try {
         await resolveConflictChoiceMutation.mutateAsync({ path: repo.path, filePath, choice });
       } catch (e) {
@@ -3455,10 +3493,9 @@ export default function App({
           next.delete(filePath);
           return next;
         });
-        setConflictLoading(false);
       }
     },
-    [repo, syncingStagePaths, clearSelectedDiffContent, resolveConflictChoiceMutation],
+    [repo, syncingStagePaths, resolveConflictChoiceMutation],
   );
 
   const resolveConflictText = useCallback(
@@ -3472,8 +3509,6 @@ export default function App({
         next.add(filePath);
         return next;
       });
-      clearSelectedDiffContent();
-      setConflictLoading(true);
       try {
         await resolveConflictTextMutation.mutateAsync({
           path: repo.path,
@@ -3490,10 +3525,9 @@ export default function App({
           next.delete(filePath);
           return next;
         });
-        setConflictLoading(false);
       }
     },
-    [repo, syncingStagePaths, clearSelectedDiffContent, resolveConflictTextMutation],
+    [repo, syncingStagePaths, resolveConflictTextMutation],
   );
 
   const rebaseCurrentBranchOntoCommit = useCallback(
@@ -5888,7 +5922,9 @@ export default function App({
                                   <p className="mt-1 mb-0 text-xs leading-relaxed text-base-content/70">
                                     {hasConflictedFiles
                                       ? `Resolve ${conflictedFiles.length} conflicted file${conflictedFiles.length === 1 ? "" : "s"}, then continue.`
-                                      : "Continue, skip, or abort this operation."}
+                                      : repo.operationState.canSkip
+                                        ? "All conflicts are resolved. Continue, skip this commit, or abort."
+                                        : "All conflicts are resolved. Continue or abort this operation."}
                                   </p>
                                 </div>
                                 <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -6013,19 +6049,11 @@ export default function App({
                                         {selectedConflictFile ? (
                                           <ConflictResolutionPane
                                             path={selectedConflictFile.path}
-                                            repoOperationLabel={repo?.operationState?.label ?? null}
+                                            repoOperationKind={repo?.operationState?.kind ?? null}
                                             loading={conflictLoading}
                                             error={conflictError}
                                             details={conflictDetails}
                                             busy={!canEditSelectedDiff || selectedDiffBusy}
-                                            oursLabel={
-                                              selectedConflictFile.conflict?.oursLabel ??
-                                              "Keep ours"
-                                            }
-                                            theirsLabel={
-                                              selectedConflictFile.conflict?.theirsLabel ??
-                                              "Keep theirs"
-                                            }
                                             canChooseOurs={
                                               selectedConflictFile.conflict?.canChooseOurs ?? false
                                             }
@@ -6043,12 +6071,6 @@ export default function App({
                                               void resolveConflictChoice(
                                                 selectedConflictFile.path,
                                                 ResolveConflictChoice.Theirs,
-                                              );
-                                            }}
-                                            onChooseBoth={() => {
-                                              void resolveConflictChoice(
-                                                selectedConflictFile.path,
-                                                ResolveConflictChoice.Both,
                                               );
                                             }}
                                             onStageResolvedText={(resolvedText) => {
@@ -6257,17 +6279,11 @@ export default function App({
                               selectedConflictFile ? (
                                 <ConflictResolutionPane
                                   path={selectedDiffPath}
-                                  repoOperationLabel={repo?.operationState?.label ?? null}
+                                  repoOperationKind={repo?.operationState?.kind ?? null}
                                   loading={conflictLoading}
                                   error={conflictError}
                                   details={conflictDetails}
                                   busy={!canEditSelectedDiff || selectedDiffBusy}
-                                  oursLabel={
-                                    selectedConflictFile.conflict?.oursLabel ?? "Keep ours"
-                                  }
-                                  theirsLabel={
-                                    selectedConflictFile.conflict?.theirsLabel ?? "Keep theirs"
-                                  }
                                   canChooseOurs={
                                     selectedConflictFile.conflict?.canChooseOurs ?? false
                                   }
@@ -6284,12 +6300,6 @@ export default function App({
                                     void resolveConflictChoice(
                                       selectedDiffPath,
                                       ResolveConflictChoice.Theirs,
-                                    );
-                                  }}
-                                  onChooseBoth={() => {
-                                    void resolveConflictChoice(
-                                      selectedDiffPath,
-                                      ResolveConflictChoice.Both,
                                     );
                                   }}
                                   onStageResolvedText={(resolvedText) => {
