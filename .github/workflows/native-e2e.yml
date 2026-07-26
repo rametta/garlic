@@ -23,6 +23,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            dbus-x11 \
+            gnome-keyring \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             webkit2gtk-driver \
@@ -59,4 +61,4 @@ jobs:
         run: cargo install tauri-driver --locked
 
       - name: Run native Tauri E2E
-        run: xvfb-run -a bun run test:e2e
+        run: dbus-run-session -- xvfb-run -a bun run test:e2e
