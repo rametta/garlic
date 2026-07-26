@@ -1285,6 +1285,8 @@ export default function App({
   const lastGraphReloadKeyRef = useRef<string | null>(null);
   /** Prevents overlapping updater checks from repeated native menu clicks. */
   const updateCheckInFlightRef = useRef(false);
+  /** Ensures the automatic launch check only runs once, including in React Strict Mode. */
+  const automaticUpdateCheckStartedRef = useRef(false);
   /** Bumps when clearing browse or starting a new commit selection — drops stale `selectCommit` completions. */
   const selectCommitSeqRef = useRef(0);
   /** Bumps when working-tree diff selection changes — drops stale diff completions. */
@@ -3936,16 +3938,18 @@ export default function App({
     })();
   }, [refreshAfterMutationListenerRef]);
 
-  const runCheckForUpdates = useCallback(async () => {
+  const runCheckForUpdates = useCallback(async (manual: boolean) => {
     if (updateCheckInFlightRef.current) return;
     updateCheckInFlightRef.current = true;
     try {
       const update = await check();
       if (!update) {
-        await message("You already have the latest Garlic release installed.", {
-          title: "Garlic",
-          kind: "info",
-        });
+        if (manual) {
+          await message("You already have the latest Garlic release installed.", {
+            title: "Garlic",
+            kind: "info",
+          });
+        }
         return;
       }
       const notes = update.body?.trim();
@@ -3959,10 +3963,12 @@ export default function App({
       await update.downloadAndInstall();
       await relaunch();
     } catch (e) {
-      await message(invokeErrorMessage(e), {
-        title: "Unable to check for updates",
-        kind: "error",
-      });
+      if (manual) {
+        await message(invokeErrorMessage(e), {
+          title: "Unable to check for updates",
+          kind: "error",
+        });
+      }
     } finally {
       updateCheckInFlightRef.current = false;
     }
@@ -3970,12 +3976,18 @@ export default function App({
   const runCheckForUpdatesListenerRef = useLatest(runCheckForUpdates);
 
   useEffect(() => {
+    if (automaticUpdateCheckStartedRef.current) return;
+    automaticUpdateCheckStartedRef.current = true;
+    void runCheckForUpdates(false);
+  }, [runCheckForUpdates]);
+
+  useEffect(() => {
     const promise = Promise.all([
       listen("open-app-settings", () => {
         openAppSettingsListenerRef.current();
       }),
       listen("check-for-updates-request", () => {
-        void runCheckForUpdatesListenerRef.current();
+        void runCheckForUpdatesListenerRef.current(true);
       }),
       listen("open-repo-request", () => {
         void (async () => {
