@@ -234,7 +234,11 @@ export function useSetGraphBranchVisibilityMutation() {
 }
 
 export function useSetOpenAiSettingsMutation() {
-  return useMutation<void, unknown, { key: string | null; model: string | null }>({
+  return useMutation<
+    void,
+    unknown,
+    { key: string | null; model: string | null; removeKey: boolean }
+  >({
     mutationFn: async (variables) => {
       await invoke("set_openai_settings", variables);
     },

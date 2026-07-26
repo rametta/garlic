@@ -1147,7 +1147,7 @@ export default function App({
   startup,
   recentRepoPaths: initialRecentRepoPaths,
   themePreference: initialThemePreference,
-  openaiApiKey: initialOpenaiApiKey,
+  openaiApiKeyConfigured: initialOpenaiApiKeyConfigured,
   openaiModel: initialOpenaiModel,
   branchSidebarSections: initialBranchSidebarSections,
   initialGraphBranchVisible,
@@ -1164,8 +1164,8 @@ export default function App({
   recentRepoPaths: string[];
   /** Persisted value: `auto` or a DaisyUI theme name. */
   themePreference: string;
-  /** Saved OpenAI API key for AI commit messages (may be empty). */
-  openaiApiKey: string | null;
+  /** Whether an OpenAI API key is available in the native credential store. */
+  openaiApiKeyConfigured: boolean;
   /** OpenAI model id for commit suggestions (defaults to `gpt-5.4-mini`). */
   openaiModel: string;
   /** Which branch-sidebar panels are expanded (persisted in settings). */
@@ -1434,7 +1434,9 @@ export default function App({
   const [cloneRepoDialogOpen, setCloneRepoDialogOpen] = useState(false);
   const [cloneRepoUrlDraft, setCloneRepoUrlDraft] = useState("https://github.com/");
   const [editOriginUrlDialogOpen, setEditOriginUrlDialogOpen] = useState(false);
-  const [openaiApiKey, setOpenaiApiKey] = useState(() => initialOpenaiApiKey?.trim() ?? "");
+  const [openaiApiKeyConfigured, setOpenaiApiKeyConfigured] = useState(
+    initialOpenaiApiKeyConfigured,
+  );
   const [openaiModel, setOpenaiModel] = useState(
     () => initialOpenaiModel.trim() || DEFAULT_OPENAI_MODEL,
   );
@@ -7128,7 +7130,7 @@ export default function App({
                 commitPushBusy={commitPushBusy}
                 pushBusy={pushBusy}
                 repoOperationLabel={repo?.operationState?.label ?? null}
-                openaiApiKey={openaiApiKey}
+                openaiApiKeyConfigured={openaiApiKeyConfigured}
                 openaiModel={openaiModel}
                 signCommits={signCommits}
                 onSignCommitsChange={handleSignCommitsChange}
@@ -7147,10 +7149,10 @@ export default function App({
             onClose={closeAppSettings}
             themePreference={themePreference}
             onThemePreferenceChange={setThemePreference}
-            openaiApiKey={openaiApiKey}
+            openaiApiKeyConfigured={openaiApiKeyConfigured}
             openaiModel={openaiModel}
-            onOpenAiChange={({ apiKey, model }) => {
-              setOpenaiApiKey(apiKey);
+            onOpenAiChange={({ configured, model }) => {
+              setOpenaiApiKeyConfigured(configured);
               setOpenaiModel(model);
             }}
             graphCommitTitleFontSizePx={graphCommitTitleFontSizePx}

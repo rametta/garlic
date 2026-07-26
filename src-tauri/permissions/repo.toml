@@ -75,6 +75,7 @@ commands.allow = [
   "set_branch_sidebar_sections",
   "get_graph_branch_visibility",
   "set_graph_branch_visibility",
+  "get_openai_api_key",
   "set_openai_settings",
   "set_graph_commits_page_size",
   "set_graph_commit_title_font_size",

@@ -201,6 +201,7 @@ pub fn run() {
             settings::set_branch_sidebar_sections,
             settings::get_graph_branch_visibility,
             settings::set_graph_branch_visibility,
+            settings::get_openai_api_key,
             settings::set_openai_settings,
             settings::set_graph_commits_page_size,
             settings::set_graph_commit_title_font_size,

@@ -38,9 +38,9 @@ export type SettingsPageProps = {
   onClose: () => void;
   themePreference: string;
   onThemePreferenceChange: (theme: string) => void;
-  openaiApiKey: string;
+  openaiApiKeyConfigured: boolean;
   openaiModel: string;
-  onOpenAiChange: (next: { apiKey: string; model: string }) => void;
+  onOpenAiChange: (next: { configured: boolean; model: string }) => void;
   graphCommitTitleFontSizePx: number;
   onGraphCommitTitleFontSizeChange: (px: number) => void;
   notifyGitCompletion: boolean;
@@ -55,7 +55,7 @@ export const SettingsPage = memo(function SettingsPage({
   onClose,
   themePreference,
   onThemePreferenceChange,
-  openaiApiKey,
+  openaiApiKeyConfigured,
   openaiModel,
   onOpenAiChange,
   graphCommitTitleFontSizePx,
@@ -68,7 +68,7 @@ export const SettingsPage = memo(function SettingsPage({
   onError,
 }: SettingsPageProps) {
   const [themeDraft, setThemeDraft] = useState(themePreference);
-  const [keyDraft, setKeyDraft] = useState(openaiApiKey);
+  const [keyDraft, setKeyDraft] = useState("");
   const [modelDraft, setModelDraft] = useState(openaiModel);
   const [fontDraft, setFontDraft] = useState(() => String(graphCommitTitleFontSizePx));
   const [autoFetchIntervalDraft, setAutoFetchIntervalDraft] = useState(() =>
@@ -90,9 +90,8 @@ export const SettingsPage = memo(function SettingsPage({
   }, [graphCommitTitleFontSizePx]);
 
   useEffect(() => {
-    setKeyDraft(openaiApiKey);
     setModelDraft(openaiModel);
-  }, [openaiApiKey, openaiModel]);
+  }, [openaiModel]);
 
   useEffect(() => {
     setAutoFetchIntervalDraft(String(clampAutoFetchIntervalMinutes(autoFetchIntervalMinutes)));
@@ -126,15 +125,36 @@ export const SettingsPage = memo(function SettingsPage({
       await setOpenAiMutation.mutateAsync({
         key: trimmedKey.length > 0 ? trimmedKey : null,
         model: trimmedModel.length > 0 ? trimmedModel : null,
+        removeKey: false,
       });
+      setKeyDraft("");
       onOpenAiChange({
-        apiKey: trimmedKey,
+        configured: trimmedKey.length > 0 || openaiApiKeyConfigured,
         model: trimmedModel || DEFAULT_OPENAI_MODEL,
       });
     } catch (e) {
       onError(invokeErrorMessage(e));
     }
-  }, [keyDraft, modelDraft, onError, onOpenAiChange, setOpenAiMutation]);
+  }, [keyDraft, modelDraft, onError, onOpenAiChange, openaiApiKeyConfigured, setOpenAiMutation]);
+
+  const removeOpenAiKey = useCallback(async () => {
+    onError(null);
+    try {
+      const trimmedModel = modelDraft.trim();
+      await setOpenAiMutation.mutateAsync({
+        key: null,
+        model: trimmedModel.length > 0 ? trimmedModel : null,
+        removeKey: true,
+      });
+      setKeyDraft("");
+      onOpenAiChange({
+        configured: false,
+        model: trimmedModel || DEFAULT_OPENAI_MODEL,
+      });
+    } catch (e) {
+      onError(invokeErrorMessage(e));
+    }
+  }, [modelDraft, onError, onOpenAiChange, setOpenAiMutation]);
 
   const persistGraphFont = useCallback(
     async (px: number) => {
@@ -384,7 +404,9 @@ export const SettingsPage = memo(function SettingsPage({
                 autoComplete="off"
                 spellCheck={false}
                 disabled={openAiBusy}
-                placeholder="sk-…"
+                placeholder={
+                  openaiApiKeyConfigured ? "Saved securely; enter a replacement" : "sk-…"
+                }
                 onChange={(e) => {
                   setKeyDraft(e.target.value);
                 }}
@@ -421,6 +443,16 @@ export const SettingsPage = memo(function SettingsPage({
                   "Save OpenAI settings"
                 )}
               </button>
+              {openaiApiKeyConfigured ? (
+                <button
+                  type="button"
+                  className="btn text-error btn-ghost btn-sm"
+                  disabled={openAiBusy}
+                  onClick={() => void removeOpenAiKey()}
+                >
+                  Remove API key
+                </button>
+              ) : null}
             </div>
           </section>
         </div>

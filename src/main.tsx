@@ -27,7 +27,7 @@ export interface AppBootstrap {
   repo: RestoreLastRepo;
   recentRepoPaths: string[];
   theme: string | null;
-  openaiApiKey: string | null;
+  openaiApiKeyConfigured: boolean;
   openaiModel: string;
   branchSidebarSections: BranchSidebarSectionsState;
   graphBranchVisible: Record<string, boolean>;
@@ -64,7 +64,7 @@ export const emptyAppBootstrap: AppBootstrap = {
   },
   recentRepoPaths: [],
   theme: null,
-  openaiApiKey: null,
+  openaiApiKeyConfigured: false,
   openaiModel: "gpt-5.4-mini",
   branchSidebarSections: {
     localOpen: true,
@@ -104,7 +104,7 @@ async function bootstrap() {
           startup={data.repo}
           recentRepoPaths={data.recentRepoPaths ?? []}
           themePreference={data.theme ?? "light"}
-          openaiApiKey={data.openaiApiKey ?? null}
+          openaiApiKeyConfigured={data.openaiApiKeyConfigured ?? false}
           openaiModel={data.openaiModel?.trim() || DEFAULT_OPENAI_MODEL}
           branchSidebarSections={data.branchSidebarSections}
           initialGraphBranchVisible={data.graphBranchVisible}

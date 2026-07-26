@@ -38,7 +38,7 @@ export interface CommitComposerProps {
   commitPushBusy: boolean;
   pushBusy: boolean;
   repoOperationLabel: string | null;
-  openaiApiKey: string;
+  openaiApiKeyConfigured: boolean;
   openaiModel: string;
   signCommits: boolean;
   onSignCommitsChange: (enabled: boolean) => void;
@@ -67,7 +67,7 @@ export const CommitComposer = memo(function CommitComposer({
   commitPushBusy,
   pushBusy,
   repoOperationLabel,
-  openaiApiKey,
+  openaiApiKeyConfigured,
   openaiModel,
   signCommits,
   onSignCommitsChange,
@@ -120,9 +120,8 @@ export const CommitComposer = memo(function CommitComposer({
     !blockedByConflicts &&
     !pushBusy;
   const canCommitAndPush = canCommit && !repoDetached && !pushBusy && !amendLastCommit;
-  const hasOpenAiApiKey = openaiApiKey.trim().length > 0;
   const canUseAiCommit =
-    hasOpenAiApiKey &&
+    openaiApiKeyConfigured &&
     Boolean(repoPath) &&
     hasStagedFiles &&
     !blockedByConflicts &&
@@ -184,11 +183,14 @@ export const CommitComposer = memo(function CommitComposer({
 
   const handleAiGenerateCommitMessage = useCallback(async () => {
     if (!repoPath || !hasStagedFiles) return;
-    const key = openaiApiKey.trim();
-    if (!key) return;
     setAiCommitBusy(true);
     onOperationError(null);
     try {
+      const key = (await invoke<string | null>("get_openai_api_key"))?.trim();
+      if (!key) {
+        onOperationError("Add an OpenAI API key in Settings before generating a commit message.");
+        return;
+      }
       const stagedDiff = await invoke<string>("get_staged_diff_all", {
         path: repoPath,
       });
@@ -212,7 +214,7 @@ export const CommitComposer = memo(function CommitComposer({
     } finally {
       setAiCommitBusy(false);
     }
-  }, [hasStagedFiles, onOperationError, openaiApiKey, openaiModel, repoPath]);
+  }, [hasStagedFiles, onOperationError, openaiModel, repoPath]);
 
   return (
     <section
@@ -352,7 +354,7 @@ export const CommitComposer = memo(function CommitComposer({
             )}
           </button>
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            {hasOpenAiApiKey ? (
+            {openaiApiKeyConfigured ? (
               <button
                 type="button"
                 className="btn btn-sm btn-primary"

@@ -27,7 +27,7 @@ export function renderAppHarness(startup: RestoreLastRepo) {
         startup={startup}
         recentRepoPaths={[]}
         themePreference="light"
-        openaiApiKey={null}
+        openaiApiKeyConfigured={false}
         openaiModel="gpt-5.4-mini"
         branchSidebarSections={{
           localOpen: true,

@@ -125,6 +125,9 @@ struct AppSettings {
     /// Legacy plaintext key. Kept only to migrate existing settings into the native credential store.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     openai_api_key: Option<String>,
+    /// Non-secret hint used to show AI controls without reading the credential store at startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openai_api_key_configured: Option<bool>,
     /// OpenAI model id for commit messages (`None` → default in bootstrap).
     #[serde(default)]
     openai_model: Option<String>,
@@ -161,6 +164,7 @@ impl Default for AppSettings {
             recent_repo_paths: Vec::new(),
             theme: None,
             openai_api_key: None,
+            openai_api_key_configured: None,
             openai_model: None,
             branch_sidebar_sections: BranchSidebarSections::default(),
             graph_branch_visibility_by_repo: BTreeMap::new(),
@@ -252,6 +256,7 @@ fn load_and_migrate_openai_api_key(
     {
         store_openai_api_key(Some(&key))?;
         settings.openai_api_key = None;
+        settings.openai_api_key_configured = Some(true);
         save_settings(app, settings)?;
         return Ok(Some(key));
     }
@@ -438,7 +443,7 @@ pub struct AppBootstrap {
     /// Most recently opened repo paths (newest first), used by the in-app repo tabs.
     pub recent_repo_paths: Vec<String>,
     pub theme: Option<String>,
-    pub openai_api_key: Option<String>,
+    pub openai_api_key_configured: bool,
     /// Resolved model id (defaults to `gpt-5.4-mini` when unset).
     pub openai_model: String,
     pub branch_sidebar_sections: BranchSidebarSections,
@@ -461,7 +466,7 @@ pub struct AppBootstrap {
 /// Loads persisted settings: DaisyUI theme name and last-repo snapshot (same rules as `restore_repo_snapshot`).
 #[tauri::command]
 pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
-    let mut settings = load_settings(&app)?;
+    let settings = load_settings(&app)?;
     let override_repo_path = std::env::var("GARLIC_E2E_REPO_PATH")
         .ok()
         .map(|path| path.trim().to_string())
@@ -469,7 +474,9 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
     let has_override_repo_path = override_repo_path.is_some();
     let bootstrap_repo_path = override_repo_path.or_else(|| settings.last_repo_path.clone());
     let theme = settings.theme.clone();
-    let openai_api_key = load_and_migrate_openai_api_key(&app, &mut settings)?;
+    // Older versions did not persist the non-secret hint, but always saved the model alongside a
+    // key. This preserves their AI button without touching Keychain during startup.
+    let openai_api_key_configured = resolve_openai_api_key_configured(&settings);
     let openai_model = resolve_openai_model(&settings);
     // Repo-scoped visibility is keyed off the last opened repo so the graph can remember which
     // branches were hidden without mixing preferences across repositories.
@@ -495,7 +502,7 @@ pub fn restore_app_bootstrap(app: AppHandle) -> Result<AppBootstrap, String> {
             .cloned()
             .collect(),
         theme,
-        openai_api_key,
+        openai_api_key_configured,
         openai_model,
         branch_sidebar_sections: settings.branch_sidebar_sections.clone(),
         graph_branch_visible,
@@ -524,6 +531,16 @@ fn resolve_openai_model(settings: &AppSettings) -> String {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| DEFAULT.to_string())
+}
+
+fn resolve_openai_api_key_configured(settings: &AppSettings) -> bool {
+    settings.openai_api_key_configured.unwrap_or_else(|| {
+        settings
+            .openai_api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
+            || settings.openai_model.is_some()
+    })
 }
 
 fn persisted_graph_branch_visibility(settings: &AppSettings, path: &str) -> GraphBranchVisibility {
@@ -572,17 +589,41 @@ fn hidden_graph_refs_from_visibility(
     refs
 }
 
+/// Reads the OpenAI key only when the user requests an AI-backed action.
+#[tauri::command]
+pub fn get_openai_api_key(app: AppHandle) -> Result<Option<String>, String> {
+    let mut settings = load_settings(&app)?;
+    let key = load_and_migrate_openai_api_key(&app, &mut settings)?;
+    let configured = key.as_deref().is_some_and(|key| !key.trim().is_empty());
+    if settings.openai_api_key_configured != Some(configured) {
+        settings.openai_api_key_configured = Some(configured);
+        save_settings(&app, &settings)?;
+    }
+    Ok(key)
+}
+
 /// Persists the OpenAI API key in the native credential store and its model in settings.json.
 #[tauri::command]
 pub fn set_openai_settings(
     app: AppHandle,
     key: Option<String>,
     model: Option<String>,
+    remove_key: bool,
 ) -> Result<(), String> {
     let mut s = load_settings(&app)?;
+    let was_configured = resolve_openai_api_key_configured(&s);
     let key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
-    store_openai_api_key(key.as_deref())?;
-    s.openai_api_key = None;
+    if remove_key {
+        store_openai_api_key(None)?;
+        s.openai_api_key = None;
+        s.openai_api_key_configured = Some(false);
+    } else if let Some(key) = key.as_deref() {
+        store_openai_api_key(Some(key))?;
+        s.openai_api_key = None;
+        s.openai_api_key_configured = Some(true);
+    } else {
+        s.openai_api_key_configured = Some(was_configured);
+    }
     s.openai_model = model
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty());
